@@ -1,13 +1,14 @@
 const crypto = require('crypto');
 const keccak256 = require('keccak');
 const { v4: uuidv4 } = require('uuid');
+const cfg = require('./config');
 
 class Transaction {
     constructor(payload = {}) {
 
         this.id = uuidv4();  // Unique tx ID
         this.type = payload.type || 'account';
-        this.networkId = payload.networkId || config.networkId;
+        this.networkId = payload.networkId || cfg.networkId;
         this.timestamp = payload.timestamp || Date.now();
         this.inputs = payload.inputs || {};
         this.outputs = payload.outputs || {};
@@ -53,12 +54,12 @@ class Transaction {
     }
 
     signTransaction(wallet, passphrase = null) {
-        if (this.fromAddress && wallet.address !== this.fromAddress) {
-            throw new Error("Wallet does not match fromAddress");
+        if (this.from && wallet.address !== this.from) {
+            throw new Error("Wallet does not match from");
         }
         const digest = this.digest();
         this.signature = wallet.signDigest(digest, passphrase);
-        this.publicKey = wallet.publickeyPem;
+        this.publicKey = wallet.publicKeyPem;
         //const hashTx = this.calculateHash();
     }
 

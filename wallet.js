@@ -3,10 +3,11 @@ const fs = require('fs');
 const keccak256 = require('keccak');
 
 class Wallet {
-    constructor(){
+    constructor(passphrase = null){
         this.privateKeyPem = null;
-        this.publickeyPem = null;
+        this.publicKeyPem = null;
         this.address = null;
+        this.passphrase = passphrase;
     }
     generateKeyPair(passphrase = null){
 
@@ -28,7 +29,9 @@ class Wallet {
         const sign = crypto.createSign('SHA256');
         sign.update(digestHex);
         sign.end();
-        return sign.sign({ key: this.privateKeyPem, passphrase }, 'hex');
+        const pass = passphrase || this.passphrase;
+        const signOptions = pass ? { key: this.privateKeyPem, passphrase: pass } : this.privateKeyPem;
+        return sign.sign(signOptions, 'hex');
     }
 
     verifyDigest(publicKeyPem, digestHex, signatureHex) {
@@ -44,7 +47,7 @@ class Wallet {
         const sign = crypto.createSign('SHA256');
         sign.update(message);
         sign.end();
-        const signOptions = passphrase ? { key: this.privateKeyPem, passphrase } : this.privateKeyPem;
+        const signOptions = this.passphrase ? { key: this.privateKeyPem, passphrase: this.passphrase } : this.privateKeyPem;
         const signature = sign.sign(signOptions, 'hex');
         return signature;
     }
