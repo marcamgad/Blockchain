@@ -4,14 +4,16 @@ const UTXOSet = require('./utxo');
 const AccountState = require('./account_state');
 const cfg = require('./config');
 const { adjustDifficulty } = require('./difficulty');
+const Mempool = require('./mempool');
+const Storage = require('./storage');
 
 class Blockchain {
     constructor({ storage, mempool } = {}){
-        this.storage = storage;
-        this.mempool = mempool;
+        this.storage = storage || new Storage();
+        this.mempool = mempool || new Mempool();
         this.chain = [];
         this.utxo = new UTXOSet();
-        this.state = new this.AccountState();
+        this.state = new AccountState();
         this.difficulty = cfg.initialDifficulty;
         // this.pendingTransaction = [];
         // this.miningReward = reward;
@@ -63,6 +65,8 @@ class Blockchain {
         // amount invariants left for application step
         return true;
         } else if (tx.type === 'account') {
+        // Skip nonce check for coinbase (reward) transactions
+        if (tx.from === null) return true;
         const balance = this.state.getBalance(tx.from);
         const expectedNonce = this.state.getNonce(tx.from) + 1;
         if (tx.nonce !== expectedNonce) throw new Error(`invalid nonce: expected ${expectedNonce} got ${tx.nonce}`);
@@ -145,8 +149,8 @@ class Blockchain {
     rewardTx.signature = null; rewardTx.publicKey = null; // coinbase
     txsToInclude.push(rewardTx);
 
-    const newBlock = new Block(this.chain.length, Date.now(), txsToInclude, this.getLatestBlock().hash, 0, this.difficulty);
-    newBlock.mine(cfg.maxNonceAttempts);
+    const newBlock = new Block(this.chain.length, Date.now(), txsToInclude, this.getLatestBlock().hash, this.difficulty, 0);
+    newBlock.mine(this.difficulty, cfg.maxNonceAttempts);
     return newBlock;
   }
 
@@ -203,7 +207,7 @@ class Blockchain {
             const current = this.chain[i];
             const previous = this.chain[i-1];
 
-            if (!current.haveValidtransactions()) return false;
+            if (!current.haveValidTransactions()) return false;
             if (current.hash !== current.calculateHash()) return false;
             if (current.prevHash !== previous.hash) return false;
         }

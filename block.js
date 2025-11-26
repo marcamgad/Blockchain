@@ -3,7 +3,7 @@ const canonicalize = require('canonicalize');
 const Transaction = require('./transaction');
 
 class Block{
-    constructor(index, timestamp, transactions = [], prevHash='', difficulty = 1){
+    constructor(index, timestamp, transactions = [], prevHash='', difficulty = 1, nonce = 0){
         if(!Array.isArray(transactions)){
             throw new Error('Transactions must be an array');
         }
@@ -71,7 +71,7 @@ class Block{
         return {hash: this.hash, nonce:this.nonce };
     }
 
-    haveValidtransactions(){
+    haveValidTransactions(){
         try {
             return this.transactions.every(tx => tx instanceof Transaction && tx.verify());
         } catch (error) {
