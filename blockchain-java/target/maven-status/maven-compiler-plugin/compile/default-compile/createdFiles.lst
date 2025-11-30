@@ -1,0 +1,5 @@
+com/hybrid/blockchain/Config.class
+com/hybrid/blockchain/Transaction$TxType.class
+com/hybrid/blockchain/Block.class
+com/hybrid/blockchain/Transaction.class
+com/hybrid/App.class
