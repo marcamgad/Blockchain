@@ -1,49 +1,87 @@
 package com.hybrid.blockchain;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.iq80.leveldb.*;
+import static org.fusesource.leveldbjni.JniDBFactory.*;
+
+import javax.crypto.Cipher;
+import javax.crypto.spec.SecretKeySpec;
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Map;
 
 public class Storage {
 
-    private final String dbPath;
+    private final DB db;
     private final ObjectMapper mapper;
     private final Map<String, Object> cache;
+    private final SecretKeySpec aesKey;
 
-    public Storage(String dbPath) {
-        this.dbPath = dbPath != null ? dbPath : "data";
+    public Storage(String dbPath, byte[] aesKeyBytes) throws IOException {
+        if (aesKeyBytes.length != 16 && aesKeyBytes.length != 24 && aesKeyBytes.length != 32) {
+            throw new IllegalArgumentException("AES key must be 16, 24, or 32 bytes");
+        }
+
         this.mapper = new ObjectMapper();
         this.cache = new HashMap<>();
-        new File(this.dbPath).mkdirs();
+        this.aesKey = new SecretKeySpec(aesKeyBytes, "AES");
+
+        File folder = new File(dbPath != null ? dbPath : "data");
+        folder.mkdirs();
+
+        Options options = new Options();
+        options.createIfMissing(true);
+        this.db = factory.open(folder, options);
     }
 
-    private File getFile(String key) {
-        return Paths.get(dbPath, key + ".json").toFile();
+    // Fallback constructor (dev / testing)
+    public Storage(String dbPath) throws IOException {
+      this(dbPath, Config.STORAGE_AES_KEY);
+    }
+
+    private byte[] encrypt(byte[] data) throws Exception {
+        Cipher cipher = Cipher.getInstance("AES");
+        cipher.init(Cipher.ENCRYPT_MODE, aesKey);
+        return cipher.doFinal(data);
+    }
+
+    private byte[] decrypt(byte[] data) throws Exception {
+        Cipher cipher = Cipher.getInstance("AES");
+        cipher.init(Cipher.DECRYPT_MODE, aesKey);
+        return cipher.doFinal(data);
     }
 
     public void put(String key, Object value) throws IOException {
-        cache.put(key, value);
-        mapper.writeValue(getFile(key), value);
+        try {
+            cache.put(key, value);
+            byte[] json = mapper.writeValueAsBytes(value);
+            byte[] encrypted = encrypt(json);
+            db.put(bytes(key), encrypted);
+        } catch (Exception e) {
+            throw new IOException("Failed to store encrypted value", e);
+        }
     }
 
     public <T> T get(String key, Class<T> clazz) throws IOException {
         if (cache.containsKey(key)) {
             return clazz.cast(cache.get(key));
         }
-        File file = getFile(key);
-        if (!file.exists()) return null;
-        T value = mapper.readValue(file, clazz);
-        cache.put(key, value);
-        return value;
+        try {
+            byte[] encrypted = db.get(bytes(key));
+            if (encrypted == null) return null;
+            byte[] decrypted = decrypt(encrypted);
+            T value = mapper.readValue(decrypted, clazz);
+            cache.put(key, value);
+            return value;
+        } catch (Exception e) {
+            throw new IOException("Failed to load encrypted value", e);
+        }
     }
 
     public void del(String key) {
         cache.remove(key);
-        File file = getFile(key);
-        if (file.exists()) file.delete();
+        db.delete(bytes(key));
     }
 
     public void saveBlock(String hash, Block block) throws IOException {
@@ -53,50 +91,34 @@ public class Storage {
     }
 
     public Block loadBlockByHash(String hash) throws IOException {
-        return get(hashKey("block", hash), Block.class);
+        return get("block:" + hash, Block.class);
     }
 
     public Block loadBlockByHeight(int height) throws IOException {
-        String hash = get(heightKey(height), String.class);
-        if (hash == null) return null;
-        return loadBlockByHash(hash);
+        String hash = get("height:" + height, String.class);
+        return hash != null ? loadBlockByHash(hash) : null;
     }
 
     public String loadTipHash() throws IOException {
         return get("chain:tip", String.class);
     }
 
-    // ------------------- UTXO Set -------------------
-    public void saveUTXO(Map<String, Object> obj) throws IOException {
+    public void saveUTXO(Map<String, ?> obj) throws IOException {
         put("utxo:set", obj);
     }
 
     public Map<String, Object> loadUTXO() throws IOException {
-        Map<String, Object> data = get("utxo:set", Map.class);
-        return data != null ? data : new HashMap<>();
+        return get("utxo:set", Map.class);
     }
 
-    // ------------------- Account State -------------------
-    public void saveState(Map<String, Object> obj) throws IOException {
+    public void saveState(Map<String, ?> obj) throws IOException {
         put("state:account", obj);
     }
 
     public Map<String, Object> loadState() throws IOException {
-        Map<String, Object> data = get("state:account", Map.class);
-        return data != null ? data : new HashMap<>();
+        return get("state:account", Map.class);
     }
 
-    // ------------------- Mempool -------------------
-    public void saveMempool(Object arr) throws IOException {
-        put("mempool", arr);
-    }
-
-    public Object loadMempool() throws IOException {
-        Object data = get("mempool", Object.class);
-        return data != null ? data : new Object[0];
-    }
-
-    // ------------------- Metadata -------------------
     public void putMeta(String key, Object value) throws IOException {
         put("meta:" + key, value);
     }
@@ -105,12 +127,26 @@ public class Storage {
         return get("meta:" + key, Object.class);
     }
 
-    private String hashKey(String prefix, String key) {
-        return prefix + ":" + key;
+    public void close() throws IOException {
+        db.close();
     }
+    public void saveSnapshot(
+        int height,
+        Map<String, Object> state,
+        Map<String, Object> utxo
+) throws IOException {
 
-    private String heightKey(int height) {
-        return "height:" + height;
-    }
-    
+    Map<String, Object> snapshot = new HashMap<>();
+    snapshot.put("height", height);
+    snapshot.put("state", state);
+    snapshot.put("utxo", utxo);
+    snapshot.put("timestamp", System.currentTimeMillis());
+
+    put("snapshot:" + height, snapshot);
+    putMeta("lastSnapshotHeight", height);
+
+    System.out.println("[SNAPSHOT] Saved at height " + height);
+}
+
+
 }

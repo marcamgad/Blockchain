@@ -4,29 +4,25 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 public class Mempool {
-
     private final int maxSize;
     private final Map<String, Transaction> map;
 
     public Mempool(int maxSize) {
-        this.maxSize = maxSize > 0 ? maxSize : 1000; // default max size
-        this.map = new HashMap<>();
+        this.maxSize = maxSize > 0 ? maxSize : 1000;
+        this.map = new HashMap<>(); // type inferred, safe
     }
 
     public Mempool() {
-        this(1000); // default max size
+        this(1000);
     }
 
     public boolean add(Transaction tx) {
         if (tx == null || tx.getId() == null) throw new IllegalArgumentException("Invalid tx");
-
         long now = System.currentTimeMillis();
         if (Math.abs(now - tx.getTimestamp()) > 1000L * 60 * 60 * 24)
             throw new IllegalArgumentException("tx timestamp out of range");
-
         if (map.containsKey(tx.getId())) throw new IllegalArgumentException("tx already in mempool");
 
-        // Replace lower-fee tx if same account and nonce
         List<String> toRemove = new ArrayList<>();
         for (Map.Entry<String, Transaction> entry : map.entrySet()) {
             Transaction existing = entry.getValue();
@@ -40,18 +36,19 @@ public class Mempool {
         }
         toRemove.forEach(map::remove);
 
-        // Evict lowest fee if mempool is full
         if (map.size() >= maxSize) {
             String worstId = null;
-            long worstFee = Long.MAX_VALUE;
+            double worstFeePerByte = Double.MAX_VALUE;
             for (Map.Entry<String, Transaction> entry : map.entrySet()) {
-                long fee = entry.getValue().getFee();
-                if (fee < worstFee) {
-                    worstFee = fee;
+                Transaction etx = entry.getValue();
+                double feePerByte = (double) etx.getFee() / Math.max(1, etx.serializeForDigest().length());
+                if (feePerByte < worstFeePerByte) {
+                    worstFeePerByte = feePerByte;
                     worstId = entry.getKey();
                 }
             }
-            if ((tx.getFee()) <= worstFee) throw new IllegalArgumentException("mempool full and fee too low");
+            double newFeePerByte = (double) tx.getFee() / Math.max(1, tx.serializeForDigest().length());
+            if (newFeePerByte <= worstFeePerByte) throw new IllegalArgumentException("mempool full and fee too low");
             if (worstId != null) map.remove(worstId);
         }
 
@@ -64,8 +61,11 @@ public class Mempool {
     }
 
     public List<Transaction> getTop(int n) {
+        // Explicitly type the comparator to avoid Object issues in VSCode
         return map.values().stream()
-                .sorted(Comparator.comparingLong(Transaction::getFee).reversed())
+                .sorted(Comparator.<Transaction>comparingDouble(
+                        tx -> (double) tx.getFee() / Math.max(1, tx.serializeForDigest().length())
+                ).reversed())
                 .limit(n)
                 .collect(Collectors.toList());
     }
@@ -77,5 +77,4 @@ public class Mempool {
     public int size() {
         return map.size();
     }
-
 }

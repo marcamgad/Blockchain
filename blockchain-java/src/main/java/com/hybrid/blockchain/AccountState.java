@@ -4,7 +4,6 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class AccountState {
-
     private final Map<String, Account> state;
 
     public AccountState() {
@@ -15,8 +14,28 @@ public class AccountState {
         this.state = new HashMap<>(obj);
     }
 
-    public Map<String, Account> toJSON() {
-        return new HashMap<>(state);
+    public static AccountState fromMap(Map<String, Object> raw) {
+        Map<String, Account> map = new HashMap<>();
+        if (raw == null) return new AccountState(map);
+        for (Map.Entry<String, Object> e : raw.entrySet()) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> accMap = (Map<String, Object>) e.getValue();
+            long balance = Utils.safeLong(accMap.get("balance"));
+            long nonce = Utils.safeLong(accMap.get("nonce"));
+            map.put(e.getKey(), new Account(balance, nonce));
+        }
+        return new AccountState(map);
+    }
+
+    public Map<String, Object> toJSON() {
+        Map<String, Object> json = new HashMap<>();
+        for (Map.Entry<String, Account> entry : state.entrySet()) {
+            Map<String, Object> accJson = new HashMap<>();
+            accJson.put("balance", entry.getValue().getBalance());
+            accJson.put("nonce", entry.getValue().getNonce());
+            json.put(entry.getKey(), accJson);
+        }
+        return json;
     }
 
     public long getBalance(String addr) {
