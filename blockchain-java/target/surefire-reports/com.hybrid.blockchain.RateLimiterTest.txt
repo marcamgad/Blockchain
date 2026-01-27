@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: com.hybrid.blockchain.RateLimiterTest
+-------------------------------------------------------------------------------
+Tests run: 12, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.192 s - in com.hybrid.blockchain.RateLimiterTest

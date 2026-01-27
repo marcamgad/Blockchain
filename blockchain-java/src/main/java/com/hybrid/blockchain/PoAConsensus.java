@@ -1,43 +1,52 @@
 package com.hybrid.blockchain;
 
-import java.security.PrivateKey;
-import java.security.Signature;
+import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 public class PoAConsensus {
 
+    private static final byte[] DOMAIN_PREFIX = "BLOCK\0".getBytes(StandardCharsets.UTF_8);
     private final List<Validator> validators;
 
     public PoAConsensus(List<Validator> validators) {
         this.validators = validators;
     }
 
-    // Check if the signer is a valid validator
     public boolean isValidator(String validatorId) {
         return validators.stream().anyMatch(v -> v.getId().equals(validatorId));
     }
 
-    // Sign a block
-    public void signBlock(Block block, Validator validator, PrivateKey key) throws Exception {
+    private byte[] signingPayload(Block block) {
+        byte[] body = block.serializeCanonical();
+        byte[] payload = new byte[DOMAIN_PREFIX.length + body.length];
+        System.arraycopy(DOMAIN_PREFIX, 0, payload, 0, DOMAIN_PREFIX.length);
+        System.arraycopy(body, 0, payload, DOMAIN_PREFIX.length, body.length);
+        return Crypto.hash(payload);
+    }
+
+    public void signBlock(Block block, Validator validator, BigInteger privateKey) throws Exception {
         if (!isValidator(validator.getId()))
             throw new Exception("Validator not authorized");
 
-        Signature sig = Signature.getInstance("SHA256withRSA");
-        sig.initSign(key);
-        sig.update(block.getHash().getBytes());
-        byte[] signatureBytes = sig.sign();
+        byte[] msg = signingPayload(block);
+        byte[] signatureBytes = Crypto.sign(msg, privateKey);
+
         block.setValidatorId(validator.getId());
         block.setSignature(signatureBytes);
     }
 
-    // Verify block signature
     public boolean verifyBlock(Block block, Validator validator) throws Exception {
-        if (!isValidator(validator.getId())) return false;
+        if (!isValidator(validator.getId()))
+            return false;
+        if (block.getSignature() == null)
+            return false;
 
-        Signature sig = Signature.getInstance("SHA256withRSA");
-        sig.initVerify(validator.getPublicKey());
-        sig.update(block.getHash().getBytes());
-        return sig.verify(block.getSignature());
+        byte[] msg = signingPayload(block);
+        return Crypto.verify(msg, block.getSignature(), validator.getPublicKey());
     }
-    public List<Validator> getValidators(){return this.validators;}
+
+    public List<Validator> getValidators() {
+        return this.validators;
+    }
 }

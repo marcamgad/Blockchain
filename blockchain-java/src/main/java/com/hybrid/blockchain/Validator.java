@@ -1,12 +1,10 @@
 package com.hybrid.blockchain;
 
-import java.security.PublicKey;
-
 public class Validator {
     private final String id;
-    private final PublicKey publicKey;
+    private final byte[] publicKey;
 
-    public Validator(String id, PublicKey publicKey) {
+    public Validator(String id, byte[] publicKey) {
         this.id = id;
         this.publicKey = publicKey;
     }
@@ -15,7 +13,7 @@ public class Validator {
         return id;
     }
 
-    public PublicKey getPublicKey() {
+    public byte[] getPublicKey() {
         return publicKey;
     }
 }

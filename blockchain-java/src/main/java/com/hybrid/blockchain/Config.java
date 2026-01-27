@@ -24,14 +24,42 @@ public final class Config {
     public static final long CONTRACT_EXECUTION_LIMIT = 10_000;
     public static final int MAX_CONTRACT_SIZE = 32 * 1024;
     public static final String NODE_NAME = "HybridJavaNode";
-    public static final String VERSION = "1.0.0";
     public static final boolean DEBUG = true;
     public static final boolean PRINT_STATS = true;
-    public static final int NETWORK_ID = 101; // unique ID for this blockchain network
+    public static final int NETWORK_ID = getIntEnv("NETWORK_ID", 101);
+    public static final String PROTOCOL_VERSION = getEnv("PROTOCOL_VERSION", "1.0.0");
+
     public static final long MAX_TIMESTAMP_DRIFT = 300000; // 5 min
     public static final long MAX_NONCE_ATTEMPTS = Long.MAX_VALUE / 2;
-    // 16-byte AES key (example default). Replace with a secure key management solution in production.
-    public static final byte[] STORAGE_AES_KEY = "1234567890abcdef".getBytes();
+    public static final byte[] STORAGE_AES_KEY = getBytesEnv("STORAGE_AES_KEY", "1234567890abcdef".getBytes());
 
-    private Config() {}
+    private static String getEnv(String name, String def) {
+        String val = System.getenv(name);
+        return val != null ? val : def;
+    }
+
+    private static int getIntEnv(String name, int def) {
+        String val = System.getenv(name);
+        try {
+            return val != null ? Integer.parseInt(val) : def;
+        } catch (NumberFormatException e) {
+            return def;
+        }
+    }
+
+    private static byte[] getBytesEnv(String name, byte[] def) {
+        String val = System.getenv(name);
+        return val != null ? val.getBytes() : def;
+    }
+
+    public static java.math.BigInteger getNodePrivateKey() {
+        String keyHex = System.getenv("NODE_PRIVATE_KEY");
+        if (keyHex == null || keyHex.isEmpty()) {
+            throw new RuntimeException("NODE_PRIVATE_KEY environment variable MUST be set for secure P2P.");
+        }
+        return new java.math.BigInteger(keyHex, 16);
+    }
+
+    private Config() {
+    }
 }

@@ -1,0 +1,16 @@
+-------------------------------------------------------------------------------
+Test set: com.hybrid.blockchain.BlockchainMonitorTest
+-------------------------------------------------------------------------------
+Tests run: 13, Failures: 3, Errors: 0, Skipped: 0, Time elapsed: 0.263 s <<< FAILURE! - in com.hybrid.blockchain.BlockchainMonitorTest
+testDashboard  Time elapsed: 0.005 s  <<< FAILURE!
+org.opentest4j.AssertionFailedError: expected: <true> but was: <false>
+	at com.hybrid.blockchain.BlockchainMonitorTest.testDashboard(BlockchainMonitorTest.java:131)
+
+testMetricSummaryDetails  Time elapsed: 0 s  <<< FAILURE!
+org.opentest4j.AssertionFailedError: expected: not <null>
+	at com.hybrid.blockchain.BlockchainMonitorTest.testMetricSummaryDetails(BlockchainMonitorTest.java:214)
+
+testPerformanceMetrics  Time elapsed: 0.024 s  <<< FAILURE!
+org.opentest4j.AssertionFailedError: expected: <true> but was: <false>
+	at com.hybrid.blockchain.BlockchainMonitorTest.testPerformanceMetrics(BlockchainMonitorTest.java:113)
+

@@ -1,5 +1,4 @@
 package com.hybrid.blockchain;
-import com.hybrid.blockchain.Block;
 import java.util.List;
 
 public interface Consensus {
