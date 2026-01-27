@@ -1,70 +1,70 @@
 # Production IoT Blockchain - Deployment Ready
 
-## 🎉 **Status: PRODUCTION READY**
+## Status: PRODUCTION READY
 
-**Test Results**: **128/133 passing (96.2%)**  
-**New Production Features**: **84/84 passing (100%)**  
-**Components**: **13 major systems implemented**
+**Test Results**: 128/133 passing (96.2%)  
+**New Production Features**: 84/84 passing (100%)  
+**Components**: 13 major systems implemented
 
 ---
 
-## 📦 What's Included
+## What's Included
 
-### **Core Blockchain**
-- ✅ Block creation and validation
-- ✅ Transaction processing (UTXO + Account models)
-- ✅ Smart contract execution with VM
-- ✅ Encrypted persistent storage
-- ✅ Mempool management
+### Core Blockchain
+- Block creation and validation
+- Transaction processing (UTXO + Account models)
+- Smart contract execution with VM
+- Encrypted persistent storage
+- Mempool management
 
-### **Production Features** (NEW)
+### Production Features (NEW)
 
-1. **Self-Sovereign Identity (SSI)** - 7 tests ✅
+1. **Self-Sovereign Identity (SSI)** - 7 tests passing
    - W3C-compliant DIDs and Verifiable Credentials
    - DID registration, resolution, revocation
    - Multi-credential management
 
-2. **Device Lifecycle Management** - 10 tests ✅
-   - Complete state machine (PROVISIONING → ACTIVE → REVOKED)
+2. **Device Lifecycle Management** - 10 tests passing
+   - Complete state machine (PROVISIONING to ACTIVE to REVOKED)
    - Manufacturer attestation
    - Firmware update tracking
 
-3. **PBFT Consensus** - Production Ready ✅
+3. **PBFT Consensus** - Production Ready
    - Byzantine Fault Tolerant (3f+1 nodes)
    - 3-phase commit protocol
    - View change for leader failures
 
-4. **Zero-Knowledge Proofs** - 9 tests ✅
+4. **Zero-Knowledge Proofs** - 9 tests passing
    - Range proofs, Ownership proofs
    - Equality proofs, Threshold proofs
    - Privacy-preserving validation
 
-5. **Private Data Collections** - 10 tests ✅
+5. **Private Data Collections** - 10 tests passing
    - Encrypted storage with access control
    - Member-based permissions
    - Public hash verification
 
-6. **Audit Logging** - 10 tests ✅
+6. **Audit Logging** - 10 tests passing
    - Cryptographic chaining
    - 40+ event types
    - Tamper-evident trail
 
-7. **Rate Limiting** - 12 tests ✅
+7. **Rate Limiting** - 12 tests passing
    - Token bucket algorithm
    - DoS protection
    - Per-address/IP limiting
 
-8. **Multi-Signature Control** - 13 tests ✅
+8. **Multi-Signature Control** - 13 tests passing
    - M-of-N signature schemes
    - Proposal workflow
    - Time-based expiration
 
-9. **Quantum-Resistant Crypto** - Production Ready ✅
+9. **Quantum-Resistant Crypto** - Production Ready
    - CRYSTALS-Dilithium signatures
    - Hybrid ECDSA + Dilithium mode
    - Future-proof security
 
-10. **Real-Time Monitoring** - 13 tests ✅
+10. **Real-Time Monitoring** - 13 tests passing
     - Metrics collection (TPS, latency, etc.)
     - Health checks
     - Alert system
@@ -72,20 +72,20 @@
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
-### **Build**
+### Build
 ```bash
 cd blockchain-java
 mvn clean package
 ```
 
-### **Run Tests**
+### Run Tests
 ```bash
 mvn test
 ```
 
-### **Initialize Node**
+### Initialize Node
 ```java
 // Create blockchain
 Storage storage = new Storage("data", Config.STORAGE_AES_KEY);
@@ -102,13 +102,13 @@ BlockchainMonitor monitor = state.getMonitor();
 
 ---
 
-## � Test Results
+## Test Results
 
 **Total**: 133 tests  
 **Passing**: 128 (96.2%)  
 **Failing**: 5 (3.8%)
 
-### **All New Features Passing** ✅
+### All New Features Passing
 - SSI Integration: 7/7
 - Device Lifecycle: 10/10
 - ZK Proofs: 9/9
@@ -118,14 +118,14 @@ BlockchainMonitor monitor = state.getMonitor();
 - Multi-Signature: 13/13
 - Monitoring: 13/13
 
-### **Known Issues** (Pre-existing code)
+### Known Issues (Pre-existing code)
 - SimpleTransactionTest.testTransactionSigningReal
 - IoTEndToEndTest.testMultiNodeConsensus
 - BlockchainMonitorTest (3 timing-related tests)
 
 ---
 
-## � Project Structure
+## Project Structure
 
 ```
 blockchain-java/
@@ -146,7 +146,7 @@ blockchain-java/
 
 ---
 
-## 🔧 Configuration
+## Configuration
 
 Edit `Config.java` for:
 - Network ID
@@ -157,17 +157,17 @@ Edit `Config.java` for:
 
 ---
 
-## 🌐 Deployment
+## Deployment
 
-### **Docker**
+### Docker
 ```bash
 docker-compose up
 ```
 
-### **Kubernetes**
+### Kubernetes
 See `k8s/` directory for manifests
 
-### **Production Checklist**
+### Production Checklist
 - [x] All core features implemented
 - [x] Comprehensive test coverage
 - [x] Security hardening complete
@@ -178,7 +178,7 @@ See `k8s/` directory for manifests
 
 ---
 
-## 📚 Documentation
+## Documentation
 
 - `BLOCKCHAIN_ANALYSIS.txt` - Architecture analysis
 - `IMPLEMENTATION_ROADMAP.txt` - Development roadmap
@@ -187,28 +187,28 @@ See `k8s/` directory for manifests
 
 ---
 
-## 🔐 Security Features
+## Security Features
 
-- ✅ ECDSA signatures with Low-S normalization
-- ✅ Quantum-resistant Dilithium signatures
-- ✅ Encrypted storage (AES)
-- ✅ Rate limiting & DoS protection
-- ✅ Multi-signature control
-- ✅ Audit logging
-- ✅ Access control (capabilities)
+- ECDSA signatures with Low-S normalization
+- Quantum-resistant Dilithium signatures
+- Encrypted storage (AES)
+- Rate limiting & DoS protection
+- Multi-signature control
+- Audit logging
+- Access control (capabilities)
 
 ---
 
-## 📈 Performance
+## Performance
 
-- **TPS**: ~100-1000 (depending on configuration)
-- **Block Time**: ~1-5 seconds
-- **Latency**: <100ms average
+- **TPS**: approximately 100-1000 (depending on configuration)
+- **Block Time**: approximately 1-5 seconds
+- **Latency**: less than 100ms average
 - **Storage**: Optimized with pruning
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 1. Fork the repository
 2. Create feature branch
@@ -218,13 +218,17 @@ See `k8s/` directory for manifests
 
 ---
 
-## 📄 License
+## License
 
-[Your License Here]
+MIT License
+
+Copyright (c) 2026 Marc Amgad "Hamlet"
+
+See LICENSE file for details.
 
 ---
 
-## 🎯 Use Cases
+## Use Cases
 
 - **IoT Device Networks**: Secure device management and data sharing
 - **Supply Chain**: Track products with privacy
@@ -234,7 +238,7 @@ See `k8s/` directory for manifests
 
 ---
 
-## 🔮 Roadmap
+## Roadmap
 
 - [ ] Advanced ZK-SNARKs
 - [ ] Cross-chain bridges
@@ -244,7 +248,8 @@ See `k8s/` directory for manifests
 
 ---
 
-**Built with ❤️ for production IoT deployments**
+**Built for production IoT deployments**
 
 *Last Updated: 2026-01-27*  
-*Version: 1.0.0-PRODUCTION*
+*Version: 1.0.0-PRODUCTION*  
+*Author: Marc Amgad "Hamlet"*
