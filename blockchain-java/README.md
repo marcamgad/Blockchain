@@ -222,7 +222,7 @@ See `k8s/` directory for manifests
 
 MIT License
 
-Copyright (c) 2026 Marc Amgad "Hamlet"
+Copyright (c) 2026 Marc Amgad
 
 See LICENSE file for details.
 
@@ -252,4 +252,4 @@ See LICENSE file for details.
 
 *Last Updated: 2026-01-27*  
 *Version: 1.0.0-PRODUCTION*  
-*Author: Marc Amgad "Hamlet"*
+*Author: Marc Amgad*
