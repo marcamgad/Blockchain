@@ -1,143 +1,257 @@
 package com.hybrid.blockchain;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
-import java.security.*;
+import java.math.BigInteger;
 import java.util.*;
 
-public class Transaction {
-    private String type;
-    private String id;
-    private String from;
-    private String to;
-    private long amount;
-    private long fee;
-    private long nonce;
-    private long timestamp;
-    private String data;
-    private String signature;
-    private String pubKey;
-    private String networkId;
-    private List<UTXOInput> inputs = new ArrayList<>();
-    private List<UTXOOutput> outputs = new ArrayList<>();
+public final class Transaction {
 
-    @JsonIgnore
-    private static final com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-
-    public Transaction() {}
-
-    // For account/contract
-    public Transaction(String type, String from, String to, long amount,
-                       long fee, long nonce, String data) {
-        this.type = type;
-        this.from = from;
-        this.to = to;
-        this.amount = amount;
-        this.fee = fee;
-        this.nonce = nonce;
-        this.timestamp = System.currentTimeMillis();
-        this.data = data;
-        this.networkId = String.valueOf(Config.NETWORK_ID);
-        this.id = calculateId();
+    public enum Type {
+        ACCOUNT, UTXO, CONTRACT
     }
 
-    // For UTXO
-    public Transaction(String type, List<UTXOInput> inputs, List<UTXOOutput> outputs,
-                       long fee, long nonce, String data) {
-        this.type = type;
-        this.inputs = inputs;
-        this.outputs = outputs;
-        this.from = null;
-        this.to = null;
-        this.amount = 0;
-        this.fee = fee;
-        this.nonce = nonce;
-        this.timestamp = System.currentTimeMillis();
-        this.data = data;
-        this.networkId = String.valueOf(Config.NETWORK_ID);
-        this.id = calculateId();
+    private static final byte[] DOMAIN_PREFIX = "TX\0".getBytes(StandardCharsets.UTF_8);
+    private final int version = 1;
+    private final Type type;
+    private final String from;
+    private final String to;
+    private final long amount;
+    private final long fee;
+    private final long nonce;
+    private final long timestamp;
+    private final int networkId;
+    private final byte[] data;
+    private final long validUntilBlock;
+
+    private final List<UTXOInput> inputs;
+    private final List<UTXOOutput> outputs;
+
+    private final byte[] pubKey;
+    private final byte[] signature;
+    private final String txid;
+
+    private Transaction(Builder b) {
+        this.type = b.type;
+        this.from = b.from;
+        this.to = b.to;
+        this.amount = b.amount;
+        this.fee = b.fee;
+        this.nonce = b.nonce;
+        this.timestamp = b.timestamp;
+        this.networkId = b.networkId;
+        this.data = b.data == null ? new byte[0] : b.data;
+        this.validUntilBlock = b.validUntilBlock;
+        this.inputs = b.inputs == null ? List.of() : List.copyOf(b.inputs);
+        this.outputs = b.outputs == null ? List.of() : List.copyOf(b.outputs);
+        this.pubKey = b.pubKey;
+        this.signature = b.signature;
+        this.txid = Crypto.bytesToHex(Crypto.hash(serializeCanonical()));
     }
 
-    @JsonIgnore
-    public String serializeForDigest() {
-        StringBuilder sb = new StringBuilder();
-        sb.append(type).append("|").append(from).append("|").append(to).append("|").append(amount).append("|").append(fee).append("|")
-                .append(nonce).append("|").append(timestamp).append("|").append(networkId).append("|")
-                .append((data == null ? "" : data));
-        if ("utxo".equals(type)) {
-            for (UTXOInput inp : inputs) {
-                sb.append("|").append(inp.getTxid())
-                .append(":").append(inp.getIndex());
-            }
-            for (UTXOOutput out : outputs) {
-                sb.append("|").append(out.getAddress())
-                .append(":").append(out.getAmount());
-            }
+    public static class Builder {
+        private Type type = Type.ACCOUNT;
+        private String from;
+        private String to;
+        private long amount;
+        private long fee;
+        private long nonce;
+        private long timestamp = System.currentTimeMillis();
+        private int networkId = Config.NETWORK_ID;
+        private byte[] data = new byte[0];
+        private long validUntilBlock;
+        private List<UTXOInput> inputs = new ArrayList<>();
+        private List<UTXOOutput> outputs = new ArrayList<>();
+        private byte[] pubKey;
+        private byte[] signature;
+
+        public Builder type(Type t) {
+            this.type = t;
+            return this;
         }
 
-        return sb.toString();
+        public Builder from(String f) {
+            this.from = f;
+            return this;
+        }
+
+        public Builder to(String t) {
+            this.to = t;
+            return this;
+        }
+
+        public Builder amount(long a) {
+            this.amount = a;
+            return this;
+        }
+
+        public Builder fee(long f) {
+            this.fee = f;
+            return this;
+        }
+
+        public Builder nonce(long n) {
+            this.nonce = n;
+            return this;
+        }
+
+        public Builder networkId(int n) {
+            this.networkId = n;
+            return this;
+        }
+
+        public Builder data(byte[] d) {
+            this.data = d;
+            return this;
+        }
+
+        public Builder validUntilBlock(long v) {
+            this.validUntilBlock = v;
+            return this;
+        }
+
+        public Builder inputs(List<UTXOInput> i) {
+            this.inputs = i;
+            return this;
+        }
+
+        public Builder outputs(List<UTXOOutput> o) {
+            this.outputs = o;
+            return this;
+        }
+
+        public Transaction sign(BigInteger privateKey, byte[] publicKey) {
+            this.pubKey = publicKey;
+            Transaction unsigned = new Transaction(this);
+            byte[] msg = unsigned.signingPayload();
+            this.signature = Crypto.sign(msg, privateKey);
+            this.from = Crypto.deriveAddress(publicKey);
+            return new Transaction(this);
+        }
+
+        public Transaction build() {
+            return new Transaction(this);
+        }
     }
 
-    public String digest() {
-        try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] h = md.digest(serializeForDigest().getBytes(StandardCharsets.UTF_8));
-            return bytesToHex(h);
-        } catch (Exception e) { throw new RuntimeException(e); }
+    private byte[] signingPayload() {
+        byte[] body = serializeCanonical();
+        byte[] payload = new byte[DOMAIN_PREFIX.length + body.length];
+        System.arraycopy(DOMAIN_PREFIX, 0, payload, 0, DOMAIN_PREFIX.length);
+        System.arraycopy(body, 0, payload, DOMAIN_PREFIX.length, body.length);
+        return Crypto.hash(payload);
     }
 
-    private String calculateId() { return digest(); }
+    public byte[] serializeCanonical() {
+        ByteBuffer buf = ByteBuffer.allocate(8192).order(ByteOrder.BIG_ENDIAN);
+        buf.putInt(version);
+        buf.putInt(type.ordinal());
+        buf.putInt(networkId);
+        buf.putLong(nonce);
+        buf.putLong(timestamp);
+        buf.putLong(validUntilBlock);
 
-    public void sign(PrivateKey privateKey, PublicKey publicKey) throws Exception {
-        Signature sig = Signature.getInstance("SHA256withECDSA");
-        sig.initSign(privateKey);
-        sig.update(digest().getBytes(StandardCharsets.UTF_8));
-        byte[] signatureBytes = sig.sign();
-        this.signature = Base64.getEncoder().encodeToString(signatureBytes);
-        this.pubKey = Base64.getEncoder().encodeToString(publicKey.getEncoded());
+        putString(buf, from);
+        putString(buf, to);
+        buf.putLong(amount);
+        buf.putLong(fee);
+        buf.putInt(data.length);
+        buf.put(data);
+
+        buf.putInt(inputs.size());
+        for (UTXOInput i : inputs) {
+            putString(buf, i.getTxid());
+            buf.putInt(i.getIndex());
+        }
+
+        buf.putInt(outputs.size());
+        for (UTXOOutput o : outputs) {
+            putString(buf, o.getAddress());
+            buf.putLong(o.getAmount());
+        }
+
+        buf.flip();
+        byte[] out = new byte[buf.remaining()];
+        buf.get(out);
+        return out;
+    }
+
+    private static void putString(ByteBuffer buf, String s) {
+        if (s == null) {
+            buf.putInt(0);
+        } else {
+            byte[] b = s.getBytes(StandardCharsets.UTF_8);
+            buf.putInt(b.length);
+            buf.put(b);
+        }
     }
 
     public boolean verify() {
-        try {
-            if (from == null) return true; // coinbase/coinbase-like txs
-            if (signature == null || pubKey == null) return false;
-            byte[] sigBytes = Base64.getDecoder().decode(signature);
-            byte[] pubBytes = Base64.getDecoder().decode(pubKey);
-            KeyFactory kf = KeyFactory.getInstance("EC");
-            PublicKey pk = kf.generatePublic(new java.security.spec.X509EncodedKeySpec(pubBytes));
-            Signature verifier = Signature.getInstance("SHA256withECDSA");
-            verifier.initVerify(pk);
-            verifier.update(digest().getBytes(StandardCharsets.UTF_8));
-            return verifier.verify(sigBytes);
-        } catch (Exception e) {
+        if (signature == null || pubKey == null)
             return false;
-        }
+        if (!Crypto.deriveAddress(pubKey).equals(from))
+            return false;
+        return Crypto.verify(signingPayload(), signature, pubKey);
     }
 
-    public static String deriveAddress(PublicKey pubKey) throws Exception {
-        MessageDigest sha = MessageDigest.getInstance("SHA-256");
-        byte[] h = sha.digest(pubKey.getEncoded());
-        return bytesToHex(h).substring(0, 40);
+    public String getTxid() {
+        return txid;
     }
 
-    private static String bytesToHex(byte[] bytes) {
-        StringBuilder sb = new StringBuilder();
-        for (byte b : bytes) sb.append(String.format("%02x", b));
-        return sb.toString();
+    public String getId() {
+        return txid;
     }
 
-    public String getType() { return type; }
-    public String getId() { return id; }
-    public String getFrom() { return from; }
-    public String getTo() { return to; }
-    public long getAmount() { return amount; }
-    public long getFee() { return fee; }
-    public long getNonce() { return nonce; }
-    public String getNetworkId() { return networkId; }
-    public long getTimestamp() { return timestamp; }
-    public String getData() { return data; }
-    public List<UTXOInput> getInputs() { return inputs; }
-    public List<UTXOOutput> getOutputs() { return outputs; }
-    public void setSignature(String signature) { this.signature = signature; }
-    public void setNetworkId(int networkId2) { this.networkId = networkId; }
+    public String getFrom() {
+        return from;
+    }
+
+    public String getTo() {
+        return to;
+    }
+
+    public long getAmount() {
+        return amount;
+    }
+
+    public long getFee() {
+        return fee;
+    }
+
+    public long getNonce() {
+        return nonce;
+    }
+
+    public long getTimestamp() {
+        return timestamp;
+    }
+
+    public int getNetworkId() {
+        return networkId;
+    }
+
+    public long getValidUntilBlock() {
+        return validUntilBlock;
+    }
+
+    public Type getType() {
+        return type;
+    }
+
+    public List<UTXOInput> getInputs() {
+        return inputs;
+    }
+
+    public List<UTXOOutput> getOutputs() {
+        return outputs;
+    }
+
+    public byte[] getData() {
+        return data;
+    }
+
+    public String digest() {
+        return txid;
+    }
 }

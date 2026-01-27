@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  seed-node:
+    build: .
+    container_name: seed-node
+    environment:
+      - NODE_PORT=6001
+      - API_PORT=8000
+      - NODE_PRIVATE_KEY=f001... # Placeholder
+      - IS_SEED=true
+    ports:
+      - "8000:8000"
+      - "6001:6001"
+    networks:
+      - blockchain-net
+    volumes:
+      - seed_data:/app/data
+
+  peer-node-1:
+    build: .
+    container_name: peer-node-1
+    environment:
+      - NODE_PORT=6001
+      - API_PORT=8000
+      - SEED_PEER=seed-node:6001
+    ports:
+      - "8001:8000"
+      - "6002:6001"
+    networks:
+      - blockchain-net
+    volumes:
+      - peer1_data:/app/data
+    depends_on:
+      - seed-node
+
+networks:
+  blockchain-net:
+    driver: bridge
+
+volumes:
+  seed_data:
+  peer1_data:

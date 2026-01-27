@@ -3,6 +3,7 @@ package com.hybrid.blockchain;
 public class PrunedBlockchain extends Blockchain {
 
     private final int maxBlocks;
+    @SuppressWarnings("unused")
     private final PoAConsensus poa;
 
     public PrunedBlockchain(Storage storage, Mempool mempool, int maxBlocks, PoAConsensus poa) throws Exception {

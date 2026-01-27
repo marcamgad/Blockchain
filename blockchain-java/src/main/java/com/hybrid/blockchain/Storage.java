@@ -108,7 +108,9 @@ public class Storage {
     }
 
     public Map<String, Object> loadUTXO() throws IOException {
-        return get("utxo:set", Map.class);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> result = get("utxo:set", Map.class);
+        return result;
     }
 
     public void saveState(Map<String, ?> obj) throws IOException {
@@ -116,7 +118,9 @@ public class Storage {
     }
 
     public Map<String, Object> loadState() throws IOException {
-        return get("state:account", Map.class);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> result = get("state:account", Map.class);
+        return result;
     }
 
     public void putMeta(String key, Object value) throws IOException {

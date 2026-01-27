@@ -1,0 +1,8 @@
+-------------------------------------------------------------------------------
+Test set: com.hybrid.blockchain.IoTEndToEndTest
+-------------------------------------------------------------------------------
+Tests run: 1, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 59.871 s <<< FAILURE! - in com.hybrid.blockchain.IoTEndToEndTest
+testMultiNodeConsensus  Time elapsed: 59.871 s  <<< FAILURE!
+org.opentest4j.AssertionFailedError: Actuator state should be 1 after finality ==> expected: <1> but was: <0>
+	at com.hybrid.blockchain.IoTEndToEndTest.testMultiNodeConsensus(IoTEndToEndTest.java:86)
+
