@@ -11,8 +11,8 @@ public final class Config {
     public static final double MIN_TRANSACTION_AMOUNT = 0.0001;
     public static final int MEMPOOL_LIMIT = 10_000;
     public static final int SIGNATURE_LENGTH = 128;
-    public static final int P2P_PORT = 6001;
-    public static final int API_PORT = 8000;
+    public static final int P2P_PORT = getIntEnv("P2P_PORT", 6001);
+    public static final int API_PORT = getIntEnv("API_PORT", 8000);
     public static final long PEER_HEARTBEAT_INTERVAL_MS = 3000;
     public static final int MAX_PEERS = 50;
     public static final String HASH_ALGO = "SHA-256";
@@ -23,7 +23,11 @@ public final class Config {
     public static final boolean ENABLE_SMART_CONTRACTS = true;
     public static final long CONTRACT_EXECUTION_LIMIT = 10_000;
     public static final int MAX_CONTRACT_SIZE = 32 * 1024;
-    public static final String NODE_NAME = "HybridJavaNode";
+    public static final String NODE_NAME = getEnv("NODE_NAME", "HybridJavaNode");
+    public static final String NODE_ID = getEnv("NODE_ID", "node-" + System.currentTimeMillis());
+    public static final boolean IS_SEED = getBooleanEnv("IS_SEED", false);
+    public static final String SEED_PEER = getEnv("SEED_PEER", null);
+    public static final String STORAGE_PATH = getEnv("STORAGE_PATH", "./data");
     public static final boolean DEBUG = true;
     public static final boolean PRINT_STATS = true;
     public static final int NETWORK_ID = getIntEnv("NETWORK_ID", 101);
@@ -50,6 +54,12 @@ public final class Config {
     private static byte[] getBytesEnv(String name, byte[] def) {
         String val = System.getenv(name);
         return val != null ? val.getBytes() : def;
+    }
+
+    private static boolean getBooleanEnv(String name, boolean def) {
+        String val = System.getenv(name);
+        if (val == null) return def;
+        return "true".equalsIgnoreCase(val) || "1".equals(val) || "yes".equalsIgnoreCase(val);
     }
 
     public static java.math.BigInteger getNodePrivateKey() {

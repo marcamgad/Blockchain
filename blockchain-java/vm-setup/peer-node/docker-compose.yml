@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  peer-node:
+    image: blockchain-java:latest
+    container_name: peer-node
+    # Hostname should ideally be unique per peer, e.g. peer-node-1
+    hostname: peer-node-1
+    environment:
+      - NODE_ID=peer-node-1
+      # REPLACE WITH YOUR OWN SECURE KEY
+      - NODE_PRIVATE_KEY=b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3
+      - IS_SEED=false
+      # IMPORTANT: Replace <SEED_NODE_IP> with the actual IP address of your Seed Node VM
+      - SEED_PEER=<SEED_NODE_IP>:6001
+      - API_PORT=8000
+      - SERVER_PORT=8000
+      - P2P_PORT=6001
+      - STORAGE_PATH=/app/data
+      - NETWORK_ID=101
+      - PROTOCOL_VERSION=1.0.0
+      - STORAGE_AES_KEY=1234567890abcdef
+    ports:
+      - "8000:8000" # API port
+      - "6001:6001" # P2P port (mapped to 6001 because it's its own VM)
+    volumes:
+      - peer_data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/api/v1/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  peer_data:
