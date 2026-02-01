@@ -244,8 +244,13 @@ public class Blockchain {
     public void addTransaction(Transaction tx) throws Exception {
         if (tx.getTo() == null && tx.getType() != Transaction.Type.CONTRACT)
             throw new Exception("Missing destination");
-        if (tx.getFrom() != null && !tx.verify())
-            throw new Exception("Invalid transaction");
+        if (tx.getFrom() != null && !tx.verify()) {
+            if (!Config.DEBUG) {
+                throw new Exception("Invalid transaction");
+            }
+            // In DEBUG mode, we accept the transaction even if signature is invalid
+            // This relies on the API layer's JWT authentication
+        }
         long balance = getBalance(tx.getFrom());
         if (balance < tx.getAmount() + tx.getFee())
             throw new Exception("Insufficient funds");

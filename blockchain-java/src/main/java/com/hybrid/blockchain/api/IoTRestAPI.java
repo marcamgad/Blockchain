@@ -50,6 +50,19 @@ public class IoTRestAPI {
         this.jwtManager = new JwtManager(); // JWT token manager
         this.deviceManager = new IoTDeviceManager(); // persistent device registry
 
+        log.info("========================================");
+        log.info("IoT Blockchain Node Starting");
+        log.info("========================================");
+        log.info("Node ID: {}", Config.NODE_ID);
+        log.info("Node Name: {}", Config.NODE_NAME);
+        log.info("Is Seed Node: {}", Config.IS_SEED);
+        log.info("Seed Peer: {}", Config.SEED_PEER != null ? Config.SEED_PEER : "N/A (this is seed)");
+        log.info("API Port: {}", Config.API_PORT);
+        log.info("P2P Port: {}", Config.P2P_PORT);
+        log.info("Network ID: {}", Config.NETWORK_ID);
+        log.info("Protocol Version: {}", Config.PROTOCOL_VERSION);
+        log.info("Storage Path: {}", Config.STORAGE_PATH);
+        log.info("========================================");
         log.info("IoT REST API initialized successfully");
     }
 
@@ -59,6 +72,39 @@ public class IoTRestAPI {
 
     private ResponseEntity<?> unauthorized() {
         return ResponseEntity.status(401).body(Map.of("error", "Unauthorized"));
+    }
+
+    // ============================================
+    // Health Check Endpoints for Docker
+    // ============================================
+
+    @GetMapping("/health")
+    public ResponseEntity<?> healthCheck() {
+        return ResponseEntity.ok(Map.of(
+                "status", "healthy",
+                "nodeId", Config.NODE_ID,
+                "timestamp", System.currentTimeMillis()));
+    }
+
+    @GetMapping("/ready")
+    public ResponseEntity<?> readinessCheck() {
+        blockchainLock.readLock().lock();
+        try {
+            boolean ready = blockchain != null && blockchain.getHeight() >= 0;
+            if (ready) {
+                return ResponseEntity.ok(Map.of(
+                        "status", "ready",
+                        "nodeId", Config.NODE_ID,
+                        "blockHeight", blockchain.getHeight(),
+                        "timestamp", System.currentTimeMillis()));
+            } else {
+                return ResponseEntity.status(503).body(Map.of(
+                        "status", "not ready",
+                        "nodeId", Config.NODE_ID));
+            }
+        } finally {
+            blockchainLock.readLock().unlock();
+        }
     }
 
     @PostMapping("/account/create")
@@ -231,8 +277,13 @@ public class IoTRestAPI {
         blockchainLock.readLock().lock();
         try {
             return ResponseEntity.ok(Map.of(
+                    "nodeId", Config.NODE_ID,
+                    "nodeName", Config.NODE_NAME,
+                    "isSeed", Config.IS_SEED,
+                    "blockHeight", blockchain.getHeight(),
                     "chainHeight", blockchain.getHeight(),
                     "networkId", Config.NETWORK_ID,
+                    "protocolVersion", Config.PROTOCOL_VERSION,
                     "validatorCount", poa.getValidators().size(),
                     "validators", poa.getValidators().stream()
                             .map(v -> Map.of("id", v.getId()))

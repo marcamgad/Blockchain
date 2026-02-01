@@ -9,7 +9,7 @@ import java.util.Date;
 
 public class JwtManager {
 
-    private static final String SECRET = "ReplaceThisWithASecretKeyForProd!";
+    private static final String SECRET = "ThisIsAVeryLongSecretKeyThatIsDefinitelyMoreThan256BitsAndSecureEnoughForJJWTRequirement1234567890!";
     private static final long EXPIRATION_MS = 24 * 60 * 60 * 1000; // 24 hours
 
     public String issueToken(String deviceId) {
