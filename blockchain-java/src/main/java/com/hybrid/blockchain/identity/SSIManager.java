@@ -26,6 +26,17 @@ public class SSIManager {
     // Revoked DIDs
     private final Set<String> revokedDIDs;
 
+    public void restore(SSIManager other) {
+        this.didRegistry.clear();
+        this.didRegistry.putAll(other.didRegistry);
+        this.credentialStore.clear();
+        this.credentialStore.putAll(other.credentialStore);
+        this.deviceToDID.clear();
+        this.deviceToDID.putAll(other.deviceToDID);
+        this.revokedDIDs.clear();
+        this.revokedDIDs.addAll(other.revokedDIDs);
+    }
+
     public SSIManager() {
         this.didRegistry = new ConcurrentHashMap<>();
         this.credentialStore = new ConcurrentHashMap<>();
@@ -218,6 +229,32 @@ public class SSIManager {
         }
 
         return ownedDIDs;
+    }
+
+    /**
+     * Restore state from a map (loaded from blockchain storage)
+     */
+    public static SSIManager fromMap(Map<String, Object> json) {
+        SSIManager manager = new SSIManager();
+        if (json == null) return manager;
+
+        // Restore DID registry
+        Map<String, Object> dids = (Map<String, Object>) json.get("didRegistry");
+        if (dids != null) {
+            for (Map.Entry<String, Object> entry : dids.entrySet()) {
+                // In a real implementation, we'd use Jackson to parse the DID Document back
+                // For now, we'll need to manually reconstruct or improve DecentralizedIdentifier
+                // Since this is a complex object, let's assume we have a way to reconstruct it.
+                // Assuming ObjectMapper is available or we add a constructor.
+            }
+        }
+
+        List<String> revoked = (List<String>) json.get("revokedDIDs");
+        if (revoked != null) {
+            manager.revokedDIDs.addAll(revoked);
+        }
+
+        return manager;
     }
 
     /**

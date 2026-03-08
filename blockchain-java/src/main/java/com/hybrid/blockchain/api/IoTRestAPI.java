@@ -28,6 +28,7 @@ public class IoTRestAPI {
     // Removed ContractVM contractVM;
     private JwtManager jwtManager;
     private IoTDeviceManager deviceManager;
+    private MQTTAdapter mqttAdapter;
 
     private final ReentrantReadWriteLock blockchainLock = new ReentrantReadWriteLock();
 
@@ -64,6 +65,14 @@ public class IoTRestAPI {
         log.info("Storage Path: {}", Config.STORAGE_PATH);
         log.info("========================================");
         log.info("IoT REST API initialized successfully");
+
+        // Initialize and start MQTT Adapter
+        try {
+            this.mqttAdapter = new MQTTAdapter(this.blockchain);
+            this.mqttAdapter.start();
+        } catch (Exception e) {
+            log.error("Failed to start MQTT Adapter: {}", e.getMessage());
+        }
     }
 
     private boolean verifyToken(String token, String deviceId) {

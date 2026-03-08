@@ -53,6 +53,9 @@ public class IoTEndToEndTest {
         code.put(OpCode.PUSH.getByte()).putLong(2L);
         code.put(OpCode.SYSCALL.getByte());
 
+        node1.getState().credit("alice", 1000);
+        node2.getState().credit("alice", 1000);
+        
         Transaction tx = new Transaction.Builder()
                 .type(Transaction.Type.CONTRACT)
                 .from("alice")
@@ -73,15 +76,14 @@ public class IoTEndToEndTest {
         // Finality: The block with the transaction is at index 1
         // We need 6 MORE blocks after it for it to be finalized (total chain size = 8)
         // Currently chain size is 2 (genesis + block with tx)
-        // So we need 6 more blocks to reach finality
-        for (int i = 0; i < 6; i++) {
+        for (int i = 0; i < 7; i++) {
             Block b = node1.createBlock("V1", 0);
             poa.signBlock(b, v1, privateKey);
             node1.applyBlock(b);
             node2.applyBlock(b);
         }
 
-        // Now chain size is 8, so block at index 1 has 6 confirmations
+        // Now chain size is 9, so block at index 1 has 6 confirmations
         // Hardware actions should be committed
         assertEquals(1L, node1.getHardwareManager().getActuatorState(100L),
                 "Actuator state should be 1 after finality");

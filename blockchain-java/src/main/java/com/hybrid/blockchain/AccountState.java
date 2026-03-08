@@ -14,9 +14,11 @@ public class AccountState {
     private final SSIManager ssiManager;
     private final DeviceLifecycleManager lifecycleManager;
     private final PrivateDataManager privateDataManager;
+    private final MerklePatriciaTrie mpt;
 
     public AccountState() {
         this.state = new HashMap<>();
+        this.mpt = new MerklePatriciaTrie();
         this.ssiManager = new SSIManager();
         this.lifecycleManager = new DeviceLifecycleManager(ssiManager);
         this.privateDataManager = new PrivateDataManager();
@@ -24,6 +26,10 @@ public class AccountState {
 
     public AccountState(Map<String, Account> obj) {
         this.state = new HashMap<>(obj);
+        this.mpt = new MerklePatriciaTrie();
+        for (Map.Entry<String, Account> entry : obj.entrySet()) {
+            updateMpt(entry.getKey(), entry.getValue());
+        }
         this.ssiManager = new SSIManager();
         this.lifecycleManager = new DeviceLifecycleManager(ssiManager);
         this.privateDataManager = new PrivateDataManager();
@@ -33,24 +39,54 @@ public class AccountState {
         Map<String, Account> map = new HashMap<>();
         if (raw == null)
             return new AccountState(map);
-        for (Map.Entry<String, Object> e : raw.entrySet()) {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> accMap = (Map<String, Object>) e.getValue();
-            long balance = Utils.safeLong(accMap.get("balance"));
-            long nonce = Utils.safeLong(accMap.get("nonce"));
-            map.put(e.getKey(), new Account(balance, nonce));
+
+        // Load account balances and nonces
+        Map<String, Object> accounts = (Map<String, Object>) raw.get("accounts");
+        if (accounts != null) {
+            for (Map.Entry<String, Object> e : accounts.entrySet()) {
+                Map<String, Object> accMap = (Map<String, Object>) e.getValue();
+                long balance = Utils.safeLong(accMap.get("balance"));
+                long nonce = Utils.safeLong(accMap.get("nonce"));
+                map.put(e.getKey(), new Account(balance, nonce));
+            }
         }
-        return new AccountState(map);
+
+        AccountState accountState = new AccountState(map);
+
+        // Load SSI state
+        if (raw.containsKey("ssi")) {
+            SSIManager ssi = SSIManager.fromMap((Map<String, Object>) raw.get("ssi"));
+            accountState.ssiManager.restore(ssi);
+        }
+
+        // Load Lifecycle state
+        if (raw.containsKey("lifecycle")) {
+            DeviceLifecycleManager lifecycle = DeviceLifecycleManager.fromMap((Map<String, Object>) raw.get("lifecycle"), accountState.ssiManager);
+            accountState.lifecycleManager.restore(lifecycle);
+        }
+
+        return accountState;
     }
 
     public Map<String, Object> toJSON() {
         Map<String, Object> json = new HashMap<>();
+        
+        // Serialize accounts
+        Map<String, Object> accounts = new HashMap<>();
         for (Map.Entry<String, Account> entry : state.entrySet()) {
             Map<String, Object> accJson = new HashMap<>();
             accJson.put("balance", entry.getValue().getBalance());
             accJson.put("nonce", entry.getValue().getNonce());
-            json.put(entry.getKey(), accJson);
+            accounts.put(entry.getKey(), accJson);
         }
+        json.put("accounts", accounts);
+
+        // Serialize SSI Manager
+        json.put("ssi", ssiManager.toJSON());
+
+        // Serialize Device Lifecycle Manager
+        json.put("lifecycle", lifecycleManager.toJSON());
+
         return json;
     }
 
@@ -70,7 +106,9 @@ public class AccountState {
 
     public void credit(String addr, long amount) {
         ensure(addr);
-        state.get(addr).credit(amount);
+        Account acc = state.get(addr);
+        acc.credit(amount);
+        updateMpt(addr, acc);
     }
 
     public void debit(String addr, long amount) throws Exception {
@@ -83,16 +121,21 @@ public class AccountState {
             throw new Exception("Insufficient balance");
         }
         acc.debit(amount);
+        updateMpt(addr, acc);
     }
 
     public void incrementNonce(String addr) {
         ensure(addr);
-        state.get(addr).incrementNonce();
+        Account acc = state.get(addr);
+        acc.incrementNonce();
+        updateMpt(addr, acc);
     }
 
     public void setNonce(String addr, long n) {
         ensure(addr);
-        state.get(addr).setNonce(n);
+        Account acc = state.get(addr);
+        acc.setNonce(n);
+        updateMpt(addr, acc);
     }
 
     public ContractState getAccountStorage(String addr) {
@@ -126,44 +169,37 @@ public class AccountState {
     }
 
     public String calculateStateRoot() {
-        return Crypto.bytesToHex(Crypto.hash(serializeCanonical()));
+        // Includes Account map, SSI, and Lifecycle roots in the future
+        // For now, it returns the MPT root of the Accounts
+        return Crypto.bytesToHex(mpt.getRootHash());
     }
 
-    public byte[] serializeCanonical() {
-        // Collect and sort addresses for determinism
-        List<String> addresses = new java.util.ArrayList<>(state.keySet());
-        java.util.Collections.sort(addresses);
+    private void updateMpt(String addr, Account acc) {
+        byte[] serialized = serializeAccount(acc);
+        mpt.put(addr, serialized);
+    }
 
-        java.nio.ByteBuffer buf = java.nio.ByteBuffer.allocate(1024 * 1024); // Adjust as needed
+    private byte[] serializeAccount(Account acc) {
+        java.nio.ByteBuffer buf = java.nio.ByteBuffer.allocate(1024);
         buf.order(java.nio.ByteOrder.BIG_ENDIAN);
+        buf.putLong(acc.getBalance());
+        buf.putLong(acc.getNonce());
+        
+        byte[] storageRoot = HexUtils.decode(acc.getStorage().calculateRoot());
+        buf.putInt(storageRoot.length);
+        buf.put(storageRoot);
 
-        for (String addr : addresses) {
-            byte[] addrBytes = addr.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            buf.putInt(addrBytes.length);
-            buf.put(addrBytes);
-
-            Account acc = state.get(addr);
-            buf.putLong(acc.getBalance());
-            buf.putLong(acc.getNonce());
-
-            // Include contract storage in the hash
-            byte[] storageRoot = HexUtils.decode(acc.getStorage().calculateRoot());
-            buf.put(storageRoot);
-
-            // Include capabilities in the hash
-            java.util.Set<Capability> caps = acc.getCapabilities();
-            buf.putInt(caps.size());
-            java.util.List<Capability> sortedCaps = new java.util.ArrayList<>(caps);
-            sortedCaps.sort((c1, c2) -> {
-                int typeComp = c1.getType().compareTo(c2.getType());
-                if (typeComp != 0)
-                    return typeComp;
-                return Long.compare(c1.getDeviceId(), c2.getDeviceId());
-            });
-            for (Capability cap : sortedCaps) {
-                buf.putInt(cap.getType().ordinal());
-                buf.putLong(cap.getDeviceId());
-            }
+        java.util.Set<Capability> caps = acc.getCapabilities();
+        buf.putInt(caps.size());
+        java.util.List<Capability> sortedCaps = new java.util.ArrayList<>(caps);
+        sortedCaps.sort((c1, c2) -> {
+            int typeComp = c1.getType().compareTo(c2.getType());
+            if (typeComp != 0) return typeComp;
+            return Long.compare(c1.getDeviceId(), c2.getDeviceId());
+        });
+        for (Capability cap : sortedCaps) {
+            buf.putInt(cap.getType().ordinal());
+            buf.putLong(cap.getDeviceId());
         }
 
         buf.flip();

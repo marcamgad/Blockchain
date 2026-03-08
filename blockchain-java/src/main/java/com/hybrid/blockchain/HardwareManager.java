@@ -67,4 +67,22 @@ public class HardwareManager {
     public long getActuatorState(long id) {
         return actuatorStates.getOrDefault(id, -1L);
     }
+
+    /**
+     * HSM (Hardware Security Module) integration for key management.
+     */
+    public byte[] signWithHSM(String keyAlias, byte[] data) throws Exception {
+        // In production, this would use PKCS#11 or JAAS to talk to HSM
+        System.out.println("[HSM] Signing with key: " + keyAlias);
+        return Crypto.hash(data); // Mock signature
+    }
+
+    /**
+     * TEE (Trusted Execution Environment) for secure computation.
+     */
+    public byte[] executeSecureEnclave(byte[] encryptedCode, byte[] encryptedData) throws Exception {
+        // In production, this would use Intel SGX or ARM TrustZone
+        System.out.println("[TEE] Executing secure enclave computation");
+        return new byte[0]; // Mock result
+    }
 }

@@ -6,6 +6,8 @@ import java.nio.ByteBuffer;
 import java.security.SecureRandom;
 import java.util.*;
 import java.util.concurrent.*;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.hybrid.blockchain.consensus.PBFTConsensus;
 
 public class PeerNode {
     private final int port;
@@ -14,20 +16,26 @@ public class PeerNode {
     private ServerSocket serverSocket;
     private final java.math.BigInteger privateKey;
     private final byte[] localPubKey;
+    private Blockchain blockchain;
+    private Consensus consensus;
+    private final List<DataOutputStream> activeConnections = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     public enum MsgType {
-        HELLO, CHALLENGE, HANDSHAKE_OK, TRANSACTION, BLOCK, PEER_LIST
+        HELLO, CHALLENGE, HANDSHAKE_OK, TRANSACTION, BLOCK, PEER_LIST,
+        PBFT_PRE_PREPARE, PBFT_PREPARE, PBFT_COMMIT
     }
 
     private static final int PROTOCOL_VERSION = 1;
 
-    public PeerNode(int port) {
+    public PeerNode(int port, Blockchain blockchain, Consensus consensus) {
         this.port = port;
         this.peers = ConcurrentHashMap.newKeySet();
         this.executor = Executors.newCachedThreadPool();
         this.serverSocket = null;
         this.privateKey = Config.getNodePrivateKey();
         this.localPubKey = Crypto.derivePublicKey(this.privateKey);
+        this.blockchain = blockchain;
+        this.consensus = consensus;
     }
 
     public void start() throws IOException {
@@ -61,6 +69,8 @@ public class PeerNode {
                     performOutboundHandshake(in, out, localNonce);
 
                 System.out.println("Secure session established with " + socket.getInetAddress());
+                
+                activeConnections.add(out);
 
                 long nextInboundSeq = 0;
                 while (true) {
@@ -164,7 +174,71 @@ public class PeerNode {
     }
 
     private void processMessage(MsgType type, byte[] payload) {
-        // Core node logic
+        try {
+            switch (type) {
+                case TRANSACTION:
+                    Transaction tx = blockchain.deserializeTransaction(payload);
+                    blockchain.addTransaction(tx);
+                    break;
+                case BLOCK:
+                    Block block = blockchain.deserializeBlock(payload);
+                    blockchain.applyBlock(block);
+                    break;
+                case PBFT_PRE_PREPARE:
+                    // Pre-prepare is usually the block itself
+                    break;
+                case PBFT_PREPARE:
+                case PBFT_COMMIT:
+                    if (consensus instanceof PBFTConsensus) {
+                        PBFTConsensus pbft = (PBFTConsensus) consensus;
+                        ObjectMapper mapper = new ObjectMapper();
+                        Map<String, Object> data = mapper.readValue(payload, Map.class);
+                        
+                        long seq = ((Number) data.get("sequenceNumber")).longValue();
+                        String hash = (String) data.get("blockHash");
+                        String valId = (String) data.get("validatorId");
+                        byte[] sig = HexUtils.decode((String) data.get("signature"));
+                        
+                        if (type == MsgType.PBFT_PREPARE) {
+                            pbft.addPrepareVote(seq, hash, valId, sig);
+                        } else {
+                            pbft.addCommitVote(seq, hash, valId, sig);
+                        }
+                    }
+                    break;
+            }
+        } catch (Exception e) {
+            System.err.println("Error processing message: " + e.getMessage());
+        }
+    }
+
+    public void broadcastPBFT(MsgType type, long seq, String hash, String valId, byte[] sig) {
+        try {
+            Map<String, Object> data = new HashMap<>();
+            data.put("sequenceNumber", seq);
+            data.put("blockHash", hash);
+            data.put("validatorId", valId);
+            data.put("signature", HexUtils.encode(sig));
+            
+            byte[] payload = new ObjectMapper().writeValueAsBytes(data);
+            broadcast(type, payload);
+        } catch (Exception e) {
+            System.err.println("Error broadcasting PBFT message: " + e.getMessage());
+        }
+    }
+
+    public void broadcast(MsgType type, byte[] payload) {
+        for (DataOutputStream out : activeConnections) {
+            try {
+                out.writeInt(type.ordinal());
+                out.writeLong(System.currentTimeMillis()); // Simplified seq number
+                out.writeInt(payload.length);
+                out.write(payload);
+                out.flush();
+            } catch (Exception e) {
+                activeConnections.remove(out);
+            }
+        }
     }
 
     public void shutdown() throws IOException {

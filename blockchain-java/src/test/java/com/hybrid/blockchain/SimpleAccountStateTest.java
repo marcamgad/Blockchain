@@ -86,7 +86,9 @@ public class SimpleAccountStateTest {
         
         var json = state.toJSON();
         assertNotNull(json);
-        assertTrue(json.containsKey("alice"));
+        assertTrue(json.containsKey("accounts"));
+        java.util.Map<String, Object> accounts = (java.util.Map<String, Object>) json.get("accounts");
+        assertTrue(accounts.containsKey("alice"));
     }
 
     @Test
@@ -95,8 +97,11 @@ public class SimpleAccountStateTest {
         aliceData.put("balance", 100L);
         aliceData.put("nonce", 5L);
         
+        var accountsData = new java.util.HashMap<String, Object>();
+        accountsData.put("alice", aliceData);
+
         var rawState = new java.util.HashMap<String, Object>();
-        rawState.put("alice", aliceData);
+        rawState.put("accounts", accountsData);
         
         AccountState loaded = AccountState.fromMap(rawState);
         assertEquals(100, loaded.getBalance("alice"));

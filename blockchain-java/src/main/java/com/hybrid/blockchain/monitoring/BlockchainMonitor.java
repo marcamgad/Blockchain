@@ -82,10 +82,8 @@ public class BlockchainMonitor {
      * Record a metric value
      */
     public void recordMetric(String metricName, long value) {
-        MetricCollector collector = metrics.get(metricName);
-        if (collector != null) {
-            collector.record(value);
-        }
+        MetricCollector collector = metrics.computeIfAbsent(metricName, k -> new MetricCollector(k));
+        collector.record(value);
     }
 
     /**
@@ -192,8 +190,8 @@ public class BlockchainMonitor {
         MetricCollector txLatency = metrics.get("transactions.latency");
         MetricCollector blockTime = metrics.get("blocks.time");
 
-        long uptimeSeconds = getUptime() / 1000;
-        double tps = uptimeSeconds > 0 ? (double) txSubmitted.getTotal() / uptimeSeconds : 0;
+        long uptimeMillis = getUptime();
+        double tps = uptimeMillis > 0 ? (double) txSubmitted.getTotal() * 1000 / uptimeMillis : 0;
 
         return new PerformanceMetrics(
                 tps,

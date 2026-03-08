@@ -9,7 +9,7 @@ import java.util.*;
 public final class Transaction {
 
     public enum Type {
-        ACCOUNT, UTXO, CONTRACT
+        ACCOUNT, UTXO, CONTRACT, IOT_MANAGEMENT, MINT, BURN
     }
 
     private static final byte[] DOMAIN_PREFIX = "TX\0".getBytes(StandardCharsets.UTF_8);
@@ -120,13 +120,12 @@ public final class Transaction {
             this.outputs = o;
             return this;
         }
-
         public Transaction sign(BigInteger privateKey, byte[] publicKey) {
             this.pubKey = publicKey;
+            this.from = Crypto.deriveAddress(publicKey);
             Transaction unsigned = new Transaction(this);
             byte[] msg = unsigned.signingPayload();
             this.signature = Crypto.sign(msg, privateKey);
-            this.from = Crypto.deriveAddress(publicKey);
             return new Transaction(this);
         }
 
