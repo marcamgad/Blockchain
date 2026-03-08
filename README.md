@@ -1,6 +1,4 @@
-Here’s a **powerful, fully updated README** for your production-ready IoT blockchain that reflects all the new implementations (SSI, WASM contracts, Phase 7 hardening) and reads like an enterprise-grade deployment document:
 
----
 
 # Production IoT Blockchain - Enterprise-Grade Deployment Ready
 
