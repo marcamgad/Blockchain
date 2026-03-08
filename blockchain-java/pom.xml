@@ -43,6 +43,11 @@
             <artifactId>bcprov-jdk18on</artifactId>
             <version>1.78.1</version>
         </dependency>
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcpkix-jdk18on</artifactId>
+            <version>1.78.1</version>
+        </dependency>
 
         <!-- ========================================================= -->
         <!--  Networking (P2P layer will use Netty)                    -->
@@ -132,6 +137,20 @@
             <groupId>org.eclipse.paho</groupId>
             <artifactId>org.eclipse.paho.client.mqttv3</artifactId>
             <version>1.2.5</version>
+        </dependency>
+
+        <!-- ========================================================= -->
+        <!--  WASM Runtime (Chicory - Pure Java)                        -->
+        <!-- ========================================================= -->
+        <dependency>
+            <groupId>com.dylibso.chicory</groupId>
+            <artifactId>runtime</artifactId>
+            <version>1.0.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.dylibso.chicory</groupId>
+            <artifactId>wasm</artifactId>
+            <version>1.0.0</version>
         </dependency>
     </dependencies>
 

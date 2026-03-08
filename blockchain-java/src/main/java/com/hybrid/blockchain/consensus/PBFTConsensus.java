@@ -5,6 +5,7 @@ import com.hybrid.blockchain.Consensus;
 import com.hybrid.blockchain.Crypto;
 import com.hybrid.blockchain.Validator;
 import java.util.*;
+import java.util.concurrent.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.math.BigInteger;
 
@@ -26,6 +27,8 @@ public class PBFTConsensus implements Consensus {
     public interface PBFTMessenger {
         void broadcastPrepare(long sequenceNumber, String blockHash, String validatorId, byte[] signature);
         void broadcastCommit(long sequenceNumber, String blockHash, String validatorId, byte[] signature);
+        void broadcastViewChange(long newView, long lastSeq, String validatorId, byte[] signature);
+        void broadcastNewView(long newView, List<PBFTMessage> viewChanges, List<Block> recoveredBlocks, String validatorId);
     }
 
     private PBFTMessenger messenger;
@@ -38,7 +41,9 @@ public class PBFTConsensus implements Consensus {
         PRE_PREPARE,
         PREPARE,
         COMMIT,
-        COMMITTED
+        COMMITTED,
+        VIEW_CHANGE,
+        NEW_VIEW
     }
 
     /**
@@ -58,6 +63,15 @@ public class PBFTConsensus implements Consensus {
             this.sequenceNumber = sequenceNumber;
             this.blockHash = blockHash;
             this.validatorId = validatorId;
+        }
+
+        // Overload for View Change
+        public PBFTMessage(Phase phase, long newView, long lastSeq, String validatorId) {
+            this.phase = phase;
+            this.viewNumber = newView;
+            this.sequenceNumber = lastSeq;
+            this.validatorId = validatorId;
+            this.blockHash = "VIEW_CHANGE_PROOF";
         }
 
         public void sign(BigInteger privateKey) {
@@ -88,13 +102,27 @@ public class PBFTConsensus implements Consensus {
     // Message log: sequenceNumber -> phase -> validatorId -> message
     private final Map<Long, Map<Phase, Map<String, PBFTMessage>>> messageLog;
 
+    // View Change log: viewNumber -> validatorId -> VIEW_CHANGE message
+    private final Map<Long, Map<String, PBFTMessage>> viewChangeLog = new ConcurrentHashMap<>();
+
     // Committed blocks
     private final Set<String> committedBlocks;
+
+    // Last committed sequence number
+    private long lastCommittedSeq = 0;
 
     // Slashed validators (double-signers)
     private final Set<String> slashedValidators = ConcurrentHashMap.newKeySet();
 
-    public PBFTConsensus(Map<String, byte[]> validators) {
+    // Consensus timer
+    private final ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor();
+    private ScheduledFuture<?> currentTimerTask;
+    private static final long CONSENSUS_TIMEOUT_MS = 15000; // 15 seconds for IoT stability
+
+    private final String localValidatorId;
+    private final BigInteger localPrivateKey;
+
+    public PBFTConsensus(Map<String, byte[]> validators, String localValidatorId, BigInteger localPrivateKey) {
         if (validators.size() < 4) {
             throw new IllegalArgumentException("PBFT requires at least 4 validators (3f+1 where f=1)");
         }
@@ -102,10 +130,23 @@ public class PBFTConsensus implements Consensus {
         this.validators = new ConcurrentHashMap<>(validators);
         this.f = (validators.size() - 1) / 3;
         this.viewNumber = 0;
+        this.localValidatorId = localValidatorId;
+        this.localPrivateKey = localPrivateKey;
         this.messageLog = new ConcurrentHashMap<>();
         this.committedBlocks = ConcurrentHashMap.newKeySet();
 
-        System.out.println("[PBFT] Initialized with " + validators.size() + " validators, f=" + f);
+        System.out.println("[PBFT] Initialized as " + localValidatorId + " with " + validators.size() + " validators, f=" + f);
+        resetTimer();
+    }
+
+    private void resetTimer() {
+        if (currentTimerTask != null) {
+            currentTimerTask.cancel(false);
+        }
+        currentTimerTask = timer.schedule(() -> {
+            System.out.println("[PBFT] Consensus timeout! Triggering view change...");
+            triggerViewChange();
+        }, CONSENSUS_TIMEOUT_MS, TimeUnit.MILLISECONDS);
     }
 
     @Override
@@ -170,9 +211,49 @@ public class PBFTConsensus implements Consensus {
 
         // Block is committed
         committedBlocks.add(blockHash);
+        lastCommittedSeq = Math.max(lastCommittedSeq, sequenceNumber);
         System.out.println("[PBFT] Block " + blockHash + " committed with " + commitCount + " votes");
+        resetTimer();
 
         return true;
+    }
+
+    /**
+     * Add a VIEW_CHANGE vote from a validator
+     */
+    public void addViewChangeVote(long newView, long lastSeq, String validatorId, byte[] signature) {
+        if (!validators.containsKey(validatorId)) {
+            throw new SecurityException("Unknown validator: " + validatorId);
+        }
+
+        PBFTMessage msg = new PBFTMessage(Phase.VIEW_CHANGE, newView, lastSeq, validatorId);
+        msg.signature = signature;
+
+        if (!msg.verify(validators.get(validatorId))) {
+            throw new SecurityException("Invalid VIEW_CHANGE signature from " + validatorId);
+        }
+
+        viewChangeLog.computeIfAbsent(newView, k -> new ConcurrentHashMap<>())
+                .put(validatorId, msg);
+
+        System.out.println("[PBFT] Added VIEW_CHANGE for view " + newView + " from " + validatorId);
+
+        // Check for quorum
+        if (viewChangeLog.get(newView).size() >= (2 * f + 1)) {
+            processViewChange(newView);
+        }
+    }
+
+    private void processViewChange(long newView) {
+        if (this.viewNumber >= newView) return;
+
+        String nextLeader = selectLeader(newView);
+        System.out.println("[PBFT] View Change Quorum reached for view " + newView + ". Next leader: " + nextLeader);
+
+        // If I am the next leader, broadcast NEW_VIEW
+        // This would require my own validatorId and private key, which usually come from the node
+        // For now, we update our view
+        this.viewNumber = newView;
     }
 
     @Override
@@ -272,9 +353,20 @@ public class PBFTConsensus implements Consensus {
      * Trigger view change (when leader is faulty)
      */
     public void triggerViewChange() {
-        viewNumber++;
-        String newLeader = selectLeader(viewNumber);
-        System.out.println("[PBFT] View change to view " + viewNumber + ", new leader: " + newLeader);
+        long nextView = viewNumber + 1;
+        System.out.println("[PBFT] Initiating View Change to view " + nextView);
+        
+        PBFTMessage vcMsg = new PBFTMessage(Phase.VIEW_CHANGE, nextView, lastCommittedSeq, localValidatorId);
+        if (localPrivateKey != null) {
+            vcMsg.sign(localPrivateKey);
+            if (messenger != null) {
+                messenger.broadcastViewChange(nextView, lastCommittedSeq, localValidatorId, vcMsg.signature);
+            }
+        }
+        
+        // Add our own vote
+        viewChangeLog.computeIfAbsent(nextView, k -> new ConcurrentHashMap<>())
+                .put(localValidatorId, vcMsg);
     }
 
     /**

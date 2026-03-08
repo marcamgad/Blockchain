@@ -28,7 +28,7 @@ public final class Config {
     public static final boolean IS_SEED = getBooleanEnv("IS_SEED", false);
     public static final String SEED_PEER = getEnv("SEED_PEER", null);
     public static final String STORAGE_PATH = getEnv("STORAGE_PATH", "./data");
-    public static final boolean DEBUG = true;
+    public static final boolean DEBUG = getBooleanEnv("DEBUG", false);
     public static final boolean PRINT_STATS = true;
     public static final int NETWORK_ID = getIntEnv("NETWORK_ID", 101);
     public static final String PROTOCOL_VERSION = getEnv("PROTOCOL_VERSION", "1.0.0");
@@ -38,12 +38,14 @@ public final class Config {
     public static final byte[] STORAGE_AES_KEY = getBytesEnv("STORAGE_AES_KEY", "1234567890abcdef".getBytes());
 
     private static String getEnv(String name, String def) {
-        String val = System.getenv(name);
+        String val = System.getProperty(name);
+        if (val == null) val = System.getenv(name);
         return val != null ? val : def;
     }
 
     private static int getIntEnv(String name, int def) {
-        String val = System.getenv(name);
+        String val = System.getProperty(name);
+        if (val == null) val = System.getenv(name);
         try {
             return val != null ? Integer.parseInt(val) : def;
         } catch (NumberFormatException e) {
@@ -57,14 +59,18 @@ public final class Config {
     }
 
     private static boolean getBooleanEnv(String name, boolean def) {
-        String val = System.getenv(name);
+        String val = System.getProperty(name);
+        if (val == null) val = System.getenv(name);
         if (val == null) return def;
         return "true".equalsIgnoreCase(val) || "1".equals(val) || "yes".equalsIgnoreCase(val);
     }
 
     public static java.math.BigInteger getNodePrivateKey() {
-        String keyHex = System.getenv("NODE_PRIVATE_KEY");
+        String keyHex = System.getProperty("NODE_PRIVATE_KEY");
+        if (keyHex == null) keyHex = System.getenv("NODE_PRIVATE_KEY");
+        
         if (keyHex == null || keyHex.isEmpty()) {
+            if (DEBUG) return new java.math.BigInteger("1"); // Fallback for testing
             throw new RuntimeException("NODE_PRIVATE_KEY environment variable MUST be set for secure P2P.");
         }
         return new java.math.BigInteger(keyHex, 16);

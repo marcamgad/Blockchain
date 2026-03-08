@@ -24,6 +24,10 @@ public class ContractState {
         return storage.getOrDefault(key, 0L);
     }
 
+    public long getOrDefault(long key, long defaultValue) {
+        return storage.getOrDefault(key, defaultValue);
+    }
+
     public byte[] serializeCanonical() {
         // Sort keys for determinism
         java.util.List<Long> keys = new java.util.ArrayList<>(storage.keySet());

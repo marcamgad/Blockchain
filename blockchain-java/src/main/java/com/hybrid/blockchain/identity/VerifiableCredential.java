@@ -43,7 +43,7 @@ public class VerifiableCredential {
         this.context = Arrays.asList(
                 "https://www.w3.org/2018/credentials/v1",
                 "https://www.w3.org/2018/credentials/examples/v1");
-        this.type = Arrays.asList("VerifiableCredential");
+        this.type = new ArrayList<>(Collections.singletonList("VerifiableCredential"));
     }
 
     public VerifiableCredential(String issuerDID, String subjectDID, Map<String, Object> claims) {

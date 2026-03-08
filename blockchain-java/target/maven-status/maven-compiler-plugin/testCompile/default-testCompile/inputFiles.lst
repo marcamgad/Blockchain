@@ -14,4 +14,6 @@
 /home/youssef/Blockchain/Blockchain/blockchain-java/src/test/java/com/hybrid/blockchain/IoTInterpreterTest.java
 /home/youssef/Blockchain/Blockchain/blockchain-java/src/test/java/com/hybrid/blockchain/NetworkHardeningScanner.java
 /home/youssef/Blockchain/Blockchain/blockchain-java/src/test/java/com/hybrid/blockchain/BlockchainMonitorTest.java
+/home/youssef/Blockchain/Blockchain/blockchain-java/src/test/java/com/hybrid/blockchain/MTLSSecureNetworkTest.java
 /home/youssef/Blockchain/Blockchain/blockchain-java/src/test/java/com/hybrid/blockchain/SimpleAccountStateTest.java
+/home/youssef/Blockchain/Blockchain/blockchain-java/src/test/java/com/hybrid/blockchain/consensus/PBFTViewChangeTest.java

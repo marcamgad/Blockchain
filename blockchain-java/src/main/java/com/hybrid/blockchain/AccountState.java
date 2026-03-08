@@ -3,8 +3,10 @@ package com.hybrid.blockchain;
 import com.hybrid.blockchain.identity.SSIManager;
 import com.hybrid.blockchain.lifecycle.DeviceLifecycleManager;
 import com.hybrid.blockchain.privacy.PrivateDataManager;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Collections;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -17,7 +19,7 @@ public class AccountState {
     private final MerklePatriciaTrie mpt;
 
     public AccountState() {
-        this.state = new HashMap<>();
+        this.state = new ConcurrentHashMap<>();
         this.mpt = new MerklePatriciaTrie();
         this.ssiManager = new SSIManager();
         this.lifecycleManager = new DeviceLifecycleManager(ssiManager);
@@ -47,7 +49,11 @@ public class AccountState {
                 Map<String, Object> accMap = (Map<String, Object>) e.getValue();
                 long balance = Utils.safeLong(accMap.get("balance"));
                 long nonce = Utils.safeLong(accMap.get("nonce"));
-                map.put(e.getKey(), new Account(balance, nonce));
+                byte[] code = null;
+                if (accMap.containsKey("code")) {
+                    code = HexUtils.decode((String) accMap.get("code"));
+                }
+                map.put(e.getKey(), new Account(balance, nonce, code));
             }
         }
 
@@ -77,6 +83,9 @@ public class AccountState {
             Map<String, Object> accJson = new HashMap<>();
             accJson.put("balance", entry.getValue().getBalance());
             accJson.put("nonce", entry.getValue().getNonce());
+            if (entry.getValue().getCode() != null) {
+                accJson.put("code", HexUtils.bytesToHex(entry.getValue().getCode()));
+            }
             accounts.put(entry.getKey(), accJson);
         }
         json.put("accounts", accounts);
@@ -98,6 +107,10 @@ public class AccountState {
     public long getNonce(String addr) {
         Account acc = state.get(addr);
         return acc != null ? acc.getNonce() : 0;
+    }
+
+    public Account getAccount(String addr) {
+        return state.get(addr);
     }
 
     public void ensure(String addr) {
@@ -189,6 +202,14 @@ public class AccountState {
         buf.putInt(storageRoot.length);
         buf.put(storageRoot);
 
+        byte[] code = acc.getCode();
+        if (code == null) {
+            buf.putInt(0);
+        } else {
+            buf.putInt(code.length);
+            buf.put(code);
+        }
+
         java.util.Set<Capability> caps = acc.getCapabilities();
         buf.putInt(caps.size());
         java.util.List<Capability> sortedCaps = new java.util.ArrayList<>(caps);
@@ -211,21 +232,27 @@ public class AccountState {
     public static class Account {
         private long balance;
         private long nonce;
+        private byte[] code;
         private final ContractState storage;
         private final java.util.Set<Capability> capabilities;
 
         public Account(long balance, long nonce) {
-            this.balance = balance;
-            this.nonce = nonce;
-            this.storage = new ContractState();
-            this.capabilities = new java.util.HashSet<>();
+            this(balance, nonce, null);
         }
 
-        public long getBalance() {
+        public Account(long balance, long nonce, byte[] code) {
+            this.balance = balance;
+            this.nonce = nonce;
+            this.code = code;
+            this.storage = new ContractState();
+            this.capabilities = Collections.synchronizedSet(new java.util.HashSet<>());
+        }
+
+        public synchronized long getBalance() {
             return balance;
         }
 
-        public long getNonce() {
+        public synchronized long getNonce() {
             return nonce;
         }
 
@@ -241,20 +268,28 @@ public class AccountState {
             capabilities.add(cap);
         }
 
-        public void credit(long amount) {
+        public synchronized void credit(long amount) {
             balance += amount;
         }
 
-        public void debit(long amount) {
+        public synchronized void debit(long amount) {
             balance -= amount;
         }
 
-        public void incrementNonce() {
+        public synchronized void incrementNonce() {
             nonce += 1;
         }
 
-        public void setNonce(long n) {
+        public synchronized void setNonce(long n) {
             nonce = n;
+        }
+
+        public synchronized byte[] getCode() {
+            return code;
+        }
+
+        public synchronized void setCode(byte[] code) {
+            this.code = code;
         }
     }
 }
