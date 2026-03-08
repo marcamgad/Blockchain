@@ -4,7 +4,7 @@ import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 
-public class PoAConsensus {
+public class PoAConsensus implements Consensus {
 
     private static final byte[] DOMAIN_PREFIX = "BLOCK\0".getBytes(StandardCharsets.UTF_8);
     private final List<Validator> validators;
@@ -48,5 +48,28 @@ public class PoAConsensus {
 
     public List<Validator> getValidators() {
         return this.validators;
+    }
+    @Override
+    public boolean validateBlock(Block block, List<Block> chain) {
+        try {
+            return verifyBlock(block, null); // Simplified for now
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    @Override
+    public Block selectLeader(List<String> authorizeNodes, long round) {
+        return null; // Simplified
+    }
+
+    @Override
+    public java.util.Set<String> getSlashedValidators() {
+        return java.util.Collections.emptySet();
+    }
+
+    @Override
+    public void clearSlashedValidator(String validatorId) {
+        // No-op for PoA
     }
 }

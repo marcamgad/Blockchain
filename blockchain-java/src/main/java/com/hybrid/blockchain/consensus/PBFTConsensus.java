@@ -3,6 +3,7 @@ package com.hybrid.blockchain.consensus;
 import com.hybrid.blockchain.Block;
 import com.hybrid.blockchain.Consensus;
 import com.hybrid.blockchain.Crypto;
+import com.hybrid.blockchain.Validator;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.math.BigInteger;
@@ -21,6 +22,17 @@ import java.math.BigInteger;
  * 3. COMMIT: Validators commit to block
  */
 public class PBFTConsensus implements Consensus {
+
+    public interface PBFTMessenger {
+        void broadcastPrepare(long sequenceNumber, String blockHash, String validatorId, byte[] signature);
+        void broadcastCommit(long sequenceNumber, String blockHash, String validatorId, byte[] signature);
+    }
+
+    private PBFTMessenger messenger;
+
+    public void setMessenger(PBFTMessenger messenger) {
+        this.messenger = messenger;
+    }
 
     public enum Phase {
         PRE_PREPARE,
@@ -78,6 +90,9 @@ public class PBFTConsensus implements Consensus {
 
     // Committed blocks
     private final Set<String> committedBlocks;
+
+    // Slashed validators (double-signers)
+    private final Set<String> slashedValidators = ConcurrentHashMap.newKeySet();
 
     public PBFTConsensus(Map<String, byte[]> validators) {
         if (validators.size() < 4) {
@@ -161,9 +176,28 @@ public class PBFTConsensus implements Consensus {
     }
 
     @Override
+    public boolean isValidator(String validatorId) {
+        return validators.containsKey(validatorId);
+    }
+
+    @Override
+    public boolean verifyBlock(Block block, Validator validator) throws Exception {
+        // For PBFT, we check if the block has reached quorum (committed phase)
+        return committedBlocks.contains(block.getHash());
+    }
+
+    @Override
     public Block selectLeader(List<String> authorizedNodes, long round) {
-        // This method signature is from the interface, but we override with our own
-        return null;
+        return null; // Not typically used this way in PBFT
+    }
+
+    @Override
+    public List<Validator> getValidators() {
+        List<Validator> list = new ArrayList<>();
+        for (Map.Entry<String, byte[]> entry : validators.entrySet()) {
+            list.add(new Validator(entry.getKey(), entry.getValue()));
+        }
+        return list;
     }
 
     /**
@@ -194,7 +228,13 @@ public class PBFTConsensus implements Consensus {
 
         messageLog.computeIfAbsent(sequenceNumber, k -> new ConcurrentHashMap<>())
                 .computeIfAbsent(Phase.PREPARE, k -> new ConcurrentHashMap<>())
-                .put(validatorId, msg);
+                .compute(validatorId, (id, existing) -> {
+                    if (existing != null && !existing.blockHash.equals(blockHash)) {
+                        System.out.println("[PBFT] SLASH: Double PREPARE from " + id + " for different hashes: " + existing.blockHash + " AND " + blockHash);
+                        slashedValidators.add(id);
+                    }
+                    return msg;
+                });
 
         System.out.println("[PBFT] Added PREPARE vote from " + validatorId + " for block " + blockHash);
     }
@@ -217,7 +257,13 @@ public class PBFTConsensus implements Consensus {
 
         messageLog.computeIfAbsent(sequenceNumber, k -> new ConcurrentHashMap<>())
                 .computeIfAbsent(Phase.COMMIT, k -> new ConcurrentHashMap<>())
-                .put(validatorId, msg);
+                .compute(validatorId, (id, existing) -> {
+                    if (existing != null && !existing.blockHash.equals(blockHash)) {
+                        System.out.println("[PBFT] SLASH: Double COMMIT from " + id + " for different hashes: " + existing.blockHash + " AND " + blockHash);
+                        slashedValidators.add(id);
+                    }
+                    return msg;
+                });
 
         System.out.println("[PBFT] Added COMMIT vote from " + validatorId + " for block " + blockHash);
     }
@@ -272,6 +318,16 @@ public class PBFTConsensus implements Consensus {
     /**
      * Get statistics
      */
+    // Get slashed validators
+    public Set<String> getSlashedValidators() {
+        return Collections.unmodifiableSet(slashedValidators);
+    }
+
+    // Clear slashed status (e.g. after punishment)
+    public void clearSlashedValidator(String id) {
+        slashedValidators.remove(id);
+    }
+
     public Map<String, Object> getStats() {
         Map<String, Object> stats = new HashMap<>();
         stats.put("validators", validators.size());

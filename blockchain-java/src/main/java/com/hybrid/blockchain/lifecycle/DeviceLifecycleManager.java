@@ -189,6 +189,14 @@ public class DeviceLifecycleManager {
     // Current blockchain height (injected)
     private long currentBlockHeight;
 
+    public void restore(DeviceLifecycleManager other) {
+        this.deviceRegistry.clear();
+        this.deviceRegistry.putAll(other.deviceRegistry);
+        this.trustedManufacturers.clear();
+        this.trustedManufacturers.putAll(other.trustedManufacturers);
+        this.currentBlockHeight = other.currentBlockHeight;
+    }
+
     public DeviceLifecycleManager(SSIManager ssiManager) {
         this.deviceRegistry = new ConcurrentHashMap<>();
         this.trustedManufacturers = new ConcurrentHashMap<>();
@@ -480,6 +488,35 @@ public class DeviceLifecycleManager {
         stats.put("trustedManufacturers", trustedManufacturers.size());
 
         return stats;
+    }
+
+    /**
+     * Restore state from a map (loaded from blockchain storage)
+     */
+    public static DeviceLifecycleManager fromMap(Map<String, Object> json, SSIManager ssiManager) {
+        DeviceLifecycleManager manager = new DeviceLifecycleManager(ssiManager);
+        if (json == null) return manager;
+
+        Map<String, Map<String, Object>> devices = (Map<String, Map<String, Object>>) json.get("devices");
+        if (devices != null) {
+            for (Map.Entry<String, Map<String, Object>> entry : devices.entrySet()) {
+                Map<String, Object> data = entry.getValue();
+                DeviceRecord record = new DeviceRecord(
+                    (String) data.get("deviceId"),
+                    (String) data.get("manufacturer"),
+                    (String) data.get("model")
+                );
+                record.setDid((String) data.get("did"));
+                record.setStatus(DeviceStatus.valueOf((String) data.get("status")));
+                record.setOwner((String) data.get("owner"));
+                record.setFirmwareVersion((String) data.get("firmwareVersion"));
+                record.setRegistrationBlock(((Number) data.get("registrationBlock")).longValue());
+                
+                manager.deviceRegistry.put(entry.getKey(), record);
+            }
+        }
+
+        return manager;
     }
 
     /**
