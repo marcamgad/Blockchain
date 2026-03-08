@@ -10,6 +10,7 @@ import java.io.File;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Collections;
 
 public class Storage {
 
@@ -24,7 +25,7 @@ public class Storage {
         }
 
         this.mapper = new ObjectMapper();
-        this.cache = new HashMap<>();
+        this.cache = Collections.synchronizedMap(new HashMap<>());
         this.aesKey = new SecretKeySpec(aesKeyBytes, "AES");
 
         File folder = new File(dbPath != null ? dbPath : "data");
@@ -87,7 +88,17 @@ public class Storage {
     public void saveBlock(String hash, Block block) throws IOException {
         put("block:" + hash, block);
         put("height:" + block.getIndex(), hash);
-        put("chain:tip", hash);
+        
+        // Critical tip update; use sync write
+        try {
+            byte[] json = mapper.writeValueAsBytes(hash);
+            byte[] encrypted = encrypt(json);
+            WriteOptions syncOptions = new WriteOptions().sync(true);
+            db.put(bytes("chain:tip"), encrypted, syncOptions);
+            cache.put("chain:tip", hash);
+        } catch (Exception e) {
+            throw new IOException("Failed to save chain tip with sync", e);
+        }
     }
 
     public Block loadBlockByHash(String hash) throws IOException {
@@ -147,7 +158,17 @@ public class Storage {
     snapshot.put("timestamp", System.currentTimeMillis());
 
     put("snapshot:" + height, snapshot);
-    putMeta("lastSnapshotHeight", height);
+    
+    // Critical snapshot height update; use sync write
+    try {
+        byte[] json = mapper.writeValueAsBytes(height);
+        byte[] encrypted = encrypt(json);
+        WriteOptions syncOptions = new WriteOptions().sync(true);
+        db.put(bytes("meta:lastSnapshotHeight"), encrypted, syncOptions);
+        cache.put("meta:lastSnapshotHeight", height);
+    } catch (Exception e) {
+        throw new IOException("Failed to save lastSnapshotHeight with sync", e);
+    }
 
     System.out.println("[SNAPSHOT] Saved at height " + height);
 }

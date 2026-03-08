@@ -1,5 +1,7 @@
 package com.hybrid.blockchain.identity;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hybrid.blockchain.Crypto;
 import java.math.BigInteger;
 import java.util.*;
@@ -9,22 +11,23 @@ import java.util.concurrent.ConcurrentHashMap;
  * Self-Sovereign Identity Manager for IoT devices.
  * Manages DID registry and Verifiable Credentials on-chain.
  * 
- * This replaces the in-memory IoTDeviceManager with a consensus-backed identity
- * system.
+ * Provides robust persistence and strict cryptographic verification.
  */
 public class SSIManager {
 
+    private static final ObjectMapper mapper = new ObjectMapper();
+
     // On-chain DID registry: DID -> DID Document
-    private final Map<String, DecentralizedIdentifier> didRegistry;
+    private Map<String, DecentralizedIdentifier> didRegistry;
 
     // Credential store: Subject DID -> List of VCs
-    private final Map<String, List<VerifiableCredential>> credentialStore;
+    private Map<String, List<VerifiableCredential>> credentialStore;
 
     // Device ID to DID mapping for quick lookup
-    private final Map<String, String> deviceToDID;
+    private Map<String, String> deviceToDID;
 
     // Revoked DIDs
-    private final Set<String> revokedDIDs;
+    private Set<String> revokedDIDs;
 
     public void restore(SSIManager other) {
         this.didRegistry.clear();
@@ -46,28 +49,19 @@ public class SSIManager {
 
     /**
      * Register a new DID for an IoT device
-     * 
-     * @param deviceId  Unique device identifier
-     * @param publicKey Device's public key
-     * @param owner     Owner's blockchain address
-     * @return The created DID string
      */
     public String registerDID(String deviceId, byte[] publicKey, String owner) {
-        // Check if device already has a DID
         if (deviceToDID.containsKey(deviceId)) {
             throw new IllegalStateException("Device " + deviceId + " already has a DID");
         }
 
-        // Create DID document
         DecentralizedIdentifier didDoc = new DecentralizedIdentifier(deviceId, publicKey, owner);
         String did = didDoc.getDid();
 
-        // Store in registry
         didRegistry.put(did, didDoc);
         deviceToDID.put(deviceId, did);
 
-        System.out.println("[SSI] Registered DID: " + did + " for device: " + deviceId + " owner: " + owner);
-
+        System.out.println("[SSI] Registered DID: " + did + " for device: " + deviceId);
         return did;
     }
 
@@ -95,21 +89,22 @@ public class SSIManager {
     }
 
     /**
-     * Transfer ownership of a device (update DID controller)
+     * Transfer ownership of a device with strict signature verification.
      */
-    public void transferOwnership(String did, String newOwner, byte[] ownerSignature) {
+    public void transferOwnership(String did, String newOwner, byte[] signature) {
         DecentralizedIdentifier didDoc = resolveDID(did);
-
-        // Verify signature from current owner
         String currentOwner = didDoc.getController();
-        byte[] message = (did + newOwner).getBytes();
 
-        // In production, get owner's public key from AccountState
-        // For now, simplified verification
+        // Verification: Current owner must sign the intent to transfer
+        // Message is: transfer:<did>:<newOwner>
+        byte[] message = ("transfer:" + did + ":" + newOwner).getBytes();
+
+        if (!didDoc.verifySignature(message, signature)) {
+            throw new SecurityException("Invalid ownership transfer signature for " + did);
+        }
 
         didDoc.setController(newOwner);
-
-        System.out.println("[SSI] Transferred ownership of " + did + " from " + currentOwner + " to " + newOwner);
+        System.out.println("[SSI] Transferred ownership of " + did + " to " + newOwner);
     }
 
     /**
@@ -121,33 +116,25 @@ public class SSIManager {
             Map<String, Object> claims,
             BigInteger issuerPrivateKey,
             byte[] issuerPublicKey) {
-        // Verify issuer DID exists
+        
         resolveDID(issuerDID);
-
-        // Verify subject DID exists
         resolveDID(subjectDID);
 
-        // Create credential
         VerifiableCredential vc = new VerifiableCredential(issuerDID, subjectDID, claims);
 
-        // Add specific type if specified in claims
         if (claims.containsKey("credentialType")) {
             vc.addType(claims.get("credentialType").toString());
+        } else if (claims.containsKey("type")) {
+            vc.addType(claims.get("type").toString());
         }
 
-        // Set expiration if specified
         if (claims.containsKey("expirationMs")) {
             long expirationMs = Long.parseLong(claims.get("expirationMs").toString());
             vc.setExpiration(expirationMs);
         }
 
-        // Sign credential
         vc.sign(issuerPrivateKey, issuerPublicKey);
-
-        // Store credential
         credentialStore.computeIfAbsent(subjectDID, k -> new ArrayList<>()).add(vc);
-
-        System.out.println("[SSI] Issued credential " + vc.getId() + " to " + subjectDID);
 
         return vc;
     }
@@ -157,16 +144,10 @@ public class SSIManager {
      */
     public boolean hasCredential(String deviceDID, String credentialType) {
         List<VerifiableCredential> credentials = credentialStore.get(deviceDID);
-
-        if (credentials == null) {
-            return false;
-        }
+        if (credentials == null) return false;
 
         return credentials.stream()
-                .anyMatch(vc -> !vc.isExpired() &&
-                        (vc.getCredentialType().equals(credentialType) ||
-                                vc.getCredentialSubject().getClaim("type") != null &&
-                                        vc.getCredentialSubject().getClaim("type").equals(credentialType)));
+                .anyMatch(vc -> !vc.isExpired() && vc.getCredentialType().equals(credentialType));
     }
 
     /**
@@ -177,34 +158,7 @@ public class SSIManager {
     }
 
     /**
-     * Revoke a DID (for compromised devices)
-     */
-    public void revokeDID(String did, String reason) {
-        DecentralizedIdentifier didDoc = resolveDID(did);
-
-        revokedDIDs.add(did);
-
-        // Remove from active registry but keep for audit trail
-        String deviceId = didDoc.getDeviceId();
-        deviceToDID.remove(deviceId);
-
-        System.out.println("[SSI] Revoked DID: " + did + " Reason: " + reason);
-    }
-
-    /**
-     * Verify a signature was created by the controller of a DID
-     */
-    public boolean verifyDIDSignature(String did, byte[] message, byte[] signature) {
-        try {
-            DecentralizedIdentifier didDoc = resolveDID(did);
-            return didDoc.verifySignature(message, signature);
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
-    /**
-     * Check if a DID is owned by a specific address
+     * Check if an address is the owner of a DID
      */
     public boolean isOwner(String did, String address) {
         try {
@@ -218,40 +172,76 @@ public class SSIManager {
     /**
      * Get all DIDs owned by an address
      */
-    public List<String> getDIDsOwnedBy(String ownerAddress) {
-        List<String> ownedDIDs = new ArrayList<>();
-
-        for (DecentralizedIdentifier didDoc : didRegistry.values()) {
-            if (didDoc.getController().equals(ownerAddress) &&
-                    !revokedDIDs.contains(didDoc.getDid())) {
-                ownedDIDs.add(didDoc.getDid());
+    public List<String> getDIDsOwnedBy(String address) {
+        List<String> owned = new ArrayList<>();
+        for (Map.Entry<String, DecentralizedIdentifier> entry : didRegistry.entrySet()) {
+            if (entry.getValue().getController().equals(address)) {
+                owned.add(entry.getKey());
             }
         }
+        return owned;
+    }
 
-        return ownedDIDs;
+    /**
+     * Verify a signature using a DID's public key
+     */
+    public boolean verifyDIDSignature(String did, byte[] message, byte[] signature) {
+        try {
+            DecentralizedIdentifier didDoc = resolveDID(did);
+            return didDoc.verifySignature(message, signature);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * Revoke a DID
+     */
+    public void revokeDID(String did, String reason) {
+        DecentralizedIdentifier didDoc = resolveDID(did);
+        revokedDIDs.add(did);
+        deviceToDID.remove(didDoc.getDeviceId());
+        System.out.println("[SSI] Revoked DID: " + did + " Reason: " + reason);
     }
 
     /**
      * Restore state from a map (loaded from blockchain storage)
      */
+    @SuppressWarnings("unchecked")
     public static SSIManager fromMap(Map<String, Object> json) {
         SSIManager manager = new SSIManager();
         if (json == null) return manager;
 
-        // Restore DID registry
-        Map<String, Object> dids = (Map<String, Object>) json.get("didRegistry");
-        if (dids != null) {
-            for (Map.Entry<String, Object> entry : dids.entrySet()) {
-                // In a real implementation, we'd use Jackson to parse the DID Document back
-                // For now, we'll need to manually reconstruct or improve DecentralizedIdentifier
-                // Since this is a complex object, let's assume we have a way to reconstruct it.
-                // Assuming ObjectMapper is available or we add a constructor.
+        try {
+            // Restore DID registry
+            if (json.containsKey("didRegistry")) {
+                Map<String, Object> registryMap = (Map<String, Object>) json.get("didRegistry");
+                for (Map.Entry<String, Object> entry : registryMap.entrySet()) {
+                    String jsonStr = mapper.writeValueAsString(entry.getValue());
+                    DecentralizedIdentifier didDoc = mapper.readValue(jsonStr, DecentralizedIdentifier.class);
+                    manager.didRegistry.put(entry.getKey(), didDoc);
+                    manager.deviceToDID.put(didDoc.getDeviceId(), didDoc.getDid());
+                }
             }
-        }
 
-        List<String> revoked = (List<String>) json.get("revokedDIDs");
-        if (revoked != null) {
-            manager.revokedDIDs.addAll(revoked);
+            // Restore Credentials
+            if (json.containsKey("credentialStore")) {
+                Map<String, Object> storeMap = (Map<String, Object>) json.get("credentialStore");
+                for (Map.Entry<String, Object> entry : storeMap.entrySet()) {
+                    String jsonStr = mapper.writeValueAsString(entry.getValue());
+                    List<VerifiableCredential> vcs = mapper.readValue(jsonStr, new TypeReference<List<VerifiableCredential>>() {});
+                    manager.credentialStore.put(entry.getKey(), vcs);
+                }
+            }
+
+            // Restore Revoked DIDs
+            if (json.containsKey("revokedDIDs")) {
+                List<String> revoked = (List<String>) json.get("revokedDIDs");
+                manager.revokedDIDs.addAll(revoked);
+            }
+
+        } catch (Exception e) {
+            System.err.println("[SSI] Failed to restore SSIManager state: " + e.getMessage());
         }
 
         return manager;
@@ -263,20 +253,17 @@ public class SSIManager {
     public Map<String, Object> toJSON() {
         Map<String, Object> json = new HashMap<>();
 
-        // Serialize DID registry
+        // Serialize DID registry (convert objects to maps for JSON generic storage)
         Map<String, Object> dids = new HashMap<>();
         for (Map.Entry<String, DecentralizedIdentifier> entry : didRegistry.entrySet()) {
-            dids.put(entry.getKey(), entry.getValue().toDIDDocument());
+            dids.put(entry.getKey(), entry.getValue());
         }
         json.put("didRegistry", dids);
 
-        // Serialize credentials (simplified)
-        Map<String, Integer> credCounts = new HashMap<>();
-        for (Map.Entry<String, List<VerifiableCredential>> entry : credentialStore.entrySet()) {
-            credCounts.put(entry.getKey(), entry.getValue().size());
-        }
-        json.put("credentialCounts", credCounts);
+        // Serialize credentials
+        json.put("credentialStore", credentialStore);
 
+        // Revoked DIDs
         json.put("revokedDIDs", new ArrayList<>(revokedDIDs));
 
         return json;
@@ -290,12 +277,8 @@ public class SSIManager {
         stats.put("totalDIDs", didRegistry.size());
         stats.put("revokedDIDs", revokedDIDs.size());
         stats.put("activeDIDs", didRegistry.size() - revokedDIDs.size());
-
-        int totalCredentials = credentialStore.values().stream()
-                .mapToInt(List::size)
-                .sum();
+        int totalCredentials = credentialStore.values().stream().mapToInt(List::size).sum();
         stats.put("totalCredentials", totalCredentials);
-
         return stats;
     }
 }

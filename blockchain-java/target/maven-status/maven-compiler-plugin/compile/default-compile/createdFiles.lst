@@ -9,10 +9,12 @@ com/hybrid/blockchain/identity/DecentralizedIdentifier$VerificationMethod.class
 com/hybrid/blockchain/lifecycle/DeviceLifecycleManager$DeviceRecord.class
 com/hybrid/blockchain/Consensus.class
 com/hybrid/blockchain/identity/SSIManager.class
+com/hybrid/blockchain/security/SSLUtils.class
 com/hybrid/blockchain/Transaction$Builder.class
 com/hybrid/blockchain/security/MultiSigManager$ProposalType.class
 com/hybrid/blockchain/Transaction.class
 com/hybrid/blockchain/AccountState.class
+com/hybrid/blockchain/security/SSLUtils$1.class
 com/hybrid/blockchain/privacy/ZKProofSystem$EqualityProof.class
 com/hybrid/blockchain/Config.class
 com/hybrid/blockchain/api/IoTRestAPI$ContractRequest.class
@@ -26,6 +28,7 @@ com/hybrid/blockchain/identity/VerifiableCredential$Proof.class
 com/hybrid/blockchain/Mempool.class
 com/hybrid/blockchain/monitoring/BlockchainMonitor$PerformanceMetrics.class
 com/hybrid/blockchain/api/IoTRestAPI$SubmitTransactionRequest.class
+com/hybrid/blockchain/WasmContractEngine.class
 com/hybrid/blockchain/security/RateLimiter$Presets.class
 com/hybrid/blockchain/UTXOSet$Spendable.class
 com/hybrid/blockchain/PoAConsensus.class
@@ -53,6 +56,7 @@ com/hybrid/blockchain/MerkleTree.class
 com/hybrid/blockchain/Capability.class
 com/hybrid/blockchain/MerklePatriciaTrie.class
 com/hybrid/blockchain/AccountState$Account.class
+com/hybrid/blockchain/identity/SSIManager$1.class
 com/hybrid/blockchain/audit/AuditLogger.class
 com/hybrid/blockchain/Transaction$Type.class
 com/hybrid/blockchain/HexUtils.class

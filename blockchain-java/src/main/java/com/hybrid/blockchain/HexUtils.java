@@ -12,6 +12,10 @@ public final class HexUtils {
         return Hex.toHexString(data);
     }
 
+    public static String bytesToHex(byte[] data) {
+        return encode(data);
+    }
+
     public static byte[] decode(String hex) {
         if (hex == null || hex.equals("0") || hex.isEmpty())
             return new byte[0];

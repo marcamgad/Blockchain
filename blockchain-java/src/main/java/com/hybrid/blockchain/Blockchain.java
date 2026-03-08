@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.util.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hybrid.blockchain.lifecycle.DeviceLifecycleManager;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.concurrent.locks.ReadWriteLock;
 
 public class Blockchain {
 
@@ -16,6 +18,7 @@ public class Blockchain {
     private List<Transaction> pendingTransactions;
     protected Consensus consensus;
     private final HardwareManager hardwareManager;
+    private final ReadWriteLock lock = new ReentrantReadWriteLock();
 
     public Blockchain(Storage storage, Mempool mempool, Consensus consensus) throws Exception {
         this.storage = storage != null ? storage : new Storage("data", Config.STORAGE_AES_KEY);
@@ -30,93 +33,68 @@ public class Blockchain {
     }
 
     public void init() throws Exception {
-
-        Integer snapHeight = (Integer) storage.getMeta("lastSnapshotHeight");
-        if (snapHeight != null) {
-
-            @SuppressWarnings("unchecked")
-            Map<String, Object> snap = storage.get("snapshot:" + snapHeight, Map.class);
-
-            if (snap != null) {
-                System.out.println("[INIT] Loaded snapshot at height " + snapHeight);
-
+        lock.writeLock().lock();
+        try {
+            Integer snapHeight = (Integer) storage.getMeta("lastSnapshotHeight");
+            if (snapHeight != null) {
                 @SuppressWarnings("unchecked")
-                Map<String, Object> rawState = (Map<String, Object>) snap.get("state");
-                @SuppressWarnings("unchecked")
-                Map<String, Object> rawUTXO = (Map<String, Object>) snap.get("utxo");
-
-                state = AccountState.fromMap(rawState);
-                utxo = UTXOSet.fromMap(rawUTXO);
-
-                Block tip = storage.loadBlockByHeight(snapHeight);
-                if (tip != null) {
-                    // Snapshot block exists; load from it
-                    chain.add(tip);
-
-                    Object diffObj = storage.getMeta("difficulty");
-                    if (diffObj instanceof Number)
-                        difficulty = ((Number) diffObj).intValue();
-
-                    return;
-                } else {
-                    // Snapshot block was pruned; fall back to tip-hash recovery below
-                    System.out.println(
-                            "[INIT] Snapshot block at height " + snapHeight + " was pruned; falling back to tip-hash");
+                Map<String, Object> snap = storage.get("snapshot:" + snapHeight, Map.class);
+                if (snap != null) {
+                    System.out.println("[INIT] Loaded snapshot at height " + snapHeight);
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> rawState = (Map<String, Object>) snap.get("state");
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> rawUTXO = (Map<String, Object>) snap.get("utxo");
+                    state = AccountState.fromMap(rawState);
+                    utxo = UTXOSet.fromMap(rawUTXO);
+                    Block tip = storage.loadBlockByHeight(snapHeight);
+                    if (tip != null) {
+                        chain.add(tip);
+                        Object diffObj = storage.getMeta("difficulty");
+                        if (diffObj instanceof Number)
+                            difficulty = ((Number) diffObj).intValue();
+                        return;
+                    } else {
+                        System.out.println("[INIT] Snapshot block at height " + snapHeight + " was pruned; falling back to tip-hash");
+                    }
                 }
             }
+            String tipHash = storage.loadTipHash();
+            if (tipHash != null) {
+                Block tip = storage.loadBlockByHash(tipHash);
+                if (tip == null) throw new IOException("Failed to load tip block");
+                chain.add(tip);
+                Map<String, Object> rawUTXO = storage.loadUTXO();
+                utxo = UTXOSet.fromMap(rawUTXO != null ? rawUTXO : new HashMap<>());
+                Map<String, Object> rawState = storage.loadState();
+                state = AccountState.fromMap(rawState != null ? rawState : new HashMap<>());
+                Object diffObj = storage.getMeta("difficulty");
+                if (diffObj instanceof Number) difficulty = ((Number) diffObj).intValue();
+                System.out.println("[INIT] Resumed from height " + tip.getIndex());
+                return;
+            }
+            System.out.println("[INIT] Creating genesis block");
+            Block genesis = new Block(0, System.currentTimeMillis(), new ArrayList<>(), "0", difficulty, state.calculateStateRoot());
+            genesis.setHash(genesis.calculateHash());
+            chain.add(genesis);
+            storage.saveBlock(genesis.getHash(), genesis);
+            storage.saveUTXO(utxo.toJSON());
+            storage.saveState(state.toJSON());
+            storage.putMeta("difficulty", difficulty);
+        } finally {
+            lock.writeLock().unlock();
         }
-
-        String tipHash = storage.loadTipHash();
-
-        if (tipHash != null) {
-
-            Block tip = storage.loadBlockByHash(tipHash);
-            if (tip == null)
-                throw new IOException("Failed to load tip block");
-
-            chain.add(tip);
-
-            Map<String, Object> rawUTXO = storage.loadUTXO();
-            if (rawUTXO == null)
-                rawUTXO = new HashMap<>();
-            utxo = UTXOSet.fromMap(rawUTXO);
-
-            Map<String, Object> rawState = storage.loadState();
-            if (rawState == null)
-                rawState = new HashMap<>();
-            state = AccountState.fromMap(rawState);
-
-            Object diffObj = storage.getMeta("difficulty");
-            if (diffObj instanceof Number)
-                difficulty = ((Number) diffObj).intValue();
-
-            System.out.println("[INIT] Resumed from height " + tip.getIndex());
-            return;
-        }
-        System.out.println("[INIT] Creating genesis block");
-
-        Block genesis = new Block(
-                0,
-                System.currentTimeMillis(),
-                new ArrayList<>(),
-                "0",
-                difficulty,
-                state.calculateStateRoot());
-
-        genesis.setHash(genesis.calculateHash());
-
-        chain.add(genesis);
-        storage.saveBlock(genesis.getHash(), genesis);
-        storage.saveUTXO(utxo.toJSON());
-        storage.saveState(state.toJSON());
-        storage.putMeta("difficulty", difficulty);
-
     }
 
     public Block getLatestBlock() {
-        if (chain.isEmpty())
-            throw new IllegalStateException("Chain is empty");
-        return chain.get(chain.size() - 1);
+        lock.readLock().lock();
+        try {
+            if (chain.isEmpty())
+                throw new IllegalStateException("Chain is empty");
+            return chain.get(chain.size() - 1);
+        } finally {
+            lock.readLock().unlock();
+        }
     }
 
     // Validate a transaction according to type
@@ -178,8 +156,10 @@ public class Blockchain {
 
     // Apply block to chain, update UTXO and account state
     public void applyBlock(Block block) throws Exception {
-        if (!block.getPrevHash().equals(getLatestBlock().getHash()))
-            throw new Exception("Block does not chain to tip");
+        lock.writeLock().lock();
+        try {
+            if (!block.getPrevHash().equals(getLatestBlock().getHash()))
+                throw new Exception("Block does not chain to tip");
         if (!consensus.isValidator(block.getValidatorId()))
             throw new Exception("Unknown validator");
 
@@ -221,21 +201,48 @@ public class Blockchain {
                 case CONTRACT:
                     if (!Config.ENABLE_SMART_CONTRACTS)
                         throw new Exception("Contracts disabled");
-                    System.out.println(
-                            "[BLOCKCHAIN] Executing contract: " + tx.getTo() + " from block: " + block.getHash());
 
-                    Interpreter.BlockchainContext ctx = new Interpreter.BlockchainContext(
-                            block.getTimestamp(),
-                            block.getIndex(),
-                            tx.getFrom(),
-                            tx.getTo(),
-                            tx.getAmount(),
-                            state,
-                            hardwareManager,
-                            block.getHash());
+                    byte[] code = tx.getData();
+                    String contractAddr = tx.getTo();
 
-                    Interpreter vm = new Interpreter(tx.getData(), tx.getFee() * 1000, ctx); // Fee-based gas
-                    vm.execute();
+                    // 1. Contract Deployment
+                    if (contractAddr == null) {
+                        // Create a unique contract address
+                        String creator = tx.getFrom();
+                        long nonce = state.getNonce(creator);
+                        contractAddr = Crypto.deriveAddress(Crypto.hash((creator + nonce).getBytes()));
+                        
+                        state.ensure(contractAddr);
+                        state.getAccount(contractAddr).setCode(code);
+                        state.incrementNonce(creator);
+                        System.out.println("[BLOCKCHAIN] Deployed new contract at: " + contractAddr);
+                    } else {
+                        // 2. Contract Execution
+                        AccountState.Account account = state.getAccount(contractAddr);
+                        if (account != null && account.getCode() != null) {
+                            code = account.getCode();
+                        }
+
+                        Interpreter.BlockchainContext ctx = new Interpreter.BlockchainContext(
+                                block.getTimestamp(),
+                                block.getIndex(),
+                                tx.getFrom(),
+                                contractAddr,
+                                tx.getAmount(),
+                                state,
+                                hardwareManager,
+                                block.getHash());
+
+                        if (isWasm(code)) {
+                            System.out.println("[BLOCKCHAIN] Executing WASM contract: " + contractAddr);
+                            WasmContractEngine wasmEngine = new WasmContractEngine(code, tx.getFee() * 1000, ctx);
+                            wasmEngine.execute("main", new ArrayList<>()); // Default entry point
+                        } else {
+                            System.out.println("[BLOCKCHAIN] Executing Bytecode script: " + contractAddr);
+                            Interpreter vm = new Interpreter(code, tx.getFee() * 1000, ctx);
+                            vm.execute();
+                        }
+                    }
                     break;
                 case IOT_MANAGEMENT:
                     processIoTTransaction(tx, block.getIndex());
@@ -286,37 +293,48 @@ public class Blockchain {
         pruneBlock(block);
 
         // Adjust difficulty if needed
-        if ((chain.size() - 1) % Config.DIFFICULTY_ADJUSTMENT_INTERVAL == 0) {
-            int newDiff = Difficulty.adjustDifficulty(chain, difficulty);
-            difficulty = newDiff;
-            storage.putMeta("difficulty", difficulty);
+            if ((chain.size() - 1) % Config.DIFFICULTY_ADJUSTMENT_INTERVAL == 0) {
+                int newDiff = Difficulty.adjustDifficulty(chain, difficulty);
+                difficulty = newDiff;
+                storage.putMeta("difficulty", difficulty);
+            }
+        } finally {
+            lock.writeLock().unlock();
         }
     }
 
     // Add transaction to pending pool
     public void addTransaction(Transaction tx) throws Exception {
-        if (tx.getTo() == null && tx.getType() != Transaction.Type.CONTRACT)
-            throw new Exception("Missing destination");
-        if (tx.getFrom() != null && !tx.verify()) {
-            if (!Config.DEBUG) {
-                throw new Exception("Invalid transaction");
+        lock.writeLock().lock();
+        try {
+            if (tx.getTo() == null && tx.getType() != Transaction.Type.CONTRACT)
+                throw new Exception("Missing destination");
+            if (tx.getFrom() != null && !tx.verify()) {
+                if (!Config.DEBUG) {
+                    throw new Exception("Invalid transaction");
+                }
             }
-            // In DEBUG mode, we accept the transaction even if signature is invalid
-            // This relies on the API layer's JWT authentication
+            long balance = getBalance(tx.getFrom());
+            if (balance < tx.getAmount() + tx.getFee())
+                throw new Exception("Insufficient funds");
+            pendingTransactions.add(tx);
+        } finally {
+            lock.writeLock().unlock();
         }
-        long balance = getBalance(tx.getFrom());
-        if (balance < tx.getAmount() + tx.getFee())
-            throw new Exception("Insufficient funds");
-        pendingTransactions.add(tx);
     }
 
     // Compute balance of an account (hybrid)
     public long getBalance(String address) {
         if (address == null)
             return 0;
-        long accountBalance = state.getBalance(address);
-        long utxoBalance = utxo.getBalance(address);
-        return accountBalance + utxoBalance;
+        lock.readLock().lock();
+        try {
+            long accountBalance = state.getBalance(address);
+            long utxoBalance = utxo.getBalance(address);
+            return accountBalance + utxoBalance;
+        } finally {
+            lock.readLock().unlock();
+        }
     }
 
     // Validate the blockchain
@@ -431,5 +449,11 @@ public class Blockchain {
 
     public Block deserializeBlock(byte[] payload) throws Exception {
         return new ObjectMapper().readValue(payload, Block.class);
+    }
+
+    private boolean isWasm(byte[] data) {
+        if (data == null || data.length < 4) return false;
+        // WASM magic bytes: \0asm (0x00 0x61 0x73 0x6D)
+        return data[0] == 0x00 && data[1] == 0x61 && data[2] == 0x73 && data[3] == 0x6D;
     }
 }

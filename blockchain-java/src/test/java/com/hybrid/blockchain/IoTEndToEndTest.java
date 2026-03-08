@@ -14,21 +14,26 @@ public class IoTEndToEndTest {
 
     @Test
     public void testMultiNodeConsensus() throws Exception {
-        // Cleanup old test data
-        deleteDir(new File("test-data-1"));
-        deleteDir(new File("test-data-2"));
+        String dir1 = "test-data-1-" + UUID.randomUUID().toString();
+        String dir2 = "test-data-2-" + UUID.randomUUID().toString();
+        
+        File f1 = new File(dir1);
+        File f2 = new File(dir2);
+        Blockchain node1 = null;
+        Blockchain node2 = null;
 
-        // Setup Validator Key
-        BigInteger privateKey = new BigInteger("123456789");
-        byte[] publicKey = Crypto.derivePublicKey(privateKey);
-        Validator v1 = new Validator("V1", publicKey);
-        PoAConsensus poa = new PoAConsensus(Collections.singletonList(v1));
+        try {
+            // Setup Validator Key
+            BigInteger privateKey = new BigInteger("123456789");
+            byte[] publicKey = Crypto.derivePublicKey(privateKey);
+            Validator v1 = new Validator("V1", publicKey);
+            PoAConsensus poa = new PoAConsensus(Collections.singletonList(v1));
 
-        Mempool mem1 = new Mempool();
-        Mempool mem2 = new Mempool();
+            Mempool mem1 = new Mempool();
+            Mempool mem2 = new Mempool();
 
-        Blockchain node1 = new Blockchain(new Storage("test-data-1", Config.STORAGE_AES_KEY), mem1, poa);
-        Blockchain node2 = new Blockchain(new Storage("test-data-2", Config.STORAGE_AES_KEY), mem2, poa);
+            node1 = new Blockchain(new Storage(dir1, Config.STORAGE_AES_KEY), mem1, poa);
+            node2 = new Blockchain(new Storage(dir2, Config.STORAGE_AES_KEY), mem2, poa);
 
         node1.init();
 
@@ -90,8 +95,12 @@ public class IoTEndToEndTest {
         assertEquals(1L, node2.getHardwareManager().getActuatorState(100L),
                 "Both nodes should have same actuator state");
 
-        node1.getStorage().close();
-        node2.getStorage().close();
+        } finally {
+            if (node1 != null && node1.getStorage() != null) node1.getStorage().close();
+            if (node2 != null && node2.getStorage() != null) node2.getStorage().close();
+            deleteDir(f1);
+            deleteDir(f2);
+        }
     }
 
     private void deleteDir(File file) {
