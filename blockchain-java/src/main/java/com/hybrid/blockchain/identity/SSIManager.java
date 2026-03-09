@@ -7,12 +7,6 @@ import java.math.BigInteger;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Self-Sovereign Identity Manager for IoT devices.
- * Manages DID registry and Verifiable Credentials on-chain.
- * 
- * Provides robust persistence and strict cryptographic verification.
- */
 public class SSIManager {
 
     private static final ObjectMapper mapper = new ObjectMapper();

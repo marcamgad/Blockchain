@@ -72,7 +72,7 @@ public class Interpreter {
                 case SSTORE:
                     long val = stack.pop();
                     long k = stack.pop();
-                    context.state.getAccountStorage(context.contractAddress).put(k, val);
+                    context.state.putStorage(context.contractAddress, k, val);
                     break;
 
                 case SYSCALL:

@@ -2,22 +2,39 @@ package com.hybrid.blockchain;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.List;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
 /**
  * Isolated persistent storage for a specific smart contract.
  * Uses a Key-Value model where keys and values are 64-bit longs.
+ * The MerklePatriciaTrie ensures cryptographic provability of this storage.
  */
 public class ContractState {
     private final Map<Long, Long> storage;
+    private final MerklePatriciaTrie storageMpt;
 
     public ContractState() {
         this.storage = new HashMap<>();
+        this.storageMpt = new MerklePatriciaTrie();
+    }
+
+    public Map<Long, Long> getStorage() {
+        return storage;
+    }
+
+    public void putAll(Map<Long, Long> data) {
+        for (Map.Entry<Long, Long> e : data.entrySet()) {
+            put(e.getKey(), e.getValue());
+        }
     }
 
     public void put(long key, long value) {
         storage.put(key, value);
+        byte[] kb = ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN).putLong(key).array();
+        byte[] vb = ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN).putLong(value).array();
+        storageMpt.putRawKey(MerklePatriciaTrie.toNibbles(Crypto.hash(kb)), vb); 
     }
 
     public long get(long key) {
@@ -28,27 +45,18 @@ public class ContractState {
         return storage.getOrDefault(key, defaultValue);
     }
 
-    public byte[] serializeCanonical() {
-        // Sort keys for determinism
-        java.util.List<Long> keys = new java.util.ArrayList<>(storage.keySet());
-        java.util.Collections.sort(keys);
-
-        ByteBuffer buf = ByteBuffer.allocate(keys.size() * 16 + 4);
-        buf.order(ByteOrder.BIG_ENDIAN);
-        buf.putInt(keys.size());
-
-        for (long key : keys) {
-            buf.putLong(key);
-            buf.putLong(storage.get(key));
-        }
-
-        buf.flip();
-        byte[] result = new byte[buf.remaining()];
-        buf.get(result);
-        return result;
+    public String calculateRoot() {
+        return Crypto.bytesToHex(storageMpt.getRootHash());
     }
 
-    public String calculateRoot() {
-        return Crypto.bytesToHex(Crypto.hash(serializeCanonical()));
+    public List<byte[]> getStorageProof(long key) {
+        byte[] kb = ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN).putLong(key).array();
+        return storageMpt.getAccountProof(Crypto.hash(kb));
+    }
+
+    public static boolean verifyStorageProof(long key, long expectedValue, List<byte[]> proof, byte[] stateRoot) {
+        byte[] kb = ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN).putLong(key).array();
+        byte[] vb = ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN).putLong(expectedValue).array();
+        return MerklePatriciaTrie.verifyAccountProof(Crypto.hash(kb), vb, proof, stateRoot);
     }
 }

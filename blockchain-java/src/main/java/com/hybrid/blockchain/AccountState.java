@@ -53,7 +53,27 @@ public class AccountState {
                 if (accMap.containsKey("code")) {
                     code = HexUtils.decode((String) accMap.get("code"));
                 }
-                map.put(e.getKey(), new Account(balance, nonce, code));
+                Account acc = new Account(balance, nonce, code);
+                
+                // Load Storage
+                if (accMap.containsKey("storage")) {
+                    Map<String, Object> storageMap = (Map<String, Object>) accMap.get("storage");
+                    for (Map.Entry<String, Object> se : storageMap.entrySet()) {
+                        acc.getStorage().put(Long.parseLong(se.getKey()), Utils.safeLong(se.getValue()));
+                    }
+                }
+                
+                // Load Capabilities
+                if (accMap.containsKey("capabilities")) {
+                    List<Map<String, Object>> capsList = (List<Map<String, Object>>) accMap.get("capabilities");
+                    for (Map<String, Object> capMap : capsList) {
+                        Capability.Type type = Capability.Type.valueOf((String) capMap.get("type"));
+                        long devId = Utils.safeLong(capMap.get("deviceId"));
+                        acc.addCapability(new Capability(type, devId));
+                    }
+                }
+                
+                map.put(e.getKey(), acc);
             }
         }
 
@@ -80,12 +100,31 @@ public class AccountState {
         // Serialize accounts
         Map<String, Object> accounts = new HashMap<>();
         for (Map.Entry<String, Account> entry : state.entrySet()) {
+            Account acc = entry.getValue();
             Map<String, Object> accJson = new HashMap<>();
-            accJson.put("balance", entry.getValue().getBalance());
-            accJson.put("nonce", entry.getValue().getNonce());
-            if (entry.getValue().getCode() != null) {
-                accJson.put("code", HexUtils.bytesToHex(entry.getValue().getCode()));
+            accJson.put("balance", acc.getBalance());
+            accJson.put("nonce", acc.getNonce());
+            if (acc.getCode() != null) {
+                accJson.put("code", HexUtils.bytesToHex(acc.getCode()));
             }
+            
+            // Serialize Storage
+            Map<String, Long> storage = new HashMap<>();
+            for (Map.Entry<Long, Long> se : acc.getStorage().getStorage().entrySet()) {
+                storage.put(String.valueOf(se.getKey()), se.getValue());
+            }
+            accJson.put("storage", storage);
+            
+            // Serialize Capabilities
+            List<Map<String, Object>> caps = new ArrayList<>();
+            for (Capability cap : acc.getCapabilities()) {
+                Map<String, Object> capMap = new HashMap<>();
+                capMap.put("type", cap.getType().name());
+                capMap.put("deviceId", cap.getDeviceId());
+                caps.add(capMap);
+            }
+            accJson.put("capabilities", caps);
+            
             accounts.put(entry.getKey(), accJson);
         }
         json.put("accounts", accounts);
@@ -113,6 +152,11 @@ public class AccountState {
         return state.get(addr);
     }
 
+    public byte[] getSerializedAccount(String addr) {
+        Account acc = getAccount(addr);
+        return acc != null ? serializeAccount(acc) : null;
+    }
+
     public void ensure(String addr) {
         state.putIfAbsent(addr, new Account(0, 0));
     }
@@ -121,6 +165,20 @@ public class AccountState {
         ensure(addr);
         Account acc = state.get(addr);
         acc.credit(amount);
+        updateMpt(addr, acc);
+    }
+
+    public void putStorage(String addr, long key, long value) {
+        ensure(addr);
+        Account acc = state.get(addr);
+        acc.getStorage().put(key, value);
+        updateMpt(addr, acc);
+    }
+
+    public void addCapability(String addr, Capability cap) {
+        ensure(addr);
+        Account acc = state.get(addr);
+        acc.addCapability(cap);
         updateMpt(addr, acc);
     }
 
@@ -181,10 +239,39 @@ public class AccountState {
         return privateDataManager;
     }
 
+    /**
+     * Calculates the Merkle Patricia Trie root hash of the current state.
+     * 
+     * @return The state root hash as a hex string.
+     */
     public String calculateStateRoot() {
         // Includes Account map, SSI, and Lifecycle roots in the future
         // For now, it returns the MPT root of the Accounts
         return Crypto.bytesToHex(mpt.getRootHash());
+    }
+
+    /**
+     * Generates a Merkle Proof for an account address.
+     * 
+     * @param address The account address.
+     * @return A list of serialized MPT nodes for the account.
+     */
+    public java.util.List<byte[]> getAccountProof(String address) {
+        return mpt.getAccountProof(address.getBytes());
+    }
+
+    /**
+     * Generates a compact Merkle Proof for an account address as a single byte array.
+     * 
+     * @param address The account address.
+     * @return A single byte array containing all nodes in the proof.
+     */
+    public byte[] getCompactAccountProof(String address) {
+        return mpt.getCompactAccountProof(address.getBytes());
+    }
+    
+    public AccountState cloneState() {
+        return AccountState.fromMap(this.toJSON());
     }
 
     private void updateMpt(String addr, Account acc) {

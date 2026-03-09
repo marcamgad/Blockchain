@@ -8,6 +8,10 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 public class MTLSSecureNetworkTest {
+    static {
+        System.setProperty("DEBUG", "true");
+        System.setProperty("NODE_PRIVATE_KEY", "1");
+    }
 
     @Test
     public void testMTLSHandshake() throws Exception {
