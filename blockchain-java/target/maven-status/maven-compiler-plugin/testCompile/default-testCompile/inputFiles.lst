@@ -5,9 +5,11 @@
 /home/youssef/Blockchain/Blockchain/blockchain-java/src/test/java/com/hybrid/blockchain/MultiSigManagerTest.java
 /home/youssef/Blockchain/Blockchain/blockchain-java/src/test/java/com/hybrid/blockchain/PrivateDataCollectionTest.java
 /home/youssef/Blockchain/Blockchain/blockchain-java/src/test/java/com/hybrid/blockchain/SimpleBlockTest.java
+/home/youssef/Blockchain/Blockchain/blockchain-java/src/test/java/com/hybrid/blockchain/GossipNetworkTest.java
 /home/youssef/Blockchain/Blockchain/blockchain-java/src/test/java/com/hybrid/blockchain/SSIIntegrationTest.java
 /home/youssef/Blockchain/Blockchain/blockchain-java/src/test/java/com/hybrid/blockchain/IoTEndToEndTest.java
 /home/youssef/Blockchain/Blockchain/blockchain-java/src/test/java/com/hybrid/blockchain/AuditLoggerTest.java
+/home/youssef/Blockchain/Blockchain/blockchain-java/src/test/java/com/hybrid/blockchain/MerklePatriciaTrieTest.java
 /home/youssef/Blockchain/Blockchain/blockchain-java/src/test/java/com/hybrid/blockchain/TokenomicsTest.java
 /home/youssef/Blockchain/Blockchain/blockchain-java/src/test/java/com/hybrid/blockchain/SimpleTransactionTest.java
 /home/youssef/Blockchain/Blockchain/blockchain-java/src/test/java/com/hybrid/blockchain/SimpleMempoolTest.java

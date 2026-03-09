@@ -46,10 +46,8 @@ public class IoTEndToEndTest {
 
         // Setup a contract with capabilities
         String contractAddr = "0xCONTRACT";
-        node1.getState().ensure(contractAddr);
-        node1.getState().getAccountCapabilities(contractAddr).add(new Capability(Capability.Type.WRITE_ACTUATOR, 100L));
-        node2.getState().ensure(contractAddr);
-        node2.getState().getAccountCapabilities(contractAddr).add(new Capability(Capability.Type.WRITE_ACTUATOR, 100L));
+        node1.getState().addCapability(contractAddr, new Capability(Capability.Type.WRITE_ACTUATOR, 100L));
+        node2.getState().addCapability(contractAddr, new Capability(Capability.Type.WRITE_ACTUATOR, 100L));
 
         // PUSH 1 (Value), PUSH 100 (DeviceID), PUSH 2 (WRITE_ACTUATOR), SYSCALL
         java.nio.ByteBuffer code = java.nio.ByteBuffer.allocate(31);
@@ -58,16 +56,20 @@ public class IoTEndToEndTest {
         code.put(OpCode.PUSH.getByte()).putLong(2L);
         code.put(OpCode.SYSCALL.getByte());
 
-        node1.getState().credit("alice", 1000);
-        node2.getState().credit("alice", 1000);
+        java.math.BigInteger alicePriv = java.math.BigInteger.valueOf(456);
+        byte[] alicePub = Crypto.derivePublicKey(alicePriv);
+        String aliceAddr = Crypto.deriveAddress(alicePub);
+
+        node1.getState().credit(aliceAddr, 1000);
+        node2.getState().credit(aliceAddr, 1000);
         
         Transaction tx = new Transaction.Builder()
                 .type(Transaction.Type.CONTRACT)
-                .from("alice")
                 .to(contractAddr)
                 .data(code.array())
                 .fee(10)
-                .build();
+                .nonce(1)
+                .sign(alicePriv, alicePub);
 
         mem1.add(tx);
         Block b1 = node1.createBlock("V1", 10);

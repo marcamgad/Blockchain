@@ -28,7 +28,7 @@ public final class Config {
     public static final boolean IS_SEED = getBooleanEnv("IS_SEED", false);
     public static final String SEED_PEER = getEnv("SEED_PEER", null);
     public static final String STORAGE_PATH = getEnv("STORAGE_PATH", "./data");
-    public static final boolean DEBUG = getBooleanEnv("DEBUG", false);
+    public static boolean DEBUG = getBooleanEnv("DEBUG", false);
     public static final boolean PRINT_STATS = true;
     public static final int NETWORK_ID = getIntEnv("NETWORK_ID", 101);
     public static final String PROTOCOL_VERSION = getEnv("PROTOCOL_VERSION", "1.0.0");

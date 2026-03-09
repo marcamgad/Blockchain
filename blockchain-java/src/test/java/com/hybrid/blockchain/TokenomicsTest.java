@@ -48,7 +48,12 @@ public class TokenomicsTest {
         List<Transaction> txs = new ArrayList<>();
         txs.add(mintTx);
 
-        Block b1 = new Block(1, System.currentTimeMillis(), txs, blockchain.getLatestBlock().getHash(), 1, blockchain.getState().calculateStateRoot());
+        // Calculate expected post-state root
+        AccountState postState = blockchain.getState().cloneState();
+        postState.credit("alice", 1000);
+        String expectedRoot = postState.calculateStateRoot();
+
+        Block b1 = new Block(1, System.currentTimeMillis(), txs, blockchain.getLatestBlock().getHash(), 1, expectedRoot);
         b1.setValidatorId("V1");
         
         blockchain.applyBlock(b1);
@@ -58,52 +63,73 @@ public class TokenomicsTest {
 
     @Test
     public void testBurnTransaction() throws Exception {
-        blockchain.getState().credit("alice", 1000);
-        blockchain.getState().setNonce("alice", 0);
+        java.math.BigInteger priv = java.math.BigInteger.valueOf(999);
+        byte[] pub = Crypto.derivePublicKey(priv);
+        String aliceAddr = Crypto.deriveAddress(pub);
+
+        blockchain.getState().credit(aliceAddr, 1000);
+        blockchain.getState().setNonce(aliceAddr, 0);
 
         Transaction burnTx = new Transaction.Builder()
                 .type(Transaction.Type.BURN)
-                .from("alice")
                 .amount(400)
                 .fee(10)
                 .nonce(1)
-                .build();
+                .sign(priv, pub);
 
         List<Transaction> txs = new ArrayList<>();
         txs.add(burnTx);
 
-        Block b1 = new Block(1, System.currentTimeMillis(), txs, blockchain.getLatestBlock().getHash(), 1, blockchain.getState().calculateStateRoot());
+        // Calculate expected post-state root
+        AccountState postState = blockchain.getState().cloneState();
+        postState.debit(aliceAddr, 410);
+        postState.incrementNonce(aliceAddr);
+        postState.credit("V1", 10);
+        String expectedRoot = postState.calculateStateRoot();
+
+        Block b1 = new Block(1, System.currentTimeMillis(), txs, blockchain.getLatestBlock().getHash(), 1, expectedRoot);
         b1.setValidatorId("V1");
         
         blockchain.applyBlock(b1);
 
-        assertEquals(590, blockchain.getBalance("alice")); // 1000 - 400 - 10
+        assertEquals(590, blockchain.getBalance(aliceAddr)); // 1000 - 400 - 10
         assertEquals(10, blockchain.getBalance("V1"));
     }
 
     @Test
     public void testValidatorFeeReward() throws Exception {
-        blockchain.getState().credit("alice", 1000);
-        blockchain.getState().setNonce("alice", 0);
+        java.math.BigInteger priv = java.math.BigInteger.valueOf(123);
+        byte[] pub = Crypto.derivePublicKey(priv);
+        String aliceAddr = Crypto.deriveAddress(pub);
+
+        blockchain.getState().credit(aliceAddr, 1000);
+        blockchain.getState().setNonce(aliceAddr, 0);
         
         Transaction tx1 = new Transaction.Builder()
                 .type(Transaction.Type.ACCOUNT)
-                .from("alice")
                 .to("bob")
                 .amount(100)
                 .fee(20)
                 .nonce(1)
-                .build();
+                .sign(priv, pub);
 
         List<Transaction> txs = new ArrayList<>();
         txs.add(tx1);
 
-        Block b1 = new Block(1, System.currentTimeMillis(), txs, blockchain.getLatestBlock().getHash(), 1, blockchain.getState().calculateStateRoot());
+        // Calculate expected post-state root
+        AccountState postState = blockchain.getState().cloneState();
+        postState.debit(aliceAddr, 120);
+        postState.incrementNonce(aliceAddr);
+        postState.credit("bob", 100);
+        postState.credit("V1", 20);
+        String expectedRoot = postState.calculateStateRoot();
+
+        Block b1 = new Block(1, System.currentTimeMillis(), txs, blockchain.getLatestBlock().getHash(), 1, expectedRoot);
         b1.setValidatorId("V1");
         
         blockchain.applyBlock(b1);
 
-        assertEquals(880, blockchain.getBalance("alice")); 
+        assertEquals(880, blockchain.getBalance(aliceAddr)); 
         assertEquals(100, blockchain.getBalance("bob"));
         assertEquals(20, blockchain.getBalance("V1"));
     }
@@ -115,8 +141,13 @@ public class TokenomicsTest {
         // Simulate Byzantine behavior detected by consensus
         ((MockConsensus)consensus).simulateSlash("V1");
 
+        // Calculate post-state root after slashing
+        AccountState postState = blockchain.getState().cloneState();
+        postState.debit("V1", 1000); // Penalty from Blockchain.java
+        String expectedRoot = postState.calculateStateRoot();
+
         // Apply any block to trigger slashing check
-        Block b1 = new Block(1, System.currentTimeMillis(), new ArrayList<>(), blockchain.getLatestBlock().getHash(), 1, blockchain.getState().calculateStateRoot());
+        Block b1 = new Block(1, System.currentTimeMillis(), new ArrayList<>(), blockchain.getLatestBlock().getHash(), 1, expectedRoot);
         b1.setValidatorId("V1");
         
         blockchain.applyBlock(b1);

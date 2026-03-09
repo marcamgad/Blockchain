@@ -3,6 +3,7 @@ package com.hybrid.blockchain;
 import java.net.*;
 import javax.net.ssl.*;
 import java.io.*;
+import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.security.*;
 import java.security.cert.X509Certificate;
@@ -10,18 +11,24 @@ import java.util.*;
 import java.util.concurrent.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hybrid.blockchain.consensus.PBFTConsensus;
+import com.hybrid.blockchain.p2p.GossipEngine;
+import com.hybrid.blockchain.p2p.P2PMessage;
+import com.hybrid.blockchain.p2p.PeerManager;
 
 public class PeerNode implements PBFTConsensus.PBFTMessenger {
     private final int port;
-    private final Set<String> peers;
     private final ExecutorService executor;
     private ServerSocket serverSocket;
     private final java.math.BigInteger privateKey;
     private final byte[] localPubKey;
+    private final String localAddress;
     private Blockchain blockchain;
     private Consensus consensus;
     private SSLContext sslContext;
-    private final List<DataOutputStream> activeConnections = new java.util.concurrent.CopyOnWriteArrayList<>();
+    
+    private final PeerManager peerManager;
+    private final GossipEngine gossipEngine;
+    private final Map<String, DataOutputStream> peerConnections = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, Integer> ipConnectionCounts = new java.util.concurrent.ConcurrentHashMap<>();
     private static final int MAX_CONN_PER_IP = 3;
 
@@ -33,24 +40,113 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
     private static final int PROTOCOL_VERSION = 1;
 
     public PeerNode(int port, Blockchain blockchain, Consensus consensus) {
+        this(port, blockchain, consensus, Config.getNodePrivateKey());
+    }
+
+    public PeerNode(int port, Blockchain blockchain, Consensus consensus, BigInteger privateKey) {
         this.port = port;
-        this.peers = ConcurrentHashMap.newKeySet();
         this.executor = Executors.newCachedThreadPool();
         this.serverSocket = null;
-        this.privateKey = Config.getNodePrivateKey();
+        this.privateKey = privateKey;
         this.localPubKey = Crypto.derivePublicKey(this.privateKey);
+        this.localAddress = Crypto.deriveAddress(localPubKey);
         this.blockchain = blockchain;
         this.consensus = consensus;
+        
+        this.peerManager = new PeerManager();
+        this.gossipEngine = new GossipEngine(peerManager, 3); // Fan-out = 3
+
+        initializeGossipHandlers();
 
         try {
             // Generate temporary KeyPair for TLS (EC)
             KeyPairGenerator kpg = KeyPairGenerator.getInstance("EC");
             kpg.initialize(256);
             KeyPair tlsKeyPair = kpg.generateKeyPair();
-            String identity = Crypto.deriveAddress(localPubKey);
-            this.sslContext = com.hybrid.blockchain.security.SSLUtils.createSSLContext(tlsKeyPair, identity);
+            this.sslContext = com.hybrid.blockchain.security.SSLUtils.createSSLContext(tlsKeyPair, localAddress);
         } catch (Exception e) {
             System.err.println("[P2P] Failed to initialize SSLContext: " + e.getMessage());
+        }
+    }
+
+    private void initializeGossipHandlers() {
+        gossipEngine.setRelayDispatcher((target, message) -> {
+            DataOutputStream out = peerConnections.get(target.getId());
+            if (out != null) {
+                sendMessage(out, message);
+            }
+        });
+
+        gossipEngine.registerHandler(P2PMessage.Type.TRANSACTION, msg -> {
+            try {
+                Transaction tx = blockchain.deserializeTransaction(msg.getPayload());
+                blockchain.addTransaction(tx);
+                System.out.println("[P2P] Indexed transaction via gossip: " + tx.getId());
+            } catch (Exception e) {
+                System.err.println("[P2P] Failed to process gossiped transaction: " + e.getMessage());
+                peerManager.updatePeerScore(msg.getSenderId(), -1.0);
+            }
+        });
+
+        gossipEngine.registerHandler(P2PMessage.Type.BLOCK, msg -> {
+            try {
+                Block block = blockchain.deserializeBlock(msg.getPayload());
+                blockchain.applyBlock(block);
+            } catch (Exception e) {
+                peerManager.updatePeerScore(msg.getSenderId(), -1.0);
+            }
+        });
+
+        gossipEngine.registerHandler(P2PMessage.Type.CONSENSUS, msg -> {
+            handleConsensusMessage(msg);
+        });
+
+        gossipEngine.registerHandler(P2PMessage.Type.PEER_DISCOVERY, msg -> {
+            try {
+                ObjectMapper mapper = new ObjectMapper();
+                List<Map<String, Object>> peerList = mapper.readValue(msg.getPayload(), List.class);
+                for (Map<String, Object> p : peerList) {
+                    String id = (String) p.get("id");
+                    String addr = (String) p.get("address");
+                    int port = (int) p.get("port");
+                    if (!id.equals(localAddress)) {
+                        peerManager.addPeer(id, addr, port);
+                    }
+                }
+            } catch (Exception e) {
+                System.err.println("[P2P] Peer discovery error: " + e.getMessage());
+            }
+        });
+    }
+
+    public void startPeerSync() {
+        executor.submit(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    Thread.sleep(30000); // Sync every 30s
+                    broadcastPeerList();
+                } catch (InterruptedException e) {
+                    break;
+                }
+            }
+        });
+    }
+
+    private void broadcastPeerList() {
+        try {
+            List<Map<String, Object>> list = new ArrayList<>();
+            for (PeerManager.PeerInfo p : peerManager.getTopPeers(10)) {
+                Map<String, Object> map = new HashMap<>();
+                map.put("id", p.getId());
+                map.put("address", p.getAddress());
+                map.put("port", p.getPort());
+                list.add(map);
+            }
+            byte[] payload = new ObjectMapper().writeValueAsBytes(list);
+            P2PMessage msg = P2PMessage.create(localAddress, privateKey, P2PMessage.Type.PEER_DISCOVERY, payload);
+            gossipEngine.onMessageReceived(msg, localAddress);
+        } catch (Exception e) {
+            System.err.println("[P2P] Error broadcasting peer list: " + e.getMessage());
         }
     }
 
@@ -67,7 +163,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                     String remoteIp = client.getInetAddress().getHostAddress();
                     
                     // Enforce global peer limit
-                    if (activeConnections.size() >= Config.MAX_PEERS) {
+                    if (peerConnections.size() >= Config.MAX_PEERS) {
                         System.err.println("[P2P] Rejecting connection from " + remoteIp + ": global peer limit reached");
                         client.close();
                         continue;
@@ -95,6 +191,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
     private void handleConnection(Socket socket, boolean isInbound) {
         executor.submit(() -> {
             DataOutputStream out = null;
+            String remotePeerId = null;
             try {
                 DataInputStream in = new DataInputStream(socket.getInputStream());
                 out = new DataOutputStream(socket.getOutputStream());
@@ -102,47 +199,57 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                 byte[] localNonce = new byte[32];
                 new SecureRandom().nextBytes(localNonce);
 
-                if (isInbound)
-                    performInboundHandshake(in, out, localNonce);
-                else
+                remotePeerId = isInbound ? 
+                    performInboundHandshake(in, out, localNonce) : 
                     performOutboundHandshake(in, out, localNonce);
 
-                System.out.println("Secure session established with " + socket.getInetAddress());
+                System.out.println("Secure session established with " + socket.getInetAddress() + " ID: " + remotePeerId);
                 
-                activeConnections.add(out);
+                peerManager.addPeer(remotePeerId, socket.getInetAddress().getHostAddress(), socket.getPort());
+                peerConnections.put(remotePeerId, out);
 
-                long nextInboundSeq = 0;
+                ObjectMapper mapper = new ObjectMapper();
                 while (true) {
-                    int typeOrdinal = in.readInt();
-                    long seq = in.readLong();
                     int payloadLen = in.readInt();
-
-                    if (payloadLen < 0 || payloadLen > 5 * 1024 * 1024)
+                    if (payloadLen < 0 || payloadLen > 10 * 1024 * 1024)
                         throw new IOException("Payload too large");
-                    if (seq != nextInboundSeq++)
-                        throw new IOException("Invalid sequence number");
 
-                    byte[] payload = new byte[payloadLen];
-                    in.readFully(payload);
-                    processMessage(MsgType.values()[typeOrdinal], payload);
+                    byte[] jsonBytes = new byte[payloadLen];
+                    in.readFully(jsonBytes);
+                    
+                    P2PMessage msg = mapper.readValue(jsonBytes, P2PMessage.class);
+                    gossipEngine.onMessageReceived(msg, remotePeerId);
                 }
             } catch (Exception e) {
                 if (Config.DEBUG) {
                     System.err.println("[P2P] Connection error from " + socket.getInetAddress() + ": " + e.getMessage());
                 }
             } finally {
-                if (out != null) activeConnections.remove(out);
+                if (remotePeerId != null) {
+                    peerConnections.remove(remotePeerId);
+                    peerManager.removePeer(remotePeerId);
+                }
                 String remoteIp = socket.getInetAddress().getHostAddress();
                 ipConnectionCounts.computeIfPresent(remoteIp, (ip, c) -> c > 1 ? c - 1 : null);
                 try {
                     socket.close();
-                } catch (IOException ignored) {
-                }
+                } catch (IOException ignored) {}
             }
         });
     }
 
-    private void performInboundHandshake(DataInputStream in, DataOutputStream out, byte[] localNonce) throws Exception {
+    private synchronized void sendMessage(DataOutputStream out, P2PMessage msg) {
+        try {
+            byte[] json = new ObjectMapper().writeValueAsBytes(msg);
+            out.writeInt(json.length);
+            out.write(json);
+            out.flush();
+        } catch (IOException e) {
+            // Socket will close and cleanup in handleConnection
+        }
+    }
+
+    private String performInboundHandshake(DataInputStream in, DataOutputStream out, byte[] localNonce) throws Exception {
         if (in.readInt() != MsgType.HELLO.ordinal())
             throw new IOException("Expected HELLO");
         in.readInt(); // discard len
@@ -168,9 +275,10 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
         out.writeInt(MsgType.HANDSHAKE_OK.ordinal());
         out.writeInt(0);
         out.flush();
+        return Crypto.deriveAddress(remotePubKey);
     }
 
-    private void performOutboundHandshake(DataInputStream in, DataOutputStream out, byte[] localNonce)
+    private String performOutboundHandshake(DataInputStream in, DataOutputStream out, byte[] localNonce)
             throws Exception {
         sendHello(out, localNonce);
 
@@ -198,6 +306,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
         if (in.readInt() != MsgType.HANDSHAKE_OK.ordinal())
             throw new IOException("Peer rejected handshake");
         in.readInt();
+        return Crypto.deriveAddress(remotePubKey);
     }
 
     private void sendHello(DataOutputStream out, byte[] nonce) throws IOException {
@@ -217,66 +326,42 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
         out.flush();
     }
 
-    private void processMessage(MsgType type, byte[] payload) {
+    private void handleConsensusMessage(P2PMessage msg) {
         try {
-            switch (type) {
-                case TRANSACTION:
-                    Transaction tx = blockchain.deserializeTransaction(payload);
-                    blockchain.addTransaction(tx);
-                    break;
-                case BLOCK:
-                    Block block = blockchain.deserializeBlock(payload);
-                    blockchain.applyBlock(block);
-                    break;
-                case PBFT_PRE_PREPARE:
-                    // Pre-prepare is usually the block itself
-                    break;
-                case PBFT_PREPARE:
-                case PBFT_COMMIT:
-                case PBFT_VIEW_CHANGE:
-                    if (consensus instanceof PBFTConsensus) {
-                        PBFTConsensus pbft = (PBFTConsensus) consensus;
-                        ObjectMapper mapper = new ObjectMapper();
-                        Map<String, Object> data = mapper.readValue(payload, Map.class);
-                        
-                        String valId = (String) data.get("validatorId");
-                        byte[] sig = HexUtils.decode((String) data.get("signature"));
-                        
-                        if (type == MsgType.PBFT_PREPARE) {
-                            long seq = ((Number) data.get("sequenceNumber")).longValue();
-                            String hash = (String) data.get("blockHash");
-                            pbft.addPrepareVote(seq, hash, valId, sig);
-                        } else if (type == MsgType.PBFT_COMMIT) {
-                            long seq = ((Number) data.get("sequenceNumber")).longValue();
-                            String hash = (String) data.get("blockHash");
-                            pbft.addCommitVote(seq, hash, valId, sig);
-                        } else if (type == MsgType.PBFT_VIEW_CHANGE) {
-                            long newView = ((Number) data.get("newView")).longValue();
-                            long lastSeq = ((Number) data.get("lastSeq")).longValue();
-                            pbft.addViewChangeVote(newView, lastSeq, valId, sig);
-                        }
-                    }
-                    break;
-                case PBFT_NEW_VIEW:
-                    // TODO: Implement NEW_VIEW reconciliation
-                    System.out.println("[P2P] Received NEW_VIEW message");
-                    break;
+            if (consensus instanceof PBFTConsensus) {
+                PBFTConsensus pbft = (PBFTConsensus) consensus;
+                ObjectMapper mapper = new ObjectMapper();
+                Map<String, Object> data = mapper.readValue(msg.getPayload(), Map.class);
+                
+                String valId = (String) data.get("validatorId");
+                byte[] sig = HexUtils.decode((String) data.get("signature"));
+                String msgSubtype = (String) data.get("subtype");
+
+                if ("PREPARE".equals(msgSubtype)) {
+                    long seq = ((Number) data.get("sequenceNumber")).longValue();
+                    String hash = (String) data.get("blockHash");
+                    pbft.addPrepareVote(seq, hash, valId, sig);
+                } else if ("COMMIT".equals(msgSubtype)) {
+                    long seq = ((Number) data.get("sequenceNumber")).longValue();
+                    String hash = (String) data.get("blockHash");
+                    pbft.addCommitVote(seq, hash, valId, sig);
+                } else if ("VIEW_CHANGE".equals(msgSubtype)) {
+                    long newView = ((Number) data.get("newView")).longValue();
+                    long lastSeq = ((Number) data.get("lastSeq")).longValue();
+                    pbft.addViewChangeVote(newView, lastSeq, valId, sig);
+                }
             }
         } catch (Exception e) {
-            System.err.println("Error processing message: " + e.getMessage());
+            System.err.println("[P2P] Error processing consensus message: " + e.getMessage());
         }
     }
 
-    public void broadcastPBFT(MsgType type, long seq, String hash, String valId, byte[] sig) {
+    private void broadcastPBFT(String subtype, Map<String, Object> data) {
         try {
-            Map<String, Object> data = new HashMap<>();
-            data.put("sequenceNumber", seq);
-            data.put("blockHash", hash);
-            data.put("validatorId", valId);
-            data.put("signature", HexUtils.encode(sig));
-            
+            data.put("subtype", subtype);
             byte[] payload = new ObjectMapper().writeValueAsBytes(data);
-            broadcast(type, payload);
+            P2PMessage msg = P2PMessage.create(localAddress, privateKey, P2PMessage.Type.CONSENSUS, payload);
+            gossipEngine.onMessageReceived(msg, localAddress); // Local "injection"
         } catch (Exception e) {
             System.err.println("Error broadcasting PBFT message: " + e.getMessage());
         }
@@ -284,63 +369,60 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
 
     @Override
     public void broadcastPrepare(long seq, String hash, String valId, byte[] sig) {
-        broadcastPBFT(MsgType.PBFT_PREPARE, seq, hash, valId, sig);
+        Map<String, Object> data = new HashMap<>();
+        data.put("sequenceNumber", seq);
+        data.put("blockHash", hash);
+        data.put("validatorId", valId);
+        data.put("signature", HexUtils.encode(sig));
+        broadcastPBFT("PREPARE", data);
     }
 
     @Override
     public void broadcastCommit(long seq, String hash, String valId, byte[] sig) {
-        broadcastPBFT(MsgType.PBFT_COMMIT, seq, hash, valId, sig);
+        Map<String, Object> data = new HashMap<>();
+        data.put("sequenceNumber", seq);
+        data.put("blockHash", hash);
+        data.put("validatorId", valId);
+        data.put("signature", HexUtils.encode(sig));
+        broadcastPBFT("COMMIT", data);
     }
 
     @Override
     public void broadcastViewChange(long newView, long lastSeq, String valId, byte[] sig) {
-        try {
-            Map<String, Object> data = new HashMap<>();
-            data.put("newView", newView);
-            data.put("lastSeq", lastSeq);
-            data.put("validatorId", valId);
-            data.put("signature", HexUtils.encode(sig));
-            
-            byte[] payload = new ObjectMapper().writeValueAsBytes(data);
-            broadcast(MsgType.PBFT_VIEW_CHANGE, payload);
-        } catch (Exception e) {
-            System.err.println("Error broadcasting VIEW_CHANGE: " + e.getMessage());
-        }
+        Map<String, Object> data = new HashMap<>();
+        data.put("newView", newView);
+        data.put("lastSeq", lastSeq);
+        data.put("validatorId", valId);
+        data.put("signature", HexUtils.encode(sig));
+        broadcastPBFT("VIEW_CHANGE", data);
     }
 
     @Override
     public void broadcastNewView(long newView, List<PBFTConsensus.PBFTMessage> proofs, List<Block> recoveredBlocks, String valId) {
-        try {
-            Map<String, Object> data = new HashMap<>();
-            data.put("newView", newView);
-            data.put("validatorId", valId);
-            // In a production system, we'd serialize the proofs and recoveredBlocks properly
-            data.put("proofCount", proofs.size());
-            
-            byte[] payload = new ObjectMapper().writeValueAsBytes(data);
-            broadcast(MsgType.PBFT_NEW_VIEW, payload);
-        } catch (Exception e) {
-            System.err.println("Error broadcasting NEW_VIEW: " + e.getMessage());
-        }
+        Map<String, Object> data = new HashMap<>();
+        data.put("newView", newView);
+        data.put("validatorId", valId);
+        // In a production system, we'd serialize the proofs and blocks
+        data.put("proofCount", proofs.size());
+        broadcastPBFT("NEW_VIEW", data);
     }
 
-    public void broadcast(MsgType type, byte[] payload) {
-        for (DataOutputStream out : activeConnections) {
-            try {
-                out.writeInt(type.ordinal());
-                out.writeLong(System.currentTimeMillis()); // Simplified seq number
-                out.writeInt(payload.length);
-                out.write(payload);
-                out.flush();
-            } catch (Exception e) {
-                activeConnections.remove(out);
-            }
-        }
+    public void broadcastTransaction(Transaction tx) {
+        byte[] payload = blockchain.serializeTransaction(tx);
+        P2PMessage msg = P2PMessage.create(localAddress, privateKey, P2PMessage.Type.TRANSACTION, payload);
+        gossipEngine.onMessageReceived(msg, localAddress);
+    }
+
+    public void broadcastBlock(Block block) {
+        byte[] payload = blockchain.serializeBlock(block);
+        P2PMessage msg = P2PMessage.create(localAddress, privateKey, P2PMessage.Type.BLOCK, payload);
+        gossipEngine.onMessageReceived(msg, localAddress);
     }
 
     public void shutdown() throws IOException {
         if (serverSocket != null && !serverSocket.isClosed())
             serverSocket.close();
+        blockchain.shutdown();
         executor.shutdown();
     }
 
@@ -349,10 +431,9 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
             try {
                 SSLSocketFactory sf = sslContext.getSocketFactory();
                 SSLSocket socket = (SSLSocket) sf.createSocket(host, port);
-                socket.startHandshake(); // Explicitly start TLS handshake
+                socket.startHandshake();
                 
                 handleConnection(socket, false);
-                peers.add(host + ":" + port);
                 System.out.println("[P2P] Connected to peer via mTLS: " + host + ":" + port);
             } catch (IOException e) {
                 System.err.println("[P2P] mTLS connection failed to " + host + ":" + port + " - " + e.getMessage());
@@ -360,7 +441,19 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
         });
     }
 
-    public Set<String> getPeers() {
-        return this.peers;
+    public Collection<PeerManager.PeerInfo> getPeers() {
+        return peerManager.getAllPeers();
+    }
+
+    public String getLocalAddress() {
+        return localAddress;
+    }
+
+    public Blockchain getBlockchain() {
+        return blockchain;
+    }
+
+    public PeerManager getPeerManager() {
+        return peerManager;
     }
 }

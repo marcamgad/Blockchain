@@ -11,6 +11,7 @@ com/hybrid/blockchain/AdversarialNetworkTest.class
 com/hybrid/blockchain/IoTInterpreterTest.class
 com/hybrid/blockchain/TokenomicsTest$MockConsensus.class
 com/hybrid/blockchain/AuditLoggerTest.class
+com/hybrid/blockchain/MerklePatriciaTrieTest.class
 com/hybrid/blockchain/SimpleTransactionTest.class
 com/hybrid/blockchain/TokenomicsTest.class
 com/hybrid/blockchain/RateLimiterTest.class
@@ -18,3 +19,4 @@ com/hybrid/blockchain/SimpleAccountStateTest.class
 com/hybrid/blockchain/DeviceLifecycleTest.class
 com/hybrid/blockchain/BlockchainMonitorTest.class
 com/hybrid/blockchain/SimpleMempoolTest.class
+com/hybrid/blockchain/GossipNetworkTest.class

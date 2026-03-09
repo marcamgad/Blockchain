@@ -5,7 +5,12 @@ import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.math.BigInteger;
 import java.util.*;
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 public final class Transaction {
 
     public enum Type {
@@ -32,22 +37,41 @@ public final class Transaction {
     private final byte[] signature;
     private final String txid;
 
-    private Transaction(Builder b) {
-        this.type = b.type;
-        this.from = b.from;
-        this.to = b.to;
-        this.amount = b.amount;
-        this.fee = b.fee;
-        this.nonce = b.nonce;
-        this.timestamp = b.timestamp;
-        this.networkId = b.networkId;
-        this.data = b.data == null ? new byte[0] : b.data;
-        this.validUntilBlock = b.validUntilBlock;
-        this.inputs = b.inputs == null ? List.of() : List.copyOf(b.inputs);
-        this.outputs = b.outputs == null ? List.of() : List.copyOf(b.outputs);
-        this.pubKey = b.pubKey;
-        this.signature = b.signature;
+    @JsonCreator
+    public Transaction(
+            @JsonProperty("type") Type type,
+            @JsonProperty("from") String from,
+            @JsonProperty("to") String to,
+            @JsonProperty("amount") long amount,
+            @JsonProperty("fee") long fee,
+            @JsonProperty("nonce") long nonce,
+            @JsonProperty("timestamp") long timestamp,
+            @JsonProperty("networkId") int networkId,
+            @JsonProperty("data") byte[] data,
+            @JsonProperty("validUntilBlock") long validUntilBlock,
+            @JsonProperty("inputs") List<UTXOInput> inputs,
+            @JsonProperty("outputs") List<UTXOOutput> outputs,
+            @JsonProperty("pubKey") byte[] pubKey,
+            @JsonProperty("signature") byte[] signature) {
+        this.type = type;
+        this.from = from;
+        this.to = to;
+        this.amount = amount;
+        this.fee = fee;
+        this.nonce = nonce;
+        this.timestamp = timestamp;
+        this.networkId = networkId;
+        this.data = data == null ? new byte[0] : data;
+        this.validUntilBlock = validUntilBlock;
+        this.inputs = inputs == null ? List.of() : List.copyOf(inputs);
+        this.outputs = outputs == null ? List.of() : List.copyOf(outputs);
+        this.pubKey = pubKey;
+        this.signature = signature;
         this.txid = Crypto.bytesToHex(Crypto.hash(serializeCanonical()));
+    }
+
+    private Transaction(Builder b) {
+        this(b.type, b.from, b.to, b.amount, b.fee, b.nonce, b.timestamp, b.networkId, b.data, b.validUntilBlock, b.inputs, b.outputs, b.pubKey, b.signature);
     }
 
     public static class Builder {
@@ -198,6 +222,7 @@ public final class Transaction {
         return txid;
     }
 
+    @JsonIgnore
     public String getId() {
         return txid;
     }
@@ -250,6 +275,7 @@ public final class Transaction {
         return data;
     }
 
+    @JsonIgnore
     public String digest() {
         return txid;
     }

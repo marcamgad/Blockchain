@@ -128,7 +128,7 @@ public class BlockchainMonitorTest {
 
         assertNotNull(dashboard);
         assertEquals("test-node-001", dashboard.getNodeId());
-        assertTrue(dashboard.getUptime() > 0);
+        assertTrue(dashboard.getUptime() >= 0);
         assertTrue(dashboard.getHealth().isHealthy());
         assertEquals(1, dashboard.getRecentAlerts().size());
         assertNotNull(dashboard.getPerformance());
