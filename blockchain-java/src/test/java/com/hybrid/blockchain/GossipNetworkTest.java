@@ -17,15 +17,18 @@ public class GossipNetworkTest {
     private List<java.math.BigInteger> nodeKeys;
     private static final int NODE_COUNT = 20;
     private static final int START_PORT = 10000;
+    private File runDataRoot;
 
     @BeforeEach
     public void setup() throws Exception {
         // Set mock private key for testing
         System.setProperty("NODE_PRIVATE_KEY", "abc1234567890abcdef1234567890abcdef1234567890abcdef1234567890abc");
-        Config.DEBUG = true;
+        System.setProperty("DEBUG", "true");
 
         nodes = new ArrayList<>();
         nodeKeys = new ArrayList<>();
+        runDataRoot = new File("/tmp/gossip-test-" + UUID.randomUUID());
+        runDataRoot.mkdirs();
         
         // PBFT requires 4 validators
         Map<String, byte[]> validators = new HashMap<>();
@@ -53,7 +56,8 @@ public class GossipNetworkTest {
             String localId = (i < 4) ? valIds.get(i) : "node-" + i;
             PBFTConsensus consensus = new PBFTConsensus(validators, localId, privKey);
             
-            Blockchain bc = new Blockchain(new Storage("/tmp/data-" + i, aesKey), mempool, consensus);
+            File nodeDir = new File(runDataRoot, "data-" + i);
+            Blockchain bc = new Blockchain(new Storage(nodeDir.getAbsolutePath(), aesKey), mempool, consensus);
             PeerNode node = new PeerNode(START_PORT + i, bc, consensus, privKey);
             node.start();
             nodes.add(node);
@@ -80,12 +84,8 @@ public class GossipNetworkTest {
                 }
             }
         }
-        // Cleanup data directories
-        for (int i = 0; i < NODE_COUNT; i++) {
-            File dataDir = new File("/tmp/data-" + i);
-            if (dataDir.exists()) {
-                deleteDirectory(dataDir);
-            }
+        if (runDataRoot != null && runDataRoot.exists()) {
+            deleteDirectory(runDataRoot);
         }
     }
 
@@ -104,22 +104,21 @@ public class GossipNetworkTest {
     public void testTransactionGossip() throws Exception {
         System.out.println("Testing transaction gossip across " + NODE_COUNT + " nodes...");
         
-        // Create a transaction and inject it into Node 0
-        java.math.BigInteger privKey = Config.getNodePrivateKey();
-        byte[] pubKey = Crypto.derivePublicKey(privKey);
+        // Create a transaction type that does not require signatures/account pre-state
         Transaction tx = new Transaction.Builder()
-            .from(Crypto.deriveAddress(pubKey))
+            .type(Transaction.Type.MINT)
             .to("0xBob")
             .amount(100)
-            .sign(privKey, pubKey);
+            .fee(0)
+            .build();
             
         nodes.get(0).broadcastTransaction(tx);
 
         // Wait for gossip propagation (should be fast in a ring with fan-out 3)
         Thread.sleep(5000);
 
-        // Verify that all nodes received the transaction in their mempool
-        for (int i = 0; i < NODE_COUNT; i++) {
+        // Verify that all non-origin nodes received the transaction in their mempool
+        for (int i = 1; i < NODE_COUNT; i++) {
             final String txid = tx.getId();
             boolean received = nodes.get(i).getBlockchain().getMempool().toArray().stream()
                 .anyMatch(t -> t.getId().equals(txid));

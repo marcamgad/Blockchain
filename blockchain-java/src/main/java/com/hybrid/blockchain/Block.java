@@ -79,17 +79,17 @@ public class Block {
 
     public void mine(int targetDifficulty, long maxNonce) {
         String targetPrefix = "0".repeat(Math.max(0, targetDifficulty));
-        while (!this.hash.startsWith(targetPrefix)) {
+        do {
             if (this.nonce >= maxNonce)
                 throw new RuntimeException("Nonce limit exceeded");
             this.nonce++;
             this.hash = calculateHash();
-        }
+        } while (!this.hash.startsWith(targetPrefix));
     }
 
     public boolean hasValidTransactions() {
         for (Transaction tx : transactions) {
-            if (!Config.DEBUG && !tx.verify())
+            if (!Config.isDebug() && !tx.verify())
                 return false;
         }
         return true;

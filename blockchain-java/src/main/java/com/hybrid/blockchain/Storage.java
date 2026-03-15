@@ -11,6 +11,7 @@ import java.io.File;
 import java.io.IOException;
 import java.security.SecureRandom;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Collections;
 
@@ -30,7 +31,12 @@ public class Storage {
         }
 
         this.mapper = new ObjectMapper();
-        this.cache = Collections.synchronizedMap(new HashMap<>());
+        this.cache = Collections.synchronizedMap(new LinkedHashMap<String, Object>(512, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<String, Object> eldest) {
+                return size() > 512;
+            }
+        });
         this.aesKey = new SecretKeySpec(aesKeyBytes, "AES");
 
         File folder = new File(dbPath != null ? dbPath : "data");

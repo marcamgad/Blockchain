@@ -4,6 +4,8 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.Collections;
 
 /**
  * Hardware Abstraction Layer (HAL) for IoT peripherals.
@@ -11,9 +13,9 @@ import java.util.ArrayList;
  * Here it provides a deterministic mock interface for simulation.
  */
 public class HardwareManager {
-    private final Map<Long, Long> sensorValues = new HashMap<>();
-    private final Map<Long, Long> actuatorStates = new HashMap<>();
-    private final List<DeferredAction> deferredQueue = new java.util.ArrayList<>();
+    private final Map<Long, Long> sensorValues = new ConcurrentHashMap<>();
+    private final Map<Long, Long> actuatorStates = new ConcurrentHashMap<>();
+    private final List<DeferredAction> deferredQueue = Collections.synchronizedList(new ArrayList<>());
 
     public HardwareManager() {
         // Default mock hardware
@@ -39,14 +41,16 @@ public class HardwareManager {
 
     public void commitDeferredActions(String blockHash) {
         System.out.println("[HAL] Attempting to commit for block: " + blockHash);
-        java.util.Iterator<DeferredAction> it = deferredQueue.iterator();
-        while (it.hasNext()) {
-            DeferredAction action = it.next();
-            System.out.println("[HAL] Checking queued action for: " + action.getBlockHash());
-            if (action.getBlockHash().equals(blockHash)) {
-                actuatorStates.put(action.getDeviceId(), action.getValue());
-                System.out.println("[HAL] EXECUTED deferred action: " + action);
-                it.remove();
+        synchronized (deferredQueue) {
+            java.util.Iterator<DeferredAction> it = deferredQueue.iterator();
+            while (it.hasNext()) {
+                DeferredAction action = it.next();
+                System.out.println("[HAL] Checking queued action for: " + action.getBlockHash());
+                if (action.getBlockHash().equals(blockHash)) {
+                    actuatorStates.put(action.getDeviceId(), action.getValue());
+                    System.out.println("[HAL] EXECUTED deferred action: " + action);
+                    it.remove();
+                }
             }
         }
     }

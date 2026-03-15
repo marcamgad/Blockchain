@@ -2,6 +2,7 @@ package com.hybrid.blockchain.identity;
 
 import com.hybrid.blockchain.Crypto;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import java.util.*;
 
 /**
@@ -10,6 +11,7 @@ import java.util.*;
  * 
  * Compliant with W3C DID Core specification.
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class DecentralizedIdentifier {
 
     @JsonProperty("@context")

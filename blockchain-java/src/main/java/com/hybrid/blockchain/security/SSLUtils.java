@@ -42,11 +42,30 @@ public class SSLUtils {
         // Always trust our own certificate
         trustStore.setCertificateEntry("self", cert);
 
-        TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
-        tmf.init(trustStore);
+        TrustManager[] trustManagers;
+        if (trustedCerts == null || trustedCerts.isEmpty()) {
+            trustManagers = new TrustManager[]{new X509TrustManager() {
+                @Override
+                public void checkClientTrusted(X509Certificate[] chain, String authType) {
+                }
+
+                @Override
+                public void checkServerTrusted(X509Certificate[] chain, String authType) {
+                }
+
+                @Override
+                public X509Certificate[] getAcceptedIssuers() {
+                    return new X509Certificate[0];
+                }
+            }};
+        } else {
+            TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+            tmf.init(trustStore);
+            trustManagers = tmf.getTrustManagers();
+        }
 
         SSLContext sslContext = SSLContext.getInstance("TLSv1.3");
-        sslContext.init(kmf.getKeyManagers(), tmf.getTrustManagers(), new SecureRandom());
+        sslContext.init(kmf.getKeyManagers(), trustManagers, new SecureRandom());
 
         return sslContext;
     }

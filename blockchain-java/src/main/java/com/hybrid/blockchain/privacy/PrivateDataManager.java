@@ -1,6 +1,5 @@
 package com.hybrid.blockchain.privacy;
 
-import com.hybrid.blockchain.Crypto;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -16,6 +15,11 @@ public class PrivateDataManager {
         this.collections = new ConcurrentHashMap<>();
     }
 
+    public void restore(PrivateDataManager other) {
+        this.collections.clear();
+        this.collections.putAll(other.collections);
+    }
+
     /**
      * Create a new private data collection
      */
@@ -27,7 +31,6 @@ public class PrivateDataManager {
             throw new IllegalStateException("Collection already exists: " + collectionId);
         }
 
-        // Creator must be in authorized members
         if (!authorizedMembers.contains(creator)) {
             throw new SecurityException("Creator must be in authorized members");
         }
@@ -41,9 +44,6 @@ public class PrivateDataManager {
         return collection;
     }
 
-    /**
-     * Get existing collection
-     */
     public PrivateDataCollection getCollection(String collectionId) {
         PrivateDataCollection collection = collections.get(collectionId);
         if (collection == null) {
@@ -52,16 +52,10 @@ public class PrivateDataManager {
         return collection;
     }
 
-    /**
-     * Check if collection exists
-     */
     public boolean hasCollection(String collectionId) {
         return collections.containsKey(collectionId);
     }
 
-    /**
-     * Get all collections accessible by an address
-     */
     public List<String> getCollectionsForMember(String memberAddress) {
         List<String> accessibleCollections = new ArrayList<>();
 
@@ -74,9 +68,6 @@ public class PrivateDataManager {
         return accessibleCollections;
     }
 
-    /**
-     * Delete collection (requires all members to approve in production)
-     */
     public void deleteCollection(String collectionId, String caller) {
         PrivateDataCollection collection = getCollection(collectionId);
 
@@ -88,9 +79,6 @@ public class PrivateDataManager {
         System.out.println("[PrivateDataMgr] Deleted collection: " + collectionId);
     }
 
-    /**
-     * Get statistics
-     */
     public Map<String, Object> getStats() {
         Map<String, Object> stats = new HashMap<>();
         stats.put("totalCollections", collections.size());
@@ -101,5 +89,64 @@ public class PrivateDataManager {
         stats.put("totalDataItems", totalDataItems);
 
         return stats;
+    }
+
+    public Map<String, Object> toJSON() {
+        Map<String, Object> json = new HashMap<>();
+        Map<String, Object> serializedCollections = new HashMap<>();
+
+        for (Map.Entry<String, PrivateDataCollection> entry : collections.entrySet()) {
+            PrivateDataCollection collection = entry.getValue();
+            Map<String, Object> collectionJson = new HashMap<>();
+            collectionJson.put("authorizedMembers", collection.getAuthorizedMembers());
+            collectionJson.put("collectionKey", Base64.getEncoder().encodeToString(collection.exportCollectionKeyRaw()));
+            collectionJson.put("privateData", collection.exportPrivateDataBase64());
+            collectionJson.put("publicHashes", collection.exportPublicHashesBase64());
+            serializedCollections.put(entry.getKey(), collectionJson);
+        }
+
+        json.put("collections", serializedCollections);
+        return json;
+    }
+
+    @SuppressWarnings("unchecked")
+    public static PrivateDataManager fromMap(Map<String, Object> json) {
+        PrivateDataManager manager = new PrivateDataManager();
+        if (json == null) {
+            return manager;
+        }
+
+        Map<String, Object> serializedCollections = (Map<String, Object>) json.get("collections");
+        if (serializedCollections == null) {
+            return manager;
+        }
+
+        for (Map.Entry<String, Object> entry : serializedCollections.entrySet()) {
+            Map<String, Object> collectionJson = (Map<String, Object>) entry.getValue();
+            List<String> authorizedMembers = (List<String>) collectionJson.getOrDefault("authorizedMembers", Collections.emptyList());
+            byte[] keyBytes = Base64.getDecoder().decode((String) collectionJson.get("collectionKey"));
+
+            Map<String, byte[]> privateData = new HashMap<>();
+            Map<String, Object> privateDataRaw = (Map<String, Object>) collectionJson.getOrDefault("privateData", Collections.emptyMap());
+            for (Map.Entry<String, Object> pd : privateDataRaw.entrySet()) {
+                privateData.put(pd.getKey(), Base64.getDecoder().decode((String) pd.getValue()));
+            }
+
+            Map<String, byte[]> publicHashes = new HashMap<>();
+            Map<String, Object> publicHashesRaw = (Map<String, Object>) collectionJson.getOrDefault("publicHashes", Collections.emptyMap());
+            for (Map.Entry<String, Object> ph : publicHashesRaw.entrySet()) {
+                publicHashes.put(ph.getKey(), Base64.getDecoder().decode((String) ph.getValue()));
+            }
+
+            PrivateDataCollection collection = PrivateDataCollection.fromState(
+                    entry.getKey(),
+                    authorizedMembers,
+                    keyBytes,
+                    privateData,
+                    publicHashes);
+            manager.collections.put(entry.getKey(), collection);
+        }
+
+        return manager;
     }
 }

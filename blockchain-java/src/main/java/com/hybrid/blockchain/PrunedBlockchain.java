@@ -1,15 +1,22 @@
 package com.hybrid.blockchain;
 
+import java.util.LinkedList;
+
 public class PrunedBlockchain extends Blockchain {
 
     private final int maxBlocks;
     @SuppressWarnings("unused")
-    private final PoAConsensus poa;
+    private final Consensus consensus;
+
+    public PrunedBlockchain(Storage storage, Mempool mempool, int maxBlocks, Consensus consensus) throws Exception {
+        super(storage, mempool, consensus);
+        this.maxBlocks = maxBlocks;
+        this.consensus = consensus;
+        this.chain = new LinkedList<>(this.chain);
+    }
 
     public PrunedBlockchain(Storage storage, Mempool mempool, int maxBlocks, PoAConsensus poa) throws Exception {
-        super(storage, mempool, poa);
-        this.maxBlocks = maxBlocks;
-        this.poa = poa;
+        this(storage, mempool, maxBlocks, (Consensus) poa);
     }
 
     @Override
@@ -17,22 +24,25 @@ public class PrunedBlockchain extends Blockchain {
         try {
             if (chain.size() <= maxBlocks) return;
 
-            Block old = chain.remove(0);
+            Block old = ((LinkedList<Block>) chain).removeFirst();
 
             storage.del("block:" + old.getHash());
             storage.del("height:" + old.getIndex());
 
             System.out.println("[PRUNE] Removed block " + old.getIndex());
 
-            if (old.getIndex() % 100 == 0) {
-                storage.saveSnapshot(
-                    old.getIndex(),
-                    state.toJSON(),
-                    utxo.toJSON()
-                );
-            }
+            storage.saveSnapshot(
+                old.getIndex(),
+                state.toJSON(),
+                utxo.toJSON()
+            );
         } catch (Exception e) {
             throw new RuntimeException("Pruning failed", e);
         }
+    }
+
+    @Override
+    public int getHeight() {
+        return getLatestBlock().getIndex();
     }
 }

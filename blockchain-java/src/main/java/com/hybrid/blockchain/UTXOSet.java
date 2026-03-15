@@ -55,6 +55,15 @@ public class UTXOSet {
         return map.containsKey(key);
     }
 
+    public long getAmount(String txid, int index) {
+        String key = txid + ":" + index;
+        UTXO utxo = map.get(key);
+        if (utxo == null) {
+            return -1;
+        }
+        return utxo.getAmount();
+    }
+
     public Spendable findSpendable(String address, long amount) {
         long total = 0;
         List<UTXOEntry> utxos = new ArrayList<>();

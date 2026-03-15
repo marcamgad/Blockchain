@@ -75,7 +75,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
 
         try {
             // Use real blockchain private key for TLS identity
-            X9ECParameters ecParams = CustomNamedCurves.getByName("secp256k1");
+            X9ECParameters ecParams = CustomNamedCurves.getByName(Config.EC_CURVE);
             ECParameterSpec spec = new ECParameterSpec(ecParams.getCurve(), ecParams.getG(), ecParams.getN(), ecParams.getH());
             
             KeyFactory kf = KeyFactory.getInstance("EC", "BC");
@@ -86,7 +86,15 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
             this.sslContext = com.hybrid.blockchain.security.SSLUtils.createSSLContext(tlsKeyPair, localAddress, trustedCerts);
         } catch (Exception e) {
             System.err.println("[P2P] Failed to initialize SSLContext: " + e.getMessage());
-            if (Config.DEBUG) e.printStackTrace();
+            if (Config.isDebug()) e.printStackTrace();
+            try {
+                KeyPairGenerator fallbackGen = KeyPairGenerator.getInstance("EC");
+                fallbackGen.initialize(256);
+                KeyPair fallbackKeyPair = fallbackGen.generateKeyPair();
+                this.sslContext = com.hybrid.blockchain.security.SSLUtils.createSSLContext(fallbackKeyPair, localAddress, trustedCerts);
+            } catch (Exception fallbackError) {
+                throw new RuntimeException("Unable to initialize SSL context for P2P node", fallbackError);
+            }
         }
     }
 
@@ -280,7 +288,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                     gossipEngine.onMessageReceived(msg, remotePeerId);
                 }
             } catch (Exception e) {
-                if (Config.DEBUG) {
+                if (Config.isDebug()) {
                     System.err.println("[P2P] Connection error from " + socket.getInetAddress() + ": " + e.getMessage());
                 }
             } finally {

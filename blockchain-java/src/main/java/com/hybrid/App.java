@@ -71,7 +71,22 @@ public class App {
         Storage storage = new Storage(Config.STORAGE_PATH, Config.STORAGE_AES_KEY);
 
         // 7. Construct Blockchain
-        Blockchain blockchain = new Blockchain(storage, new Mempool(Config.MEMPOOL_LIMIT), pbft);
+        int maxBlocks = 0;
+        try {
+            String maxBlocksEnv = System.getProperty("MAX_BLOCKS");
+            if (maxBlocksEnv == null) {
+                maxBlocksEnv = System.getenv("MAX_BLOCKS");
+            }
+            if (maxBlocksEnv != null && !maxBlocksEnv.isBlank()) {
+                maxBlocks = Integer.parseInt(maxBlocksEnv);
+            }
+        } catch (NumberFormatException ignored) {
+            maxBlocks = 0;
+        }
+
+        Blockchain blockchain = maxBlocks > 0
+                ? new PrunedBlockchain(storage, new Mempool(Config.MEMPOOL_LIMIT), maxBlocks, pbft)
+                : new Blockchain(storage, new Mempool(Config.MEMPOOL_LIMIT), pbft);
 
         // 8. Call blockchain.init()
         blockchain.init();
@@ -142,7 +157,7 @@ public class App {
                 }
             } catch (Exception e) {
                 System.err.println("[PROPOSER] Error in block production: " + e.getMessage());
-                if (Config.DEBUG) e.printStackTrace();
+                if (Config.isDebug()) e.printStackTrace();
             }
         }, Config.TARGET_BLOCK_TIME_MS, Config.TARGET_BLOCK_TIME_MS, TimeUnit.MILLISECONDS);
     }

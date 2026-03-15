@@ -211,11 +211,17 @@ public class SSIManager {
             if (json.containsKey("didRegistry")) {
                 Map<String, Object> registryMap = (Map<String, Object>) json.get("didRegistry");
                 for (Map.Entry<String, Object> entry : registryMap.entrySet()) {
-                    String jsonStr = mapper.writeValueAsString(entry.getValue());
-                    DecentralizedIdentifier didDoc = mapper.readValue(jsonStr, DecentralizedIdentifier.class);
+                    DecentralizedIdentifier didDoc = mapper.convertValue(entry.getValue(), DecentralizedIdentifier.class);
                     manager.didRegistry.put(entry.getKey(), didDoc);
-                    manager.deviceToDID.put(didDoc.getDeviceId(), didDoc.getDid());
+                    if (didDoc != null && didDoc.getDeviceId() != null && didDoc.getDid() != null) {
+                        manager.deviceToDID.put(didDoc.getDeviceId(), didDoc.getDid());
+                    }
                 }
+            }
+
+            if (json.containsKey("deviceToDID")) {
+                Map<String, String> mappings = mapper.convertValue(json.get("deviceToDID"), new TypeReference<Map<String, String>>() {});
+                manager.deviceToDID.putAll(mappings);
             }
 
             // Restore Credentials
@@ -256,6 +262,9 @@ public class SSIManager {
 
         // Serialize credentials
         json.put("credentialStore", credentialStore);
+
+        // Device to DID map
+        json.put("deviceToDID", deviceToDID);
 
         // Revoked DIDs
         json.put("revokedDIDs", new ArrayList<>(revokedDIDs));

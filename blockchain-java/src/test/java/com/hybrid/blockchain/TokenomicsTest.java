@@ -50,6 +50,7 @@ public class TokenomicsTest {
 
         // Calculate expected post-state root
         AccountState postState = blockchain.getState().cloneState();
+        postState.setBlockHeight(1);
         postState.credit("alice", 1000);
         String expectedRoot = postState.calculateStateRoot();
 
@@ -82,6 +83,7 @@ public class TokenomicsTest {
 
         // Calculate expected post-state root
         AccountState postState = blockchain.getState().cloneState();
+        postState.setBlockHeight(1);
         postState.debit(aliceAddr, 410);
         postState.incrementNonce(aliceAddr);
         postState.credit("V1", 10);
@@ -118,6 +120,7 @@ public class TokenomicsTest {
 
         // Calculate expected post-state root
         AccountState postState = blockchain.getState().cloneState();
+        postState.setBlockHeight(1);
         postState.debit(aliceAddr, 120);
         postState.incrementNonce(aliceAddr);
         postState.credit("bob", 100);
@@ -143,6 +146,7 @@ public class TokenomicsTest {
 
         // Calculate post-state root after slashing
         AccountState postState = blockchain.getState().cloneState();
+        postState.setBlockHeight(1);
         postState.debit("V1", 1000); // Penalty from Blockchain.java
         String expectedRoot = postState.calculateStateRoot();
 

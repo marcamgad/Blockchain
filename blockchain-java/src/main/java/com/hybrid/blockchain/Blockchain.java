@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.util.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hybrid.blockchain.lifecycle.DeviceLifecycleManager;
+import com.hybrid.blockchain.security.RateLimiter;
+import com.hybrid.blockchain.consensus.PBFTConsensus;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.concurrent.locks.ReadWriteLock;
 
@@ -17,6 +19,7 @@ public class Blockchain {
     private int difficulty;
     protected Consensus consensus;
     private final HardwareManager hardwareManager;
+    private final RateLimiter transactionRateLimiter;
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
 
     public Blockchain(Storage storage, Mempool mempool, Consensus consensus) throws Exception {
@@ -28,6 +31,7 @@ public class Blockchain {
         this.difficulty = Config.INITIAL_DIFFICULTY;
         this.consensus = consensus;
         this.hardwareManager = new HardwareManager();
+        this.transactionRateLimiter = RateLimiter.Presets.transactionLimiter();
     }
 
     public void init() throws Exception {
@@ -72,7 +76,7 @@ public class Blockchain {
                 return;
             }
             System.out.println("[INIT] Creating genesis block");
-            Block genesis = new Block(0, System.currentTimeMillis(), new ArrayList<>(), "0", difficulty, state.calculateStateRoot());
+            Block genesis = new Block(0, System.currentTimeMillis(), new ArrayList<>(), "0000000000000000000000000000000000000000000000000000000000000000", difficulty, state.calculateStateRoot());
             genesis.setHash(genesis.calculateHash());
             chain.add(genesis);
             storage.saveBlock(genesis.getHash(), genesis);
@@ -97,21 +101,35 @@ public class Blockchain {
 
     // Validate a transaction according to type
     public void validateTransaction(Transaction tx) throws Exception {
-        if (!Config.DEBUG && !tx.verify() && tx.getFrom() != null)
+        if (!Config.isDebug() && !tx.verify() && tx.getFrom() != null)
             throw new Exception("Invalid signature");
         if (tx.getNetworkId() != Config.NETWORK_ID)
             throw new Exception("Wrong networkId");
         if (tx.getAmount() < 0 || tx.getFee() < 0)
             throw new Exception("Negative amount or fee");
+        if (tx.getValidUntilBlock() > 0 && getHeight() > tx.getValidUntilBlock())
+            throw new Exception("Transaction expired");
 
         switch (tx.getType()) {
             case UTXO:
                 if (tx.getInputs() == null || tx.getOutputs() == null)
                     throw new Exception("UTXO transaction missing inputs/outputs");
+                long totalInput = 0;
                 for (UTXOInput inp : tx.getInputs()) {
                     if (!utxo.isUnspent(inp.getTxid(), inp.getIndex()))
                         throw new Exception("UTXO input not available");
+                    long inputAmount = utxo.getAmount(inp.getTxid(), inp.getIndex());
+                    if (inputAmount < 0) {
+                        throw new Exception("UTXO input amount unavailable");
+                    }
+                    totalInput += inputAmount;
                 }
+                long totalOutput = 0;
+                for (UTXOOutput out : tx.getOutputs()) {
+                    totalOutput += out.getAmount();
+                }
+                if (totalInput < (totalOutput + tx.getFee()))
+                    throw new Exception("Insufficient UTXO input sum");
                 break;
 
             case ACCOUNT:
@@ -121,7 +139,13 @@ public class Blockchain {
                 long expectedNonce = state.getNonce(tx.getFrom()) + 1;
                 if (tx.getNonce() != expectedNonce)
                     throw new Exception("Invalid nonce: expected " + expectedNonce + " got " + tx.getNonce());
-                if (balance < (tx.getAmount() + tx.getFee()))
+                long accountTotal;
+                try {
+                    accountTotal = Math.addExact(tx.getAmount(), tx.getFee());
+                } catch (ArithmeticException e) {
+                    throw new Exception("Invalid amount overflow", e);
+                }
+                if (balance < accountTotal)
                     throw new Exception("Insufficient funds");
                 break;
 
@@ -133,7 +157,13 @@ public class Blockchain {
                     long expectedContractNonce = state.getNonce(tx.getFrom()) + 1;
                     if (tx.getNonce() != expectedContractNonce)
                         throw new Exception("Invalid nonce: expected " + expectedContractNonce + " got " + tx.getNonce());
-                    if (contractBalance < (tx.getAmount() + tx.getFee()))
+                    long contractTotal;
+                    try {
+                        contractTotal = Math.addExact(tx.getAmount(), tx.getFee());
+                    } catch (ArithmeticException e) {
+                        throw new Exception("Invalid amount overflow", e);
+                    }
+                    if (contractBalance < contractTotal)
                         throw new Exception("Insufficient funds for contract tx");
                 }
                 break;
@@ -158,7 +188,13 @@ public class Blockchain {
                 long expectedBurnNonce = state.getNonce(tx.getFrom()) + 1;
                 if (tx.getNonce() != expectedBurnNonce)
                     throw new Exception("Invalid nonce: expected " + expectedBurnNonce + " got " + tx.getNonce());
-                if (burnBalance < (tx.getAmount() + tx.getFee()))
+                long burnTotal;
+                try {
+                    burnTotal = Math.addExact(tx.getAmount(), tx.getFee());
+                } catch (ArithmeticException e) {
+                    throw new Exception("Invalid amount overflow", e);
+                }
+                if (burnBalance < burnTotal)
                     throw new Exception("Insufficient funds for burn");
                 break;
 
@@ -171,8 +207,17 @@ public class Blockchain {
     public void applyBlock(Block block) throws Exception {
         lock.writeLock().lock();
         try {
-            if (!block.getPrevHash().equals(getLatestBlock().getHash()))
+            Block latest = getLatestBlock();
+            if (block.getIndex() != latest.getIndex() + 1)
+                throw new Exception("Invalid block height");
+            if (!block.getPrevHash().equals(latest.getHash()))
                 throw new Exception("Block does not chain to tip");
+            if (block.getTimestamp() > System.currentTimeMillis() + Config.MAX_TIMESTAMP_DRIFT)
+                throw new Exception("Block timestamp too far in future");
+            if (block.getTimestamp() < latest.getTimestamp())
+                throw new Exception("Block timestamp older than previous block");
+            if (!calculateTxRoot(block.getTransactions()).equals(block.getTxRoot()))
+                throw new Exception("Invalid tx root");
         if (!consensus.isValidator(block.getValidatorId()))
             throw new Exception("Unknown validator");
 
@@ -193,7 +238,7 @@ public class Blockchain {
         // Apply transactions
         for (Transaction tx : block.getTransactions()) {
             totalFees += tx.getFee();
-            applyTransactionToState(state, tx, block.getIndex(), block.getTimestamp(), block.getHash());
+            applyTransactionToState(state, utxo, tx, block.getIndex(), block.getTimestamp(), block.getHash());
             mempool.remove(tx.getId());
         }
 
@@ -255,15 +300,24 @@ public class Blockchain {
             if (tx.getTo() == null && tx.getType() != Transaction.Type.CONTRACT)
                 throw new Exception("Missing destination");
             if (tx.getFrom() != null && !tx.verify()) {
-                if (!Config.DEBUG) {
+                if (!Config.isDebug()) {
                     throw new Exception("Invalid transaction");
                 }
             }
             // Skipping balance check in DEBUG mode for tests
-            if (!Config.DEBUG) {
+            if (!Config.isDebug() && tx.getFrom() != null) {
                 long balance = getBalance(tx.getFrom());
-                if (balance < tx.getAmount() + tx.getFee())
+                long total;
+                try {
+                    total = Math.addExact(tx.getAmount(), tx.getFee());
+                } catch (ArithmeticException e) {
+                    throw new Exception("Invalid amount overflow", e);
+                }
+                if (balance < total)
                     throw new Exception("Insufficient funds");
+            }
+            if (tx.getFrom() != null && !transactionRateLimiter.allowRequest(tx.getFrom())) {
+                throw new Exception("Rate limit exceeded for sender");
             }
             mempool.add(tx);
             return true;
@@ -305,6 +359,7 @@ public class Blockchain {
         lock.writeLock().lock();
         try {
             Block prev = getLatestBlock();
+            int nextIndex = prev.getIndex() + 1;
             List<Transaction> candidateTxs = mempool.getTop(maxTx);
             List<Transaction> txsToInclude = new ArrayList<>();
             
@@ -318,13 +373,19 @@ public class Blockchain {
 
             // Simulate transactions on a clone of state to get the post-state root
             AccountState clonedState = state.cloneState();
+            UTXOSet clonedUtxo = UTXOSet.fromMap(utxo.toJSON());
+            clonedState.setBlockHeight(nextIndex);
             long timestamp = System.currentTimeMillis();
             String tempHash = "SIMULATION_" + timestamp;
+            try {
+                applyTransactionToState(clonedState, clonedUtxo, rewardTx, nextIndex, timestamp, tempHash);
+            } catch (Exception ignored) {
+            }
             
             for (Transaction tx : candidateTxs) {
                 try {
                     validateTransaction(tx);
-                    applyTransactionToState(clonedState, tx, chain.size(), timestamp, tempHash);
+                    applyTransactionToState(clonedState, clonedUtxo, tx, nextIndex, timestamp, tempHash);
                     txsToInclude.add(tx);
                 } catch (Exception ignored) {
                 }
@@ -334,7 +395,7 @@ public class Blockchain {
             clonedState.credit(minerAddress, totalFees);
 
             String postStateRoot = clonedState.calculateStateRoot();
-            Block newBlock = new Block(chain.size(), timestamp, txsToInclude,
+                Block newBlock = new Block(nextIndex, timestamp, txsToInclude,
                     prev.getHash(), difficulty, postStateRoot);
             newBlock.setValidatorId(Config.NODE_ID);
             newBlock.setHash(newBlock.calculateHash());
@@ -344,21 +405,21 @@ public class Blockchain {
         }
     }
 
-    private void applyTransactionToState(AccountState targetState, Transaction tx, long blockIndex, long timestamp, String blockHash) throws Exception {
+    private void applyTransactionToState(AccountState targetState, UTXOSet targetUtxo, Transaction tx, long blockIndex, long timestamp, String blockHash) throws Exception {
         switch (tx.getType()) {
             case UTXO:
                 for (UTXOInput inp : tx.getInputs()) {
-                    utxo.spendOutput(inp.getTxid(), inp.getIndex());
+                    targetUtxo.spendOutput(inp.getTxid(), inp.getIndex());
                 }
                 List<UTXOOutput> outs = tx.getOutputs();
                 for (int i = 0; i < outs.size(); i++) {
                     UTXOOutput out = outs.get(i);
-                    utxo.addOutput(tx.getId(), i, out.getAddress(), out.getAmount());
+                    targetUtxo.addOutput(tx.getId(), i, out.getAddress(), out.getAmount());
                 }
                 break;
             case ACCOUNT:
                 if (tx.getFrom() != null) {
-                    targetState.debit(tx.getFrom(), tx.getAmount() + tx.getFee());
+                    targetState.debit(tx.getFrom(), Math.addExact(tx.getAmount(), tx.getFee()));
                     targetState.incrementNonce(tx.getFrom());
                 }
                 targetState.credit(tx.getTo(), tx.getAmount());
@@ -418,7 +479,7 @@ public class Blockchain {
                 targetState.credit(tx.getTo(), tx.getAmount());
                 break;
             case BURN:
-                targetState.debit(tx.getFrom(), tx.getAmount() + tx.getFee());
+                targetState.debit(tx.getFrom(), Math.addExact(tx.getAmount(), tx.getFee()));
                 targetState.incrementNonce(tx.getFrom());
                 break;
         }
@@ -469,6 +530,20 @@ public class Blockchain {
         if (latest != null) {
             latest.setStateRoot(state.calculateStateRoot());
         }
+    }
+
+    private String calculateTxRoot(List<Transaction> transactions) {
+        if (transactions == null || transactions.isEmpty()) {
+            return Crypto.bytesToHex(new byte[32]);
+        }
+        List<byte[]> leaves = new ArrayList<>();
+        for (Transaction tx : transactions) {
+            if (tx == null) {
+                return "";
+            }
+            leaves.add(Crypto.hash(tx.serializeCanonical()));
+        }
+        return Crypto.bytesToHex(MerkleTree.computeRoot(leaves));
     }
 
     public List<Block> getChain() {
@@ -532,6 +607,9 @@ public class Blockchain {
     }
 
     public void shutdown() throws IOException {
+        if (consensus instanceof PBFTConsensus) {
+            ((PBFTConsensus) consensus).shutdown();
+        }
         if (storage != null) {
             storage.close();
         }
