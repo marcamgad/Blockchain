@@ -18,6 +18,7 @@
 /home/youssef/Blockchain/Blockchain/blockchain-java/src/main/java/com/hybrid/blockchain/HardwareManager.java
 /home/youssef/Blockchain/Blockchain/blockchain-java/src/main/java/com/hybrid/blockchain/UTXOOutput.java
 /home/youssef/Blockchain/Blockchain/blockchain-java/src/main/java/com/hybrid/blockchain/privacy/PrivateDataCollection.java
+/home/youssef/Blockchain/Blockchain/blockchain-java/src/main/java/com/hybrid/blockchain/tools/KeygenTool.java
 /home/youssef/Blockchain/Blockchain/blockchain-java/src/main/java/com/hybrid/blockchain/consensus/PBFTConsensus.java
 /home/youssef/Blockchain/Blockchain/blockchain-java/src/main/java/com/hybrid/blockchain/PeerNode.java
 /home/youssef/Blockchain/Blockchain/blockchain-java/src/main/java/com/hybrid/blockchain/identity/VerifiableCredential.java

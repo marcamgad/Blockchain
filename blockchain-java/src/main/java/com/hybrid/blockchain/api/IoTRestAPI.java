@@ -1,6 +1,17 @@
 package com.hybrid.blockchain.api;
 
-import com.hybrid.blockchain.*;
+import com.hybrid.blockchain.Block;
+import com.hybrid.blockchain.Blockchain;
+import com.hybrid.blockchain.Config;
+import com.hybrid.blockchain.Crypto;
+import com.hybrid.blockchain.HexUtils;
+import com.hybrid.blockchain.IdentityManager;
+import com.hybrid.blockchain.Mempool;
+import com.hybrid.blockchain.PeerNode;
+import com.hybrid.blockchain.PoAConsensus;
+import com.hybrid.blockchain.Transaction;
+import com.hybrid.blockchain.Validator;
+import com.hybrid.blockchain.consensus.PBFTConsensus;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.web.bind.annotation.*;
@@ -32,47 +43,57 @@ public class IoTRestAPI {
 
     private final ReentrantReadWriteLock blockchainLock = new ReentrantReadWriteLock();
 
+    private static Blockchain sharedBlockchain;
+    private static PeerNode sharedPeerNode;
+    private static PBFTConsensus sharedPbft;
+
+    public static void setNode(Blockchain b, PeerNode p, PBFTConsensus c) {
+        sharedBlockchain = b;
+        sharedPeerNode = p;
+        sharedPbft = c;
+    }
+
     public static void main(String[] args) {
         SpringApplication.run(IoTRestAPI.class, args);
     }
 
     @PostConstruct
     public void init() throws Exception {
-        this.mempool = new Mempool(10000);
-        List<Validator> validators = new ArrayList<>();
-        this.poa = new PoAConsensus(validators);
-
-        this.blockchain = new Blockchain(null, mempool, poa);
-        this.blockchain.init();
-
-        this.identityManager = new IdentityManager();
-        // Removed this.contractVM = new ContractVM();
-
-        this.jwtManager = new JwtManager(); // JWT token manager
-        this.deviceManager = new IoTDeviceManager(); // persistent device registry
+        if (sharedBlockchain != null) {
+            this.blockchain = sharedBlockchain;
+            this.mempool = blockchain.getMempool();
+            this.deviceManager = new IoTDeviceManager();
+            this.jwtManager = new JwtManager();
+            this.identityManager = new IdentityManager();
+            this.mqttAdapter = new MQTTAdapter(this.blockchain);
+            this.mqttAdapter.start();
+        } else {
+            // Fallback bootstrap
+            this.mempool = new Mempool(10000);
+            List<Validator> validators = new ArrayList<>();
+            // Bootstrap validator set from env if possible
+            String valPubKeysEnv = System.getenv("VALIDATOR_PUBKEYS");
+            if (valPubKeysEnv != null && !valPubKeysEnv.isEmpty()) {
+                for (String pubHex : valPubKeysEnv.split(",")) {
+                    byte[] vPub = HexUtils.decode(pubHex.trim());
+                    validators.add(new Validator(Crypto.deriveAddress(vPub), vPub));
+                }
+            }
+            this.poa = new PoAConsensus(validators);
+            this.blockchain = new Blockchain(null, mempool, poa);
+            this.blockchain.init();
+            this.identityManager = new IdentityManager();
+            this.jwtManager = new JwtManager();
+            this.deviceManager = new IoTDeviceManager();
+            this.mqttAdapter = new MQTTAdapter(this.blockchain);
+            this.mqttAdapter.start();
+        }
 
         log.info("========================================");
         log.info("IoT Blockchain Node Starting");
         log.info("========================================");
         log.info("Node ID: {}", Config.NODE_ID);
-        log.info("Node Name: {}", Config.NODE_NAME);
-        log.info("Is Seed Node: {}", Config.IS_SEED);
-        log.info("Seed Peer: {}", Config.SEED_PEER != null ? Config.SEED_PEER : "N/A (this is seed)");
-        log.info("API Port: {}", Config.API_PORT);
-        log.info("P2P Port: {}", Config.P2P_PORT);
-        log.info("Network ID: {}", Config.NETWORK_ID);
-        log.info("Protocol Version: {}", Config.PROTOCOL_VERSION);
-        log.info("Storage Path: {}", Config.STORAGE_PATH);
         log.info("========================================");
-        log.info("IoT REST API initialized successfully");
-
-        // Initialize and start MQTT Adapter
-        try {
-            this.mqttAdapter = new MQTTAdapter(this.blockchain);
-            this.mqttAdapter.start();
-        } catch (Exception e) {
-            log.error("Failed to start MQTT Adapter: {}", e.getMessage());
-        }
     }
 
     private boolean verifyToken(String token, String deviceId) {
@@ -276,6 +297,50 @@ public class IoTRestAPI {
                     return ResponseEntity.ok(block);
             }
             return ResponseEntity.status(404).body(Map.of("error", "Block not found"));
+        } finally {
+            blockchainLock.readLock().unlock();
+        }
+    }
+
+    @GetMapping("/chain/status")
+    public ResponseEntity<?> getChainStatus() {
+        blockchainLock.readLock().lock();
+        try {
+            return ResponseEntity.ok(Map.of(
+                "height", blockchain.getHeight(),
+                "tipHash", blockchain.getLatestBlock().getHash(),
+                "tipTimestamp", blockchain.getLatestBlock().getTimestamp(),
+                "difficulty", blockchain.getDifficulty(),
+                "mempoolSize", blockchain.getMempool().size()
+            ));
+        } finally {
+            blockchainLock.readLock().unlock();
+        }
+    }
+
+    @GetMapping("/consensus")
+    public ResponseEntity<?> getConsensusStatus() {
+        if (sharedPbft != null) {
+            return ResponseEntity.ok(Map.of(
+                "viewNumber", sharedPbft.getViewNumber(),
+                "currentLeader", sharedPbft.getCurrentLeader(),
+                "validatorCount", sharedPbft.getValidatorCount(),
+                "maxFaultyNodes", sharedPbft.getMaxFaultyNodes(),
+                "committedBlocks", sharedPbft.getStats().get("committedBlocks")
+            ));
+        }
+        return ResponseEntity.ok(Map.of("type", "POA"));
+    }
+
+    @GetMapping("/proof/{address}")
+    public ResponseEntity<?> getAccountProof(@PathVariable String address) {
+        blockchainLock.readLock().lock();
+        try {
+            byte[] proof = blockchain.getState().getCompactAccountProof(address);
+            return ResponseEntity.ok(Map.of(
+                "address", address,
+                "proof", Base64.getEncoder().encodeToString(proof)
+            ));
         } finally {
             blockchainLock.readLock().unlock();
         }

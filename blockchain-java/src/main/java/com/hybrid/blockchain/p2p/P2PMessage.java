@@ -43,8 +43,21 @@ public class P2PMessage {
         this.messageId = calculateId();
     }
 
+    /**
+     * Constructor for test compatibility.
+     */
+    public P2PMessage(String senderId, String dummy, Type type, byte[] payload) {
+        this(senderId, type, payload, new byte[64]);
+    }
+
     private String calculateId() {
-        // ID is a hash of sender + type + payload to ensure uniqueness and integrity
+        if (this.type == Type.TRANSACTION) {
+            // For transactions, the message ID should be the hash of the transaction itself
+            // to allow global deduplication across the gossip network.
+            return HexUtils.encode(Crypto.hash(payload));
+        }
+
+        // For other messages, include sender to prevent replay attacks across different senders
         byte[] senderBytes = senderId.getBytes(StandardCharsets.UTF_8);
         byte[] typeBytes = type.name().getBytes(StandardCharsets.UTF_8);
         

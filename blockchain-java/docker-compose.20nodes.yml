@@ -1,0 +1,317 @@
+version: '3.8'
+
+networks:
+  hb-net:
+    driver: bridge
+
+x-node-common: &node-common
+  build: .
+  networks:
+    - hb-net
+  environment:
+    - STORAGE_AES_KEY=${STORAGE_AES_KEY:-00112233445566778899aabbccddeeff}
+    - NETWORK_ID=101
+    - TARGET_BLOCK_TIME_MS=5000
+    - VALIDATOR_PUBKEYS=${VALIDATOR_PUBKEYS}
+services:
+
+  hb-node-1:
+    <<: *node-common
+    container_name: hb-node-1
+    hostname: hb-node-1
+    ports:
+      - "8001:8000"
+      - "6001:6001"
+    environment:
+      - NODE_ID=hb-node-1
+      - IS_SEED=true
+      - SEED_PEER=
+      - NODE_PRIVATE_KEY=${NODE_1_PRIVATE_KEY}
+      - SERVER_PORT=8000
+      - P2P_PORT=6001
+
+  hb-node-2:
+    <<: *node-common
+    container_name: hb-node-2
+    hostname: hb-node-2
+    ports:
+      - "8002:8000"
+      - "6002:6001"
+    environment:
+      - NODE_ID=hb-node-2
+      - IS_SEED=false
+      - SEED_PEER=hb-node-1:6001
+      - NODE_PRIVATE_KEY=${NODE_2_PRIVATE_KEY}
+      - SERVER_PORT=8000
+      - P2P_PORT=6001
+
+  hb-node-3:
+    <<: *node-common
+    container_name: hb-node-3
+    hostname: hb-node-3
+    ports:
+      - "8003:8000"
+      - "6003:6001"
+    environment:
+      - NODE_ID=hb-node-3
+      - IS_SEED=false
+      - SEED_PEER=hb-node-1:6001
+      - NODE_PRIVATE_KEY=${NODE_3_PRIVATE_KEY}
+      - SERVER_PORT=8000
+      - P2P_PORT=6001
+
+  hb-node-4:
+    <<: *node-common
+    container_name: hb-node-4
+    hostname: hb-node-4
+    ports:
+      - "8004:8000"
+      - "6004:6001"
+    environment:
+      - NODE_ID=hb-node-4
+      - IS_SEED=false
+      - SEED_PEER=hb-node-1:6001
+      - NODE_PRIVATE_KEY=${NODE_4_PRIVATE_KEY}
+      - SERVER_PORT=8000
+      - P2P_PORT=6001
+
+  hb-node-5:
+    <<: *node-common
+    container_name: hb-node-5
+    hostname: hb-node-5
+    ports:
+      - "8005:8000"
+      - "6005:6001"
+    environment:
+      - NODE_ID=hb-node-5
+      - IS_SEED=false
+      - SEED_PEER=hb-node-1:6001
+      - NODE_PRIVATE_KEY=${NODE_5_PRIVATE_KEY}
+      - SERVER_PORT=8000
+      - P2P_PORT=6001
+
+  hb-node-6:
+    <<: *node-common
+    container_name: hb-node-6
+    hostname: hb-node-6
+    ports:
+      - "8006:8000"
+      - "6006:6001"
+    environment:
+      - NODE_ID=hb-node-6
+      - IS_SEED=false
+      - SEED_PEER=hb-node-1:6001
+      - NODE_PRIVATE_KEY=${NODE_6_PRIVATE_KEY}
+      - SERVER_PORT=8000
+      - P2P_PORT=6001
+
+  hb-node-7:
+    <<: *node-common
+    container_name: hb-node-7
+    hostname: hb-node-7
+    ports:
+      - "8007:8000"
+      - "6007:6001"
+    environment:
+      - NODE_ID=hb-node-7
+      - IS_SEED=false
+      - SEED_PEER=hb-node-1:6001
+      - NODE_PRIVATE_KEY=${NODE_7_PRIVATE_KEY}
+      - SERVER_PORT=8000
+      - P2P_PORT=6001
+
+  hb-node-8:
+    <<: *node-common
+    container_name: hb-node-8
+    hostname: hb-node-8
+    ports:
+      - "8008:8000"
+      - "6008:6001"
+    environment:
+      - NODE_ID=hb-node-8
+      - IS_SEED=false
+      - SEED_PEER=hb-node-1:6001
+      - NODE_PRIVATE_KEY=${NODE_8_PRIVATE_KEY}
+      - SERVER_PORT=8000
+      - P2P_PORT=6001
+
+  hb-node-9:
+    <<: *node-common
+    container_name: hb-node-9
+    hostname: hb-node-9
+    ports:
+      - "8009:8000"
+      - "6009:6001"
+    environment:
+      - NODE_ID=hb-node-9
+      - IS_SEED=false
+      - SEED_PEER=hb-node-1:6001
+      - NODE_PRIVATE_KEY=${NODE_9_PRIVATE_KEY}
+      - SERVER_PORT=8000
+      - P2P_PORT=6001
+
+  hb-node-10:
+    <<: *node-common
+    container_name: hb-node-10
+    hostname: hb-node-10
+    ports:
+      - "8010:8000"
+      - "6010:6001"
+    environment:
+      - NODE_ID=hb-node-10
+      - IS_SEED=false
+      - SEED_PEER=hb-node-1:6001
+      - NODE_PRIVATE_KEY=${NODE_10_PRIVATE_KEY}
+      - SERVER_PORT=8000
+      - P2P_PORT=6001
+
+  hb-node-11:
+    <<: *node-common
+    container_name: hb-node-11
+    hostname: hb-node-11
+    ports:
+      - "8011:8000"
+      - "6011:6001"
+    environment:
+      - NODE_ID=hb-node-11
+      - IS_SEED=false
+      - SEED_PEER=hb-node-1:6001
+      - NODE_PRIVATE_KEY=${NODE_11_PRIVATE_KEY}
+      - SERVER_PORT=8000
+      - P2P_PORT=6001
+
+  hb-node-12:
+    <<: *node-common
+    container_name: hb-node-12
+    hostname: hb-node-12
+    ports:
+      - "8012:8000"
+      - "6012:6001"
+    environment:
+      - NODE_ID=hb-node-12
+      - IS_SEED=false
+      - SEED_PEER=hb-node-1:6001
+      - NODE_PRIVATE_KEY=${NODE_12_PRIVATE_KEY}
+      - SERVER_PORT=8000
+      - P2P_PORT=6001
+
+  hb-node-13:
+    <<: *node-common
+    container_name: hb-node-13
+    hostname: hb-node-13
+    ports:
+      - "8013:8000"
+      - "6013:6001"
+    environment:
+      - NODE_ID=hb-node-13
+      - IS_SEED=false
+      - SEED_PEER=hb-node-1:6001
+      - NODE_PRIVATE_KEY=${NODE_13_PRIVATE_KEY}
+      - SERVER_PORT=8000
+      - P2P_PORT=6001
+
+  hb-node-14:
+    <<: *node-common
+    container_name: hb-node-14
+    hostname: hb-node-14
+    ports:
+      - "8014:8000"
+      - "6014:6001"
+    environment:
+      - NODE_ID=hb-node-14
+      - IS_SEED=false
+      - SEED_PEER=hb-node-1:6001
+      - NODE_PRIVATE_KEY=${NODE_14_PRIVATE_KEY}
+      - SERVER_PORT=8000
+      - P2P_PORT=6001
+
+  hb-node-15:
+    <<: *node-common
+    container_name: hb-node-15
+    hostname: hb-node-15
+    ports:
+      - "8015:8000"
+      - "6015:6001"
+    environment:
+      - NODE_ID=hb-node-15
+      - IS_SEED=false
+      - SEED_PEER=hb-node-1:6001
+      - NODE_PRIVATE_KEY=${NODE_15_PRIVATE_KEY}
+      - SERVER_PORT=8000
+      - P2P_PORT=6001
+
+  hb-node-16:
+    <<: *node-common
+    container_name: hb-node-16
+    hostname: hb-node-16
+    ports:
+      - "8016:8000"
+      - "6016:6001"
+    environment:
+      - NODE_ID=hb-node-16
+      - IS_SEED=false
+      - SEED_PEER=hb-node-1:6001
+      - NODE_PRIVATE_KEY=${NODE_16_PRIVATE_KEY}
+      - SERVER_PORT=8000
+      - P2P_PORT=6001
+
+  hb-node-17:
+    <<: *node-common
+    container_name: hb-node-17
+    hostname: hb-node-17
+    ports:
+      - "8017:8000"
+      - "6017:6001"
+    environment:
+      - NODE_ID=hb-node-17
+      - IS_SEED=false
+      - SEED_PEER=hb-node-1:6001
+      - NODE_PRIVATE_KEY=${NODE_17_PRIVATE_KEY}
+      - SERVER_PORT=8000
+      - P2P_PORT=6001
+
+  hb-node-18:
+    <<: *node-common
+    container_name: hb-node-18
+    hostname: hb-node-18
+    ports:
+      - "8018:8000"
+      - "6018:6001"
+    environment:
+      - NODE_ID=hb-node-18
+      - IS_SEED=false
+      - SEED_PEER=hb-node-1:6001
+      - NODE_PRIVATE_KEY=${NODE_18_PRIVATE_KEY}
+      - SERVER_PORT=8000
+      - P2P_PORT=6001
+
+  hb-node-19:
+    <<: *node-common
+    container_name: hb-node-19
+    hostname: hb-node-19
+    ports:
+      - "8019:8000"
+      - "6019:6001"
+    environment:
+      - NODE_ID=hb-node-19
+      - IS_SEED=false
+      - SEED_PEER=hb-node-1:6001
+      - NODE_PRIVATE_KEY=${NODE_19_PRIVATE_KEY}
+      - SERVER_PORT=8000
+      - P2P_PORT=6001
+
+  hb-node-20:
+    <<: *node-common
+    container_name: hb-node-20
+    hostname: hb-node-20
+    ports:
+      - "8020:8000"
+      - "6020:6001"
+    environment:
+      - NODE_ID=hb-node-20
+      - IS_SEED=false
+      - SEED_PEER=hb-node-1:6001
+      - NODE_PRIVATE_KEY=${NODE_20_PRIVATE_KEY}
+      - SERVER_PORT=8000
+      - P2P_PORT=6001
+

@@ -5,9 +5,11 @@ import org.iq80.leveldb.*;
 import static org.fusesource.leveldbjni.JniDBFactory.*;
 
 import javax.crypto.Cipher;
+import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.File;
 import java.io.IOException;
+import java.security.SecureRandom;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Collections;
@@ -18,6 +20,9 @@ public class Storage {
     private final ObjectMapper mapper;
     private final Map<String, Object> cache;
     private final SecretKeySpec aesKey;
+    private static final int GCM_IV_LENGTH = 12;
+    private static final int GCM_TAG_LENGTH = 128; // in bits
+    private final SecureRandom secureRandom = new SecureRandom();
 
     public Storage(String dbPath, byte[] aesKeyBytes) throws IOException {
         if (aesKeyBytes.length != 16 && aesKeyBytes.length != 24 && aesKeyBytes.length != 32) {
@@ -42,15 +47,29 @@ public class Storage {
     }
 
     private byte[] encrypt(byte[] data) throws Exception {
-        Cipher cipher = Cipher.getInstance("AES");
-        cipher.init(Cipher.ENCRYPT_MODE, aesKey);
-        return cipher.doFinal(data);
+        byte[] iv = new byte[GCM_IV_LENGTH];
+        secureRandom.nextBytes(iv);
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        GCMParameterSpec spec = new GCMParameterSpec(GCM_TAG_LENGTH, iv);
+        cipher.init(Cipher.ENCRYPT_MODE, aesKey, spec);
+        byte[] ciphertext = cipher.doFinal(data);
+        byte[] encrypted = new byte[iv.length + ciphertext.length];
+        System.arraycopy(iv, 0, encrypted, 0, iv.length);
+        System.arraycopy(ciphertext, 0, encrypted, iv.length, ciphertext.length);
+        return encrypted;
     }
 
     private byte[] decrypt(byte[] data) throws Exception {
-        Cipher cipher = Cipher.getInstance("AES");
-        cipher.init(Cipher.DECRYPT_MODE, aesKey);
-        return cipher.doFinal(data);
+        if (data == null || data.length < GCM_IV_LENGTH) throw new IllegalArgumentException("Invalid encrypted data");
+        byte[] iv = new byte[GCM_IV_LENGTH];
+        System.arraycopy(data, 0, iv, 0, GCM_IV_LENGTH);
+        byte[] ciphertext = new byte[data.length - GCM_IV_LENGTH];
+        System.arraycopy(data, GCM_IV_LENGTH, ciphertext, 0, ciphertext.length);
+
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        GCMParameterSpec spec = new GCMParameterSpec(GCM_TAG_LENGTH, iv);
+        cipher.init(Cipher.DECRYPT_MODE, aesKey, spec);
+        return cipher.doFinal(ciphertext);
     }
 
     public void put(String key, Object value) throws IOException {

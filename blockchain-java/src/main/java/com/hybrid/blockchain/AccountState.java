@@ -3,6 +3,7 @@ package com.hybrid.blockchain;
 import com.hybrid.blockchain.identity.SSIManager;
 import com.hybrid.blockchain.lifecycle.DeviceLifecycleManager;
 import com.hybrid.blockchain.privacy.PrivateDataManager;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.HashMap;
 import java.util.Map;
@@ -245,9 +246,23 @@ public class AccountState {
      * @return The state root hash as a hex string.
      */
     public String calculateStateRoot() {
-        // Includes Account map, SSI, and Lifecycle roots in the future
-        // For now, it returns the MPT root of the Accounts
-        return Crypto.bytesToHex(mpt.getRootHash());
+        try {
+            ObjectMapper objectMapper = new ObjectMapper();
+            byte[] accountRoot = mpt.getRootHash();                           // 32 bytes
+            byte[] ssiBytes    = objectMapper.writeValueAsBytes(ssiManager.toJSON());
+            byte[] ssiHash     = Crypto.hash(ssiBytes);                       // 32 bytes
+            byte[] lcBytes     = objectMapper.writeValueAsBytes(lifecycleManager.toJSON());
+            byte[] lcHash      = Crypto.hash(lcBytes);                        // 32 bytes
+            
+            byte[] combined    = new byte[96];
+            System.arraycopy(accountRoot, 0, combined,  0, 32);
+            System.arraycopy(ssiHash,     0, combined, 32, 32);
+            System.arraycopy(lcHash,      0, combined, 64, 32);
+            
+            return Crypto.bytesToHex(Crypto.hash(combined));
+        } catch (Exception e) {
+            throw new RuntimeException("State root calculation failed", e);
+        }
     }
 
     /**

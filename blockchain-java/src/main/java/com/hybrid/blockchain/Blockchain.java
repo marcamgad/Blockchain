@@ -249,7 +249,7 @@ public class Blockchain {
     }
 
     // Add transaction to pending pool
-    public void addTransaction(Transaction tx) throws Exception {
+    public boolean addTransaction(Transaction tx) throws Exception {
         lock.writeLock().lock();
         try {
             if (tx.getTo() == null && tx.getType() != Transaction.Type.CONTRACT)
@@ -266,6 +266,7 @@ public class Blockchain {
                     throw new Exception("Insufficient funds");
             }
             mempool.add(tx);
+            return true;
         } finally {
             lock.writeLock().unlock();
         }
@@ -459,12 +460,28 @@ public class Blockchain {
         return chain.size() - 1;
     }
 
+    public int getDifficulty() {
+        return difficulty;
+    }
+
+    public void recalculateStateRoot() {
+        Block latest = getLatestBlock();
+        if (latest != null) {
+            latest.setStateRoot(state.calculateStateRoot());
+        }
+    }
+
     public List<Block> getChain() {
         return chain;
     }
 
     public Storage getStorage() {
         return storage;
+    }
+
+    @SuppressWarnings("unchecked")
+    public <T extends Consensus> T getConsensus() {
+        return (T) consensus;
     }
 
     protected void pruneBlock(Block block) {

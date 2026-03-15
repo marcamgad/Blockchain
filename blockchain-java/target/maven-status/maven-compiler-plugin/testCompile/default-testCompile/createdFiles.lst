@@ -1,3 +1,4 @@
+com/hybrid/blockchain/security/SecurityPentest.class
 com/hybrid/blockchain/MTLSSecureNetworkTest.class
 com/hybrid/blockchain/PrivateDataCollectionTest.class
 com/hybrid/blockchain/MultiSigManagerTest.class

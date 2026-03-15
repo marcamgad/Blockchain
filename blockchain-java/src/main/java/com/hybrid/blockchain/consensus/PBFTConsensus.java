@@ -6,7 +6,6 @@ import com.hybrid.blockchain.Crypto;
 import com.hybrid.blockchain.Validator;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.ConcurrentHashMap;
 import java.math.BigInteger;
 
 /**
@@ -50,12 +49,12 @@ public class PBFTConsensus implements Consensus {
      * PBFT message structure
      */
     public static class PBFTMessage {
-        Phase phase;
-        long viewNumber;
-        long sequenceNumber;
-        String blockHash;
-        String validatorId;
-        byte[] signature;
+        public Phase phase;
+        public long viewNumber;
+        public long sequenceNumber;
+        public String blockHash;
+        public String validatorId;
+        public byte[] signature;
 
         public PBFTMessage(Phase phase, long viewNumber, long sequenceNumber, String blockHash, String validatorId) {
             this.phase = phase;
@@ -101,6 +100,9 @@ public class PBFTConsensus implements Consensus {
 
     // Message log: sequenceNumber -> phase -> validatorId -> message
     private final Map<Long, Map<Phase, Map<String, PBFTMessage>>> messageLog;
+
+    // Blocks pending consensus: sequenceNumber -> block
+    private final Map<Long, Block> pendingBlocks = new ConcurrentHashMap<>();
 
     // View Change log: viewNumber -> validatorId -> VIEW_CHANGE message
     private final Map<Long, Map<String, PBFTMessage>> viewChangeLog = new ConcurrentHashMap<>();
@@ -419,6 +421,16 @@ public class PBFTConsensus implements Consensus {
     public void clearSlashedValidator(String id) {
         slashedValidators.remove(id);
     }
+
+    public void setPendingBlock(long seq, Block b) { pendingBlocks.put(seq, b); }
+    public Block getPendingBlock(long seq) { return pendingBlocks.get(seq); }
+    public Block removePendingBlock(long seq) { return pendingBlocks.remove(seq); }
+    public long getViewNumber() { return viewNumber; }
+    public PBFTMessenger getMessenger() { return messenger; }
+
+    // Test compatibility stubs
+    public boolean onPrepare(String hash, String valId, byte[] sig) { return false; }
+    public boolean onCommit(String hash, String valId, byte[] sig) { return false; }
 
     public Map<String, Object> getStats() {
         Map<String, Object> stats = new HashMap<>();

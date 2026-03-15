@@ -163,6 +163,8 @@ public class Interpreter {
         public HardwareManager hardware;
         public String currentBlockHash;
 
+        public BlockchainContext() {}
+
         public BlockchainContext(long timestamp, int blockHeight, String caller, String contractAddress, long value,
                 AccountState state, HardwareManager hardware, String currentBlockHash) {
             this.timestamp = timestamp;
