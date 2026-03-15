@@ -135,6 +135,11 @@ PeerNode node = new PeerNode(port, new Blockchain(storage, mempool, pbft), pbft)
 node.start();
 ```
 
+### Security & Resilience Testing Toolkit
+For local adversarial validation, swarm simulation, chaos testing, and hardening guidance, see:
+
+- `SECURITY_TESTING_TOOLKIT.md`
+
 ---
 
 ## Contributing

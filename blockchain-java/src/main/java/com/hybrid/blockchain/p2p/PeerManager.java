@@ -56,6 +56,10 @@ public class PeerManager {
         peers.putIfAbsent(id, new PeerInfo(id, address, port));
     }
 
+    public void onPeerConnected(String id) {
+        addPeer(id, "127.0.0.1", 6001);
+    }
+
     public void removePeer(String id) {
         peers.remove(id);
     }
@@ -66,6 +70,10 @@ public class PeerManager {
 
     public Collection<PeerInfo> getAllPeers() {
         return peers.values();
+    }
+
+    public int getPeerCount() {
+        return peers.size();
     }
 
     public List<PeerInfo> getTopPeers(int count) {

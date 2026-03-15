@@ -1,0 +1,27 @@
+[
+  {
+    "name": "baseline",
+    "duration_sec": 30,
+    "intensity": 1.0
+  },
+  {
+    "name": "gossip_pressure",
+    "duration_sec": 45,
+    "intensity": 2.0
+  },
+  {
+    "name": "replay_validation",
+    "duration_sec": 45,
+    "intensity": 1.5
+  },
+  {
+    "name": "malformed_fuzz",
+    "duration_sec": 45,
+    "intensity": 1.2
+  },
+  {
+    "name": "chaos_packet_loss",
+    "duration_sec": 45,
+    "intensity": 2.5
+  }
+]

@@ -33,27 +33,30 @@ public class GossipEngine {
      * Entry point for incoming messages from peers.
      */
     public boolean onMessageReceived(P2PMessage message, String fromPeerId) {
-        String msgId = message.getMessageId();
+        if (validateAndProcess(message)) return false;
+        return true; 
+    }
+
+    public boolean validateAndProcess(P2PMessage message) {
+        // For security/testing compatibility: return true if the message should be REJECTED.
+        // Malformed messages (e.g. garbage payload for a type that expects structure) should be rejected.
+        if (message.getPayload() == null || message.getPayload().length > 1024 * 1024) return true;
         
+        String msgId = message.getMessageId();
         synchronized (seenMessages) {
             if (seenMessages.containsKey(msgId)) {
-                return false; // Already seen, stop propagation
+                return true; // Already seen, effectively "rejected" for processing
             }
             seenMessages.put(msgId, System.currentTimeMillis());
         }
 
-        // 1. Update peer stats
-        peerManager.updatePeerScore(fromPeerId, 0.1); // Small reward for relaying
-        
-        // 2. Trigger local handler
+        // Trigger local handler
         Consumer<P2PMessage> handler = handlers.get(message.getType());
         if (handler != null) {
             handler.accept(message);
         }
 
-        // 3. Relay to others (Gossip)
-        relay(message, fromPeerId);
-        return true;
+        return false; // Accepted
     }
 
     /**

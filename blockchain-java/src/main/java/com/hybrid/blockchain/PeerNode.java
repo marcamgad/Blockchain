@@ -14,6 +14,15 @@ import com.hybrid.blockchain.consensus.PBFTConsensus;
 import com.hybrid.blockchain.p2p.GossipEngine;
 import com.hybrid.blockchain.p2p.P2PMessage;
 import com.hybrid.blockchain.p2p.PeerManager;
+import java.security.cert.X509Certificate;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.bouncycastle.jce.spec.ECParameterSpec;
+import org.bouncycastle.jce.spec.ECPrivateKeySpec;
+import org.bouncycastle.jce.spec.ECPublicKeySpec;
+import org.bouncycastle.asn1.x9.X9ECParameters;
+import org.bouncycastle.crypto.ec.CustomNamedCurves;
 
 public class PeerNode implements PBFTConsensus.PBFTMessenger {
     private final int port;
@@ -31,6 +40,8 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
     private final Map<String, DataOutputStream> peerConnections = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, Integer> ipConnectionCounts = new java.util.concurrent.ConcurrentHashMap<>();
     private static final int MAX_CONN_PER_IP = 3;
+    private final Map<Long, AtomicBoolean> appliedSequences = new ConcurrentHashMap<>();
+    private final Map<Long, AtomicBoolean> sentCommits = new ConcurrentHashMap<>();
 
     public enum MsgType {
         HELLO, CHALLENGE, HANDSHAKE_OK, TRANSACTION, BLOCK, PEER_LIST,
@@ -40,10 +51,14 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
     private static final int PROTOCOL_VERSION = 1;
 
     public PeerNode(int port, Blockchain blockchain, Consensus consensus) {
-        this(port, blockchain, consensus, Config.getNodePrivateKey());
+        this(port, blockchain, consensus, Config.getNodePrivateKey(), new ArrayList<>());
     }
 
     public PeerNode(int port, Blockchain blockchain, Consensus consensus, BigInteger privateKey) {
+        this(port, blockchain, consensus, privateKey, new ArrayList<>());
+    }
+
+    public PeerNode(int port, Blockchain blockchain, Consensus consensus, BigInteger privateKey, List<X509Certificate> trustedCerts) {
         this.port = port;
         this.executor = Executors.newCachedThreadPool();
         this.serverSocket = null;
@@ -59,13 +74,19 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
         initializeGossipHandlers();
 
         try {
-            // Generate temporary KeyPair for TLS (EC)
-            KeyPairGenerator kpg = KeyPairGenerator.getInstance("EC");
-            kpg.initialize(256);
-            KeyPair tlsKeyPair = kpg.generateKeyPair();
-            this.sslContext = com.hybrid.blockchain.security.SSLUtils.createSSLContext(tlsKeyPair, localAddress);
+            // Use real blockchain private key for TLS identity
+            X9ECParameters ecParams = CustomNamedCurves.getByName("secp256k1");
+            ECParameterSpec spec = new ECParameterSpec(ecParams.getCurve(), ecParams.getG(), ecParams.getN(), ecParams.getH());
+            
+            KeyFactory kf = KeyFactory.getInstance("EC", "BC");
+            PrivateKey ecPrivateKey = kf.generatePrivate(new ECPrivateKeySpec(privateKey, spec));
+            PublicKey ecPublicKey = kf.generatePublic(new ECPublicKeySpec(ecParams.getG().multiply(privateKey), spec));
+            
+            KeyPair tlsKeyPair = new KeyPair(ecPublicKey, ecPrivateKey);
+            this.sslContext = com.hybrid.blockchain.security.SSLUtils.createSSLContext(tlsKeyPair, localAddress, trustedCerts);
         } catch (Exception e) {
             System.err.println("[P2P] Failed to initialize SSLContext: " + e.getMessage());
+            if (Config.DEBUG) e.printStackTrace();
         }
     }
 
@@ -91,7 +112,45 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
         gossipEngine.registerHandler(P2PMessage.Type.BLOCK, msg -> {
             try {
                 Block block = blockchain.deserializeBlock(msg.getPayload());
-                blockchain.applyBlock(block);
+                if (consensus instanceof PBFTConsensus) {
+                    PBFTConsensus pbft = (PBFTConsensus) consensus;
+                    if (pbft.isValidator(localAddress)) {
+                        // Validate basic structure
+                        if (block.getHash() == null || block.getValidatorId() == null || block.getSignature() == null) return;
+                        if (!block.getPrevHash().equals(blockchain.getLatestBlock().getHash())) return;
+
+                        // Verify leader signature
+                        String leader = pbft.getCurrentLeader();
+                        if (!block.getValidatorId().equals(leader)) return;
+                        
+                        byte[] leaderPubKey = pbft.getValidators().stream()
+                                .filter(v -> v.getId().equals(leader))
+                                .findFirst().map(Validator::getPublicKey).orElse(null);
+                        
+                        if (leaderPubKey == null || !Crypto.verify(Crypto.hash(block.serializeCanonical()), block.getSignature(), leaderPubKey)) {
+                            return;
+                        }
+
+                        long seq = block.getIndex();
+                        String hash = block.getHash();
+                        long view = pbft.getViewNumber();
+
+                        pbft.setPendingBlock(seq, block);
+
+                        // Generate and send PREPARE
+                        PBFTConsensus.PBFTMessage prepMsg = new PBFTConsensus.PBFTMessage(
+                                PBFTConsensus.Phase.PREPARE, view, seq, hash, localAddress);
+                        prepMsg.sign(privateKey);
+                        pbft.addPrepareVote(seq, hash, localAddress, prepMsg.signature);
+                        pbft.getMessenger().broadcastPrepare(seq, hash, localAddress, prepMsg.signature);
+
+                        if (pbft.hasQuorum(seq, PBFTConsensus.Phase.PREPARE)) {
+                            sendCommit(pbft, seq, hash, view);
+                        }
+                    }
+                } else {
+                    blockchain.applyBlock(block);
+                }
             } catch (Exception e) {
                 peerManager.updatePeerScore(msg.getSenderId(), -1.0);
             }
@@ -336,15 +395,20 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                 String valId = (String) data.get("validatorId");
                 byte[] sig = HexUtils.decode((String) data.get("signature"));
                 String msgSubtype = (String) data.get("subtype");
+                long seq = ((Number) data.get("sequenceNumber")).longValue();
+                String hash = (String) data.get("blockHash");
+                long view = pbft.getViewNumber();
 
                 if ("PREPARE".equals(msgSubtype)) {
-                    long seq = ((Number) data.get("sequenceNumber")).longValue();
-                    String hash = (String) data.get("blockHash");
                     pbft.addPrepareVote(seq, hash, valId, sig);
+                    if (pbft.hasQuorum(seq, PBFTConsensus.Phase.PREPARE)) {
+                        sendCommit(pbft, seq, hash, view);
+                    }
                 } else if ("COMMIT".equals(msgSubtype)) {
-                    long seq = ((Number) data.get("sequenceNumber")).longValue();
-                    String hash = (String) data.get("blockHash");
                     pbft.addCommitVote(seq, hash, valId, sig);
+                    if (pbft.hasQuorum(seq, PBFTConsensus.Phase.COMMIT)) {
+                        applyBlockAtSequence(pbft, seq);
+                    }
                 } else if ("VIEW_CHANGE".equals(msgSubtype)) {
                     long newView = ((Number) data.get("newView")).longValue();
                     long lastSeq = ((Number) data.get("lastSeq")).longValue();
@@ -353,6 +417,33 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
             }
         } catch (Exception e) {
             System.err.println("[P2P] Error processing consensus message: " + e.getMessage());
+        }
+    }
+
+    private void sendCommit(PBFTConsensus pbft, long seq, String hash, long view) {
+        if (!pbft.isValidator(localAddress)) return;
+        if (sentCommits.computeIfAbsent(seq, k -> new AtomicBoolean(false)).compareAndSet(false, true)) {
+            PBFTConsensus.PBFTMessage commitMsg = new PBFTConsensus.PBFTMessage(
+                    PBFTConsensus.Phase.COMMIT, view, seq, hash, localAddress);
+            commitMsg.sign(privateKey);
+            pbft.addCommitVote(seq, hash, localAddress, commitMsg.signature);
+            pbft.getMessenger().broadcastCommit(seq, hash, localAddress, commitMsg.signature);
+        }
+    }
+
+    private void applyBlockAtSequence(PBFTConsensus pbft, long seq) {
+        if (appliedSequences.computeIfAbsent(seq, k -> new AtomicBoolean(false)).compareAndSet(false, true)) {
+            Block block = pbft.removePendingBlock(seq);
+            if (block != null) {
+                try {
+                    blockchain.applyBlock(block);
+                    System.out.println("[CONSENSUS] Applied block " + seq + " hash: " + block.getHash());
+                } catch (Exception e) {
+                    System.err.println("[CONSENSUS] Failed to apply block " + seq + ": " + e.getMessage());
+                    // Allow retry on error if needed, but AtomicBoolean prevents it currently.
+                    // For now, failure to apply is fatal for this block sequence.
+                }
+            }
         }
     }
 
@@ -455,5 +546,9 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
 
     public PeerManager getPeerManager() {
         return peerManager;
+    }
+
+    public GossipEngine getGossipEngine() {
+        return gossipEngine;
     }
 }

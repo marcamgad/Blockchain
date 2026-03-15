@@ -7,7 +7,6 @@ com/hybrid/blockchain/lifecycle/DeviceLifecycleManager$DeviceRecord.class
 com/hybrid/blockchain/Consensus.class
 com/hybrid/blockchain/identity/SSIManager.class
 com/hybrid/blockchain/Transaction$Builder.class
-com/hybrid/blockchain/security/SSLUtils$1.class
 com/hybrid/blockchain/privacy/ZKProofSystem$EqualityProof.class
 com/hybrid/blockchain/api/IoTRestAPI$ContractRequest.class
 com/hybrid/blockchain/HardwareManager.class
@@ -46,6 +45,7 @@ com/hybrid/blockchain/Difficulty.class
 com/hybrid/blockchain/PrunedBlockchain.class
 com/hybrid/blockchain/DeferredAction.class
 com/hybrid/blockchain/monitoring/BlockchainMonitor$Dashboard.class
+com/hybrid/blockchain/tools/KeygenTool.class
 com/hybrid/blockchain/consensus/PBFTConsensus$PBFTMessage.class
 com/hybrid/blockchain/Interpreter.class
 com/hybrid/blockchain/ContractState.class

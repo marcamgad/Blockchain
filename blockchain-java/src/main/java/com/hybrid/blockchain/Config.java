@@ -35,7 +35,19 @@ public final class Config {
 
     public static final long MAX_TIMESTAMP_DRIFT = 300000; // 5 min
     public static final long MAX_NONCE_ATTEMPTS = Long.MAX_VALUE / 2;
-    public static final byte[] STORAGE_AES_KEY = getBytesEnv("STORAGE_AES_KEY", "1234567890abcdef".getBytes());
+    public static final byte[] STORAGE_AES_KEY;
+    static {
+        String keyEnv = System.getenv("STORAGE_AES_KEY");
+        if (keyEnv != null && !keyEnv.isEmpty()) {
+            STORAGE_AES_KEY = HexUtils.decode(keyEnv.trim());
+        } else {
+            if (DEBUG) {
+                STORAGE_AES_KEY = HexUtils.decode("00112233445566778899aabbccddeeff");
+            } else {
+                throw new RuntimeException("STORAGE_AES_KEY must be set in production mode!");
+            }
+        }
+    }
 
     private static String getEnv(String name, String def) {
         String val = System.getProperty(name);

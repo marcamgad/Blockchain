@@ -11,6 +11,7 @@
 /home/youssef/Blockchain/Blockchain/blockchain-java/src/test/java/com/hybrid/blockchain/AuditLoggerTest.java
 /home/youssef/Blockchain/Blockchain/blockchain-java/src/test/java/com/hybrid/blockchain/MerklePatriciaTrieTest.java
 /home/youssef/Blockchain/Blockchain/blockchain-java/src/test/java/com/hybrid/blockchain/TokenomicsTest.java
+/home/youssef/Blockchain/Blockchain/blockchain-java/src/test/java/com/hybrid/blockchain/SecurityPentest.java
 /home/youssef/Blockchain/Blockchain/blockchain-java/src/test/java/com/hybrid/blockchain/SimpleTransactionTest.java
 /home/youssef/Blockchain/Blockchain/blockchain-java/src/test/java/com/hybrid/blockchain/SimpleMempoolTest.java
 /home/youssef/Blockchain/Blockchain/blockchain-java/src/test/java/com/hybrid/blockchain/IoTInterpreterTest.java

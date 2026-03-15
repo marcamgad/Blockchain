@@ -33,9 +33,9 @@ public final class Transaction {
     private final List<UTXOInput> inputs;
     private final List<UTXOOutput> outputs;
 
-    private final byte[] pubKey;
-    private final byte[] signature;
-    private final String txid;
+    private byte[] pubKey;
+    private byte[] signature;
+    private String txid;
 
     @JsonCreator
     public Transaction(
@@ -198,6 +198,12 @@ public final class Transaction {
         byte[] out = new byte[buf.remaining()];
         buf.get(out);
         return out;
+    }
+
+    public void sign(BigInteger privateKey) {
+        this.pubKey = Crypto.derivePublicKey(privateKey);
+        this.signature = Crypto.sign(signingPayload(), privateKey);
+        this.txid = Crypto.bytesToHex(Crypto.hash(serializeCanonical()));
     }
 
     private static void putString(ByteBuffer buf, String s) {

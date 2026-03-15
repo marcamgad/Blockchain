@@ -13,12 +13,14 @@ import java.math.BigInteger;
 import java.security.*;
 import java.security.cert.X509Certificate;
 import java.util.Date;
+import java.util.List;
 
 public class SSLUtils {
 
-    public static SSLContext createSSLContext(KeyPair keyPair, String identity) throws Exception {
+    public static SSLContext createSSLContext(KeyPair keyPair, String identity, List<X509Certificate> trustedCerts) throws Exception {
         X509Certificate cert = generateSelfSignedCertificate(keyPair, identity);
 
+        // Create KeyStore for our own certificate and private key
         KeyStore keyStore = KeyStore.getInstance("PKCS12");
         keyStore.load(null, null);
         keyStore.setKeyEntry("main", keyPair.getPrivate(), "password".toCharArray(), new java.security.cert.Certificate[]{cert});
@@ -26,16 +28,25 @@ public class SSLUtils {
         KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
         kmf.init(keyStore, "password".toCharArray());
 
-        TrustManager[] trustAllCerts = new TrustManager[]{
-            new X509TrustManager() {
-                public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
-                public void checkClientTrusted(X509Certificate[] certs, String authType) { }
-                public void checkServerTrusted(X509Certificate[] certs, String authType) { }
+        // Create TrustStore for trusted peer certificates
+        KeyStore trustStore = KeyStore.getInstance("JKS");
+        trustStore.load(null, null);
+        
+        // Add all provided trusted certificates
+        if (trustedCerts != null) {
+            for (int i = 0; i < trustedCerts.size(); i++) {
+                trustStore.setCertificateEntry("peer-" + i, trustedCerts.get(i));
             }
-        };
+        }
+        
+        // Always trust our own certificate
+        trustStore.setCertificateEntry("self", cert);
+
+        TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        tmf.init(trustStore);
 
         SSLContext sslContext = SSLContext.getInstance("TLSv1.3");
-        sslContext.init(kmf.getKeyManagers(), trustAllCerts, new SecureRandom());
+        sslContext.init(kmf.getKeyManagers(), tmf.getTrustManagers(), new SecureRandom());
 
         return sslContext;
     }

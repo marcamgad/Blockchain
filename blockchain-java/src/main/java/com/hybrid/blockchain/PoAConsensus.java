@@ -51,11 +51,17 @@ public class PoAConsensus implements Consensus {
     }
     @Override
     public boolean validateBlock(Block block, List<Block> chain) {
-        try {
-            return verifyBlock(block, null); // Simplified for now
-        } catch (Exception e) {
-            return false;
-        }
+        String vid = block.getValidatorId();
+        if (vid == null) return false;
+        return validators.stream().filter(v -> v.getId().equals(vid)).findFirst()
+            .map(v -> {
+                try {
+                    return verifyBlock(block, v);
+                } catch (Exception e) {
+                    return false;
+                }
+            })
+            .orElse(false);
     }
 
     @Override
