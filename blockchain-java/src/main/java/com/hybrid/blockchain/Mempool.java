@@ -1,15 +1,22 @@
 package com.hybrid.blockchain;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
+/**
+ * Thread-safety contract:
+ * - Internal transaction storage uses a ConcurrentHashMap for safe concurrent access.
+ * - Compound invariants (replacement policy/full-pool eviction) are enforced by callers
+ *   using higher-level locks (e.g., Blockchain write lock) to keep decisions atomic.
+ */
 public class Mempool {
     private final int maxSize;
     private final Map<String, Transaction> map;
 
     public Mempool(int maxSize) {
         this.maxSize = maxSize > 0 ? maxSize : 1000;
-        this.map = new HashMap<>(); // type inferred, safe
+        this.map = new ConcurrentHashMap<>();
     }
 
     public Mempool() {

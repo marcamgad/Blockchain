@@ -11,6 +11,7 @@ com/hybrid/blockchain/privacy/ZKProofSystem$EqualityProof.class
 com/hybrid/blockchain/api/IoTRestAPI$ContractRequest.class
 com/hybrid/blockchain/HardwareManager.class
 com/hybrid/blockchain/Mempool.class
+com/hybrid/blockchain/identity/SSIManager$2.class
 com/hybrid/blockchain/MerklePatriciaTrie$MockHashNode.class
 com/hybrid/blockchain/MerklePatriciaTrie$Node.class
 com/hybrid/blockchain/monitoring/BlockchainMonitor$PerformanceMetrics.class

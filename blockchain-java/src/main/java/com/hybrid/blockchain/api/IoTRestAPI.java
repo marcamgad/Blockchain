@@ -12,10 +12,17 @@ import com.hybrid.blockchain.PoAConsensus;
 import com.hybrid.blockchain.Transaction;
 import com.hybrid.blockchain.Validator;
 import com.hybrid.blockchain.consensus.PBFTConsensus;
+import com.hybrid.blockchain.security.RateLimiter;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.http.ResponseEntity;
+import org.springframework.context.annotation.Bean;
+import org.springframework.web.servlet.HandlerInterceptor;
+import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 
 import jakarta.annotation.PostConstruct;
 import java.util.*;
@@ -40,6 +47,8 @@ public class IoTRestAPI {
     private JwtManager jwtManager;
     private IoTDeviceManager deviceManager;
     private MQTTAdapter mqttAdapter;
+    private final RateLimiter apiRateLimiter = RateLimiter.Presets.apiLimiter();
+    private final RateLimiter transactionSubmitLimiter = new RateLimiter(40, 40, 60000);
 
     private final ReentrantReadWriteLock blockchainLock = new ReentrantReadWriteLock();
 
@@ -55,6 +64,37 @@ public class IoTRestAPI {
 
     public static void main(String[] args) {
         SpringApplication.run(IoTRestAPI.class, args);
+    }
+
+    @Bean
+    public HandlerInterceptor apiRateLimitInterceptor() {
+        return new HandlerInterceptor() {
+            @Override
+            public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
+                String forwardedFor = request.getHeader("X-Forwarded-For");
+                String ip = (forwardedFor != null && !forwardedFor.isBlank())
+                        ? forwardedFor.split(",")[0].trim()
+                        : request.getRemoteAddr();
+
+                if (!apiRateLimiter.allowRequest(ip)) {
+                    response.setStatus(429);
+                    response.setContentType("application/json");
+                    response.getWriter().write("{\"error\":\"Rate limit exceeded\"}");
+                    return false;
+                }
+                return true;
+            }
+        };
+    }
+
+    @Bean
+    public WebMvcConfigurer webMvcConfigurer(HandlerInterceptor apiRateLimitInterceptor) {
+        return new WebMvcConfigurer() {
+            @Override
+            public void addInterceptors(InterceptorRegistry registry) {
+                registry.addInterceptor(apiRateLimitInterceptor).addPathPatterns("/api/v1/**");
+            }
+        };
     }
 
     @PostConstruct
@@ -111,9 +151,19 @@ public class IoTRestAPI {
     @GetMapping("/health")
     public ResponseEntity<?> healthCheck() {
         return ResponseEntity.ok(Map.of(
-                "status", "healthy",
-                "nodeId", Config.NODE_ID,
-                "timestamp", System.currentTimeMillis()));
+                "status", "ok",
+                "height", blockchain != null ? blockchain.getHeight() : -1,
+                "peers", sharedPeerNode != null ? sharedPeerNode.getPeers().size() : 0));
+    }
+
+    @GetMapping("/chain/height")
+    public ResponseEntity<?> chainHeight() {
+        blockchainLock.readLock().lock();
+        try {
+            return ResponseEntity.ok(Map.of("height", blockchain.getHeight()));
+        } finally {
+            blockchainLock.readLock().unlock();
+        }
     }
 
     @GetMapping("/ready")
@@ -141,7 +191,7 @@ public class IoTRestAPI {
     public ResponseEntity<?> createAccount() throws Exception {
         // Production: Use BouncyCastle to ensure secp256k1
         org.bouncycastle.asn1.x9.X9ECParameters ecParams = org.bouncycastle.crypto.ec.CustomNamedCurves
-                .getByName("secp256k1");
+            .getByName(Config.EC_CURVE);
         org.bouncycastle.crypto.params.ECDomainParameters domainParams = new org.bouncycastle.crypto.params.ECDomainParameters(
                 ecParams.getCurve(), ecParams.getG(), ecParams.getN(), ecParams.getH());
         org.bouncycastle.crypto.generators.ECKeyPairGenerator generator = new org.bouncycastle.crypto.generators.ECKeyPairGenerator();
@@ -197,14 +247,24 @@ public class IoTRestAPI {
 
     @PostMapping("/transactions/submit")
     public ResponseEntity<?> submitTransaction(@RequestBody SubmitTransactionRequest payload,
-            @RequestHeader("Authorization") String auth) throws Exception {
+            @RequestHeader(value = "Authorization", required = false) String auth) throws Exception {
 
-        String token = auth.replace("Bearer ", "");
-        if (!verifyToken(token, payload.getFrom()))
-            return unauthorized();
+        if (payload.getFrom() != null) {
+            if (auth == null || auth.isBlank()) {
+                return unauthorized();
+            }
+            String token = auth.replace("Bearer ", "");
+            if (!verifyToken(token, payload.getFrom())) {
+                return unauthorized();
+            }
+        }
 
         blockchainLock.writeLock().lock();
         try {
+            if (payload.getFrom() != null && !transactionSubmitLimiter.allowRequest(payload.getFrom())) {
+                return ResponseEntity.status(429).body(Map.of("error", "Rate limit exceeded"));
+            }
+
             long nonce = blockchain.getState().getNonce(payload.getFrom()) + 1;
 
             Transaction tx = new Transaction.Builder()
@@ -218,8 +278,14 @@ public class IoTRestAPI {
                     .data(HexUtils.decode(payload.getData() == null ? "" : payload.getData()))
                     .build();
 
-            blockchain.addTransaction(tx);
-            mempool.add(tx);
+            try {
+                blockchain.addTransaction(tx);
+            } catch (Exception e) {
+                if (e.getMessage() != null && e.getMessage().toLowerCase().contains("rate limit")) {
+                    return ResponseEntity.status(429).body(Map.of("error", e.getMessage()));
+                }
+                throw e;
+            }
 
             log.info("Transaction submitted: {} from {}", tx.getTxid(), tx.getFrom());
 
@@ -350,6 +416,7 @@ public class IoTRestAPI {
     public ResponseEntity<?> getNetworkStatus() {
         blockchainLock.readLock().lock();
         try {
+            List<Validator> validators = poa != null ? poa.getValidators() : Collections.emptyList();
             return ResponseEntity.ok(Map.of(
                     "nodeId", Config.NODE_ID,
                     "nodeName", Config.NODE_NAME,
@@ -358,8 +425,8 @@ public class IoTRestAPI {
                     "chainHeight", blockchain.getHeight(),
                     "networkId", Config.NETWORK_ID,
                     "protocolVersion", Config.PROTOCOL_VERSION,
-                    "validatorCount", poa.getValidators().size(),
-                    "validators", poa.getValidators().stream()
+                    "validatorCount", validators.size(),
+                    "validators", validators.stream()
                             .map(v -> Map.of("id", v.getId()))
                             .collect(Collectors.toList())));
         } finally {
@@ -369,9 +436,29 @@ public class IoTRestAPI {
 
     @GetMapping("/network/peers")
     public ResponseEntity<?> getPeers() {
-        return ResponseEntity.ok(poa.getValidators().stream()
+        List<Validator> validators = poa != null ? poa.getValidators() : Collections.emptyList();
+        return ResponseEntity.ok(validators.stream()
                 .map(Validator::getId)
                 .collect(Collectors.toList()));
+    }
+
+    @GetMapping("/iot/devices/{deviceId}")
+    public ResponseEntity<?> getIoTDevice(@PathVariable String deviceId) {
+        blockchainLock.readLock().lock();
+        try {
+            var record = blockchain.getState().getLifecycleManager().getDeviceRecord(deviceId);
+            return ResponseEntity.ok(Map.of(
+                    "deviceId", record.getDeviceId(),
+                    "status", record.getStatus().name(),
+                    "owner", record.getOwner() == null ? "" : record.getOwner(),
+                    "manufacturer", record.getManufacturer(),
+                    "model", record.getModel(),
+                    "firmwareVersion", record.getFirmwareVersion() == null ? "" : record.getFirmwareVersion()));
+        } catch (Exception e) {
+            return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
+        } finally {
+            blockchainLock.readLock().unlock();
+        }
     }
 
     @PostMapping("/contracts/deploy")

@@ -249,6 +249,38 @@ public class PrivateDataCollection {
         return collection;
     }
 
+    public static PrivateDataCollection fromState(
+            String collectionId,
+            List<String> authorizedMembers,
+            byte[] keyBytes,
+            Map<String, byte[]> privateData,
+            Map<String, byte[]> publicHashes) {
+        PrivateDataCollection collection = fromKey(collectionId, authorizedMembers, keyBytes);
+        collection.privateData.putAll(privateData);
+        collection.publicHashes.putAll(publicHashes);
+        return collection;
+    }
+
+    public Map<String, String> exportPrivateDataBase64() {
+        Map<String, String> exported = new HashMap<>();
+        for (Map.Entry<String, byte[]> entry : privateData.entrySet()) {
+            exported.put(entry.getKey(), Base64.getEncoder().encodeToString(entry.getValue()));
+        }
+        return exported;
+    }
+
+    public Map<String, String> exportPublicHashesBase64() {
+        Map<String, String> exported = new HashMap<>();
+        for (Map.Entry<String, byte[]> entry : publicHashes.entrySet()) {
+            exported.put(entry.getKey(), Base64.getEncoder().encodeToString(entry.getValue()));
+        }
+        return exported;
+    }
+
+    public byte[] exportCollectionKeyRaw() {
+        return collectionKey.getEncoded();
+    }
+
     /**
      * Get statistics
      */

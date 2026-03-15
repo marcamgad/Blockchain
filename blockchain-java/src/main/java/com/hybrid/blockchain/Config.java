@@ -17,7 +17,7 @@ public final class Config {
     public static final int MAX_PEERS = 50;
     public static final String HASH_ALGO = "SHA-256";
     public static final String KEY_ALGO = "EC";
-    public static final String EC_CURVE = "secp256r1";
+    public static final String EC_CURVE = "secp256k1";
     public static final boolean PRETTY_JSON = true;
     public static final boolean STRICT_JSON = true;
     public static final boolean ENABLE_SMART_CONTRACTS = true;
@@ -28,7 +28,7 @@ public final class Config {
     public static final boolean IS_SEED = getBooleanEnv("IS_SEED", false);
     public static final String SEED_PEER = getEnv("SEED_PEER", null);
     public static final String STORAGE_PATH = getEnv("STORAGE_PATH", "./data");
-    public static boolean DEBUG = getBooleanEnv("DEBUG", false);
+    private static final boolean DEBUG = getBooleanEnv("DEBUG", false);
     public static final boolean PRINT_STATS = true;
     public static final int NETWORK_ID = getIntEnv("NETWORK_ID", 101);
     public static final String PROTOCOL_VERSION = getEnv("PROTOCOL_VERSION", "1.0.0");
@@ -37,7 +37,10 @@ public final class Config {
     public static final long MAX_NONCE_ATTEMPTS = Long.MAX_VALUE / 2;
     public static final byte[] STORAGE_AES_KEY;
     static {
-        String keyEnv = System.getenv("STORAGE_AES_KEY");
+        String keyEnv = System.getProperty("STORAGE_AES_KEY");
+        if (keyEnv == null || keyEnv.isEmpty()) {
+            keyEnv = System.getenv("STORAGE_AES_KEY");
+        }
         if (keyEnv != null && !keyEnv.isEmpty()) {
             STORAGE_AES_KEY = HexUtils.decode(keyEnv.trim());
         } else {
@@ -86,6 +89,10 @@ public final class Config {
             throw new RuntimeException("NODE_PRIVATE_KEY environment variable MUST be set for secure P2P.");
         }
         return new java.math.BigInteger(keyHex, 16);
+    }
+
+    public static boolean isDebug() {
+        return DEBUG;
     }
 
     private Config() {

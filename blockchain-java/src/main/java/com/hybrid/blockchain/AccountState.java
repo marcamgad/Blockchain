@@ -10,7 +10,6 @@ import java.util.Map;
 import java.util.Collections;
 import java.util.List;
 import java.util.ArrayList;
-import java.util.Collections;
 
 public class AccountState {
     private final Map<String, Account> state;
@@ -92,6 +91,12 @@ public class AccountState {
             accountState.lifecycleManager.restore(lifecycle);
         }
 
+        // Load Private Data Manager state
+        if (raw.containsKey("privateData")) {
+            PrivateDataManager privateData = PrivateDataManager.fromMap((Map<String, Object>) raw.get("privateData"));
+            accountState.privateDataManager.restore(privateData);
+        }
+
         return accountState;
     }
 
@@ -135,6 +140,9 @@ public class AccountState {
 
         // Serialize Device Lifecycle Manager
         json.put("lifecycle", lifecycleManager.toJSON());
+
+        // Serialize Private Data Manager
+        json.put("privateData", privateDataManager.toJSON());
 
         return json;
     }

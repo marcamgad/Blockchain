@@ -88,7 +88,7 @@ public class Interpreter {
                     break;
 
                 case CALLER:
-                    stack.push(0L); // Placeholder
+                    stack.push(callerToLong(context.caller));
                     break;
 
                 default:
@@ -151,6 +151,14 @@ public class Interpreter {
         ByteBuffer buffer = ByteBuffer.wrap(bytecode, pc, 8).order(ByteOrder.BIG_ENDIAN);
         pc += 8;
         return buffer.getLong();
+    }
+
+    private long callerToLong(String callerAddress) {
+        if (callerAddress == null || callerAddress.isEmpty()) {
+            return 0L;
+        }
+        byte[] callerHash = Crypto.hash(callerAddress.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        return ByteBuffer.wrap(callerHash, 0, Long.BYTES).order(ByteOrder.BIG_ENDIAN).getLong();
     }
 
     public static class BlockchainContext {

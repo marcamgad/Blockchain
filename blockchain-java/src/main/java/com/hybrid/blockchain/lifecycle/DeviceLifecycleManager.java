@@ -516,6 +516,11 @@ public class DeviceLifecycleManager {
             }
         }
 
+        Object heightObj = json.get("currentBlockHeight");
+        if (heightObj instanceof Number) {
+            manager.currentBlockHeight = ((Number) heightObj).longValue();
+        }
+
         return manager;
     }
 
@@ -541,6 +546,7 @@ public class DeviceLifecycleManager {
         }
 
         json.put("devices", devices);
+        json.put("currentBlockHeight", currentBlockHeight);
         return json;
     }
 }

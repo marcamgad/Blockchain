@@ -24,7 +24,7 @@ public final class Crypto {
         Security.addProvider(new BouncyCastleProvider());
     }
 
-    private static final X9ECParameters CURVE_PARAMS = CustomNamedCurves.getByName("secp256k1");
+    private static final X9ECParameters CURVE_PARAMS = CustomNamedCurves.getByName(Config.EC_CURVE);
     private static final ECDomainParameters CURVE = new ECDomainParameters(
             CURVE_PARAMS.getCurve(), CURVE_PARAMS.getG(), CURVE_PARAMS.getN(), CURVE_PARAMS.getH());
 

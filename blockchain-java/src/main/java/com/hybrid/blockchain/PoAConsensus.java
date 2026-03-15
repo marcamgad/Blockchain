@@ -3,14 +3,21 @@ package com.hybrid.blockchain;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class PoAConsensus implements Consensus {
 
     private static final byte[] DOMAIN_PREFIX = "BLOCK\0".getBytes(StandardCharsets.UTF_8);
     private final List<Validator> validators;
+    private final Map<Long, Map<String, String>> signedHashesByHeight;
+    private final Set<String> slashedValidators;
 
     public PoAConsensus(List<Validator> validators) {
         this.validators = validators;
+        this.signedHashesByHeight = new ConcurrentHashMap<>();
+        this.slashedValidators = ConcurrentHashMap.newKeySet();
     }
 
     public boolean isValidator(String validatorId) {
@@ -43,7 +50,25 @@ public class PoAConsensus implements Consensus {
             return false;
 
         byte[] msg = signingPayload(block);
-        return Crypto.verify(msg, block.getSignature(), validator.getPublicKey());
+        boolean verified = Crypto.verify(msg, block.getSignature(), validator.getPublicKey());
+        if (!verified) {
+            return false;
+        }
+
+        String validatorId = validator.getId();
+        long height = block.getIndex();
+        String blockHash = block.getHash();
+
+        signedHashesByHeight
+                .computeIfAbsent(height, k -> new ConcurrentHashMap<>())
+                .compute(validatorId, (id, existingHash) -> {
+                    if (existingHash != null && !existingHash.equals(blockHash)) {
+                        slashedValidators.add(id);
+                    }
+                    return blockHash;
+                });
+
+        return true;
     }
 
     public List<Validator> getValidators() {
@@ -71,11 +96,11 @@ public class PoAConsensus implements Consensus {
 
     @Override
     public java.util.Set<String> getSlashedValidators() {
-        return java.util.Collections.emptySet();
+        return java.util.Collections.unmodifiableSet(slashedValidators);
     }
 
     @Override
     public void clearSlashedValidator(String validatorId) {
-        // No-op for PoA
+        slashedValidators.remove(validatorId);
     }
 }

@@ -441,4 +441,11 @@ public class PBFTConsensus implements Consensus {
         stats.put("committedBlocks", committedBlocks.size());
         return stats;
     }
+
+    public void shutdown() {
+        if (currentTimerTask != null) {
+            currentTimerTask.cancel(true);
+        }
+        timer.shutdownNow();
+    }
 }
