@@ -15,12 +15,13 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Collections;
 
-public class Storage {
+public class Storage implements AutoCloseable {
 
     private final DB db;
     private final ObjectMapper mapper;
     private final Map<String, Object> cache;
     private final SecretKeySpec aesKey;
+    private final String dbPath;
     private static final int GCM_IV_LENGTH = 12;
     private static final int GCM_TAG_LENGTH = 128; // in bits
     private final SecureRandom secureRandom = new SecureRandom();
@@ -39,7 +40,8 @@ public class Storage {
         });
         this.aesKey = new SecretKeySpec(aesKeyBytes, "AES");
 
-        File folder = new File(dbPath != null ? dbPath : "data");
+        this.dbPath = dbPath != null ? dbPath : "data";
+        File folder = new File(this.dbPath);
         folder.mkdirs();
 
         Options options = new Options();
@@ -50,6 +52,10 @@ public class Storage {
     // Fallback constructor (dev / testing)
     public Storage(String dbPath) throws IOException {
       this(dbPath, Config.STORAGE_AES_KEY);
+    }
+    
+    public String getDbPath() {
+        return this.dbPath;
     }
 
     private byte[] encrypt(byte[] data) throws Exception {
@@ -167,6 +173,7 @@ public class Storage {
         return get("meta:" + key, Object.class);
     }
 
+    @Override
     public void close() throws IOException {
         db.close();
     }
@@ -174,29 +181,251 @@ public class Storage {
         int height,
         Map<String, Object> state,
         Map<String, Object> utxo
-) throws IOException {
+    ) throws IOException {
+        Map<String, Object> snapshot = new HashMap<>();
+        snapshot.put("height", height);
+        snapshot.put("state", state);
+        snapshot.put("utxo", utxo);
+        snapshot.put("timestamp", System.currentTimeMillis());
+        put("snapshot:" + height, snapshot);
 
-    Map<String, Object> snapshot = new HashMap<>();
-    snapshot.put("height", height);
-    snapshot.put("state", state);
-    snapshot.put("utxo", utxo);
-    snapshot.put("timestamp", System.currentTimeMillis());
-
-    put("snapshot:" + height, snapshot);
-    
-    // Critical snapshot height update; use sync write
-    try {
-        byte[] json = mapper.writeValueAsBytes(height);
-        byte[] encrypted = encrypt(json);
-        WriteOptions syncOptions = new WriteOptions().sync(true);
-        db.put(bytes("meta:lastSnapshotHeight"), encrypted, syncOptions);
-        cache.put("meta:lastSnapshotHeight", height);
-    } catch (Exception e) {
-        throw new IOException("Failed to save lastSnapshotHeight with sync", e);
+        // Critical snapshot height update; use sync write
+        try {
+            byte[] json = mapper.writeValueAsBytes(height);
+            byte[] encrypted = encrypt(json);
+            WriteOptions syncOptions = new WriteOptions().sync(true);
+            db.put(bytes("meta:lastSnapshotHeight"), encrypted, syncOptions);
+            cache.put("meta:lastSnapshotHeight", height);
+        } catch (Exception e) {
+            throw new IOException("Failed to save lastSnapshotHeight with sync", e);
+        }
     }
 
-    System.out.println("[SNAPSHOT] Saved at height " + height);
+    // ─── Transaction Indexer ──────────────────────────────────────────────────
+
+    /**
+     * Indexes a transaction ID to its block hash and height for O(1) retrieval.
+     *
+     * @param txid        the transaction ID
+     * @param blockHash   the hash of the block containing this transaction
+     * @param blockHeight the height of the block
+     * @throws IOException on storage failure
+     */
+    public void indexTransaction(String txid, String blockHash, int blockHeight) throws IOException {
+        Map<String, Object> loc = new HashMap<>();
+        loc.put("blockHash", blockHash);
+        loc.put("blockHeight", blockHeight);
+        put("txidx:" + txid, loc);
+    }
+
+    /**
+     * Indexes an address→txid mapping for address history queries.
+     * Key format: {@code addridx:ADDRESS:TIMESTAMP_TXID} to preserve insertion order.
+     *
+     * @param address   the account address
+     * @param txid      the transaction ID
+     * @param timestamp the block timestamp in milliseconds
+     * @throws IOException on storage failure
+     */
+    public void indexAddressTx(String address, String txid, long timestamp) throws IOException {
+        String sortKey = String.format("%016d_%s", timestamp, txid);
+        put("addridx:" + address + ":" + sortKey, txid);
+    }
+
+    /**
+     * Returns the block location of a transaction by its ID.
+     *
+     * @param txid the transaction ID
+     * @return a map containing "blockHash" and "blockHeight", or null if not found
+     * @throws IOException on storage failure
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> getTransactionLocation(String txid) throws IOException {
+        return get("txidx:" + txid, Map.class);
+    }
+
+    /**
+     * Returns a paginated list of transaction IDs for the given address.
+     *
+     * @param address the account address
+     * @param limit   maximum number of results to return
+     * @param cursor  pagination cursor (null for first page; use the last returned txid as cursor)
+     * @return list of transaction IDs in reverse-chronological order
+     */
+    public java.util.List<String> getAddressTransactions(String address, int limit, String cursor) {
+        java.util.List<String> result = new java.util.ArrayList<>();
+        String prefix = "addridx:" + address + ":";
+        
+        try (DBIterator it = db.iterator()) {
+            if (cursor == null) {
+                // Iterating backwards to get newest first. 
+                // Prefix + "~" is a safe way to jump to the end of the address's entries.
+                it.seek(bytes(prefix + "~"));
+                if (!it.hasPrev()) {
+                    it.seekToLast();
+                }
+            } else {
+                it.seek(bytes(prefix + cursor));
+                if (it.hasNext()) it.next(); // skip cursor
+            }
+
+            int count = 0;
+            while (count < limit) {
+                if (cursor == null) {
+                    if (!it.hasPrev()) break;
+                    Map.Entry<byte[], byte[]> entry = it.prev();
+                    String k = asString(entry.getKey());
+                    if (!k.startsWith(prefix)) break;
+                    try {
+                        byte[] decrypted = decrypt(entry.getValue());
+                        result.add(mapper.readValue(decrypted, String.class));
+                        count++;
+                    } catch (Exception e) {}
+                } else {
+                    if (!it.hasNext()) break;
+                    Map.Entry<byte[], byte[]> entry = it.next();
+                    String k = asString(entry.getKey());
+                    if (!k.startsWith(prefix)) break;
+                    try {
+                        byte[] decrypted = decrypt(entry.getValue());
+                        result.add(mapper.readValue(decrypted, String.class));
+                        count++;
+                    } catch (Exception e) {}
+                }
+            }
+        } catch (Exception e) {
+            // Best-effort
+        }
+        return result;
+    }
+
+    // ─── Transaction Receipts ─────────────────────────────────────────────────
+
+    /**
+     * Saves a transaction receipt, indexed by transaction ID.
+     *
+     * @param txid    the transaction ID
+     * @param receipt the receipt to persist
+     * @throws IOException on storage failure
+     */
+    public void saveReceipt(String txid, TransactionReceipt receipt) throws IOException {
+        put("receipt:" + txid, receipt);
+    }
+
+    /**
+     * Loads a transaction receipt by transaction ID.
+     *
+     * @param txid the transaction ID
+     * @return the TransactionReceipt, or null if not found
+     * @throws IOException on storage failure
+     */
+    public TransactionReceipt loadReceipt(String txid) throws IOException {
+        return get("receipt:" + txid, TransactionReceipt.class);
+    }
+
+    // ─── Device Telemetry ─────────────────────────────────────────────────────
+
+    /**
+     * Saves a telemetry record for a device at the given block height.
+     *
+     * @param deviceId    the device identifier
+     * @param blockHeight the block height of the telemetry submission
+     * @param txid        the telemetry transaction ID
+     * @param data        the telemetry payload (or its SHA-256 hash if too large)
+     * @throws IOException on storage failure
+     */
+    public void saveTelemetry(String deviceId, int blockHeight, String txid, byte[] data) throws IOException {
+        String sortKey = String.format("%010d_%s", blockHeight, txid);
+        Map<String, Object> record = new HashMap<>();
+        record.put("deviceId", deviceId);
+        record.put("blockHeight", blockHeight);
+        record.put("txid", txid);
+        record.put("data", HexUtils.encode(data));
+        put("telem:" + deviceId + ":" + sortKey, record);
+    }
+
+    /**
+     * Returns the telemetry records for a device within an inclusive block height range.
+     *
+     * @param deviceId  the device identifier
+     * @param fromBlock inclusive start block height
+     * @param toBlock   inclusive end block height
+     * @return list of telemetry records as maps (fields: deviceId, blockHeight, txid, data)
+     */
+    @SuppressWarnings("unchecked")
+    public java.util.List<Map<String, Object>> getTelemetry(String deviceId, int fromBlock, int toBlock) {
+        java.util.List<Map<String, Object>> result = new java.util.ArrayList<>();
+        String prefix = "telem:" + deviceId + ":";
+        String startKey = prefix + String.format("%010d", fromBlock);
+        String endKey = prefix + String.format("%010d", toBlock + 1);
+
+        try (DBIterator it = db.iterator()) {
+            it.seek(bytes(startKey));
+            while (it.hasNext()) {
+                Map.Entry<byte[], byte[]> entry = it.next();
+                String k = asString(entry.getKey());
+                if (!k.startsWith(prefix) || k.compareTo(endKey) >= 0) break;
+                try {
+                    byte[] decrypted = decrypt(entry.getValue());
+                    Map<String, Object> record = mapper.readValue(decrypted, Map.class);
+                    result.add(record);
+                } catch (Exception ignored) {}
+            }
+        } catch (Exception ignored) {}
+        return result;
+    }
+
+    // ─── Checkpoints ─────────────────────────────────────────────────────────
+
+    /**
+     * Saves a checkpoint for fast synchronization.
+     *
+     * @param cp the Checkpoint to persist
+     * @throws IOException on storage failure
+     */
+    public void saveCheckpoint(Checkpoint cp) throws IOException {
+        put("checkpoint:" + cp.getBlockHeight(), cp);
+    }
+
+    /**
+     * Loads the most recent checkpoint from storage.
+     *
+     * @return the latest Checkpoint, or null if none exists
+     */
+    public Checkpoint loadLatestCheckpoint() {
+        String prefix = "checkpoint:";
+        // Scan backwards to find the highest checkpoint key
+        try (DBIterator it = db.iterator()) {
+            it.seek(bytes(prefix + "~")); // past all checkpoint keys
+            if (it.hasPrev()) {
+                Map.Entry<byte[], byte[]> entry = it.prev();
+                String k = asString(entry.getKey());
+                if (k.startsWith(prefix)) {
+                    try {
+                        byte[] decrypted = decrypt(entry.getValue());
+                        return mapper.readValue(decrypted, Checkpoint.class);
+                    } catch (Exception e) { /* corrupted */ }
+                }
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    /**
+     * Loads a checkpoint at the given block height.
+     *
+     * @param height the block height
+     * @return the Checkpoint, or null if not found
+     * @throws IOException on storage failure
+     */
+    public Checkpoint loadCheckpointAtHeight(int height) throws IOException {
+        return get("checkpoint:" + height, Checkpoint.class);
+    }
+
+    // ─── Internal helpers ─────────────────────────────────────────────────────
+
+    private static String asString(byte[] bytes) {
+        return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+    }
 }
 
-
-}

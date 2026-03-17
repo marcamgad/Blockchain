@@ -5,7 +5,6 @@ import com.hybrid.blockchain.Blockchain;
 import com.hybrid.blockchain.Config;
 import com.hybrid.blockchain.Crypto;
 import com.hybrid.blockchain.HexUtils;
-import com.hybrid.blockchain.IdentityManager;
 import com.hybrid.blockchain.Mempool;
 import com.hybrid.blockchain.PeerNode;
 import com.hybrid.blockchain.PoAConsensus;
@@ -13,7 +12,6 @@ import com.hybrid.blockchain.Transaction;
 import com.hybrid.blockchain.Validator;
 import com.hybrid.blockchain.consensus.PBFTConsensus;
 import com.hybrid.blockchain.security.RateLimiter;
-import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.http.ResponseEntity;
@@ -41,12 +39,12 @@ public class IoTRestAPI {
 
     private Blockchain blockchain;
     private Mempool mempool;
-    private IdentityManager identityManager;
     private PoAConsensus poa;
     // Removed ContractVM contractVM;
     private JwtManager jwtManager;
     private IoTDeviceManager deviceManager;
     private MQTTAdapter mqttAdapter;
+    private CoAPAdapter coapAdapter;
     private final RateLimiter apiRateLimiter = RateLimiter.Presets.apiLimiter();
     private final RateLimiter transactionSubmitLimiter = new RateLimiter(40, 40, 60000);
 
@@ -62,10 +60,29 @@ public class IoTRestAPI {
         sharedPbft = c;
     }
 
-    public static void main(String[] args) {
-        SpringApplication.run(IoTRestAPI.class, args);
-    }
+    @PostConstruct
+    public void init() throws Exception {
+        if (sharedBlockchain == null) {
+            throw new RuntimeException("IoTRestAPI started without a valid sharedBlockchain. Use App.java to start the node.");
+        }
 
+        this.blockchain = sharedBlockchain;
+        this.mempool = blockchain.getMempool();
+        
+        // PBFT specific setup
+        if (sharedPbft != null) {
+            this.poa = null; // We use PBFT now
+        }
+
+        this.deviceManager = new IoTDeviceManager();
+        this.jwtManager = new JwtManager();
+        this.mqttAdapter = new MQTTAdapter(this.blockchain);
+        this.coapAdapter = new CoAPAdapter(this.blockchain);
+        this.mqttAdapter.start();
+        if (Config.NODE_ROLE == Config.NodeRole.GATEWAY) {
+            this.coapAdapter.start();
+        }
+    }
     @Bean
     public HandlerInterceptor apiRateLimitInterceptor() {
         return new HandlerInterceptor() {
@@ -95,45 +112,6 @@ public class IoTRestAPI {
                 registry.addInterceptor(apiRateLimitInterceptor).addPathPatterns("/api/v1/**");
             }
         };
-    }
-
-    @PostConstruct
-    public void init() throws Exception {
-        if (sharedBlockchain != null) {
-            this.blockchain = sharedBlockchain;
-            this.mempool = blockchain.getMempool();
-            this.deviceManager = new IoTDeviceManager();
-            this.jwtManager = new JwtManager();
-            this.identityManager = new IdentityManager();
-            this.mqttAdapter = new MQTTAdapter(this.blockchain);
-            this.mqttAdapter.start();
-        } else {
-            // Fallback bootstrap
-            this.mempool = new Mempool(10000);
-            List<Validator> validators = new ArrayList<>();
-            // Bootstrap validator set from env if possible
-            String valPubKeysEnv = System.getenv("VALIDATOR_PUBKEYS");
-            if (valPubKeysEnv != null && !valPubKeysEnv.isEmpty()) {
-                for (String pubHex : valPubKeysEnv.split(",")) {
-                    byte[] vPub = HexUtils.decode(pubHex.trim());
-                    validators.add(new Validator(Crypto.deriveAddress(vPub), vPub));
-                }
-            }
-            this.poa = new PoAConsensus(validators);
-            this.blockchain = new Blockchain(null, mempool, poa);
-            this.blockchain.init();
-            this.identityManager = new IdentityManager();
-            this.jwtManager = new JwtManager();
-            this.deviceManager = new IoTDeviceManager();
-            this.mqttAdapter = new MQTTAdapter(this.blockchain);
-            this.mqttAdapter.start();
-        }
-
-        log.info("========================================");
-        log.info("IoT Blockchain Node Starting");
-        log.info("========================================");
-        log.info("Node ID: {}", Config.NODE_ID);
-        log.info("========================================");
     }
 
     private boolean verifyToken(String token, String deviceId) {
@@ -475,6 +453,154 @@ public class IoTRestAPI {
         log.info("Contract call request received (Stub)");
         return ResponseEntity
                 .ok(Map.of("status", "pending", "info", "Submit via /transactions/submit with Type=CONTRACT"));
+    }
+
+    // ============================================
+    // Phase 1: Tokenomics & Fee Market
+    // ============================================
+    @GetMapping("/tokenomics")
+    public ResponseEntity<?> getTokenomics() {
+        blockchainLock.readLock().lock();
+        try {
+            long currentReward = com.hybrid.blockchain.Tokenomics.getCurrentReward(blockchain.getHeight() + 1, com.hybrid.blockchain.Tokenomics.getTotalMinted(blockchain));
+            return ResponseEntity.ok(Map.of(
+                    "maxSupply", com.hybrid.blockchain.Tokenomics.MAX_SUPPLY,
+                    "totalMinted", com.hybrid.blockchain.Tokenomics.getTotalMinted(blockchain),
+                    "remainingSupply", com.hybrid.blockchain.Tokenomics.getRemainingSupply(blockchain),
+                    "currentBlockReward", currentReward,
+                    "nextHalvingBlock", com.hybrid.blockchain.Tokenomics.getNextHalvingBlock(blockchain.getHeight())
+            ));
+        } finally {
+            blockchainLock.readLock().unlock();
+        }
+    }
+
+    @GetMapping("/fee/estimate")
+    public ResponseEntity<?> estimateFee() {
+        return ResponseEntity.ok(Map.of("baseFee", blockchain.getCurrentBaseFee()));
+    }
+
+    // ============================================
+    // Phase 2: Transaction Receipts
+    // ============================================
+    @GetMapping("/tx/{txid}/receipt")
+    public ResponseEntity<?> getTransactionReceipt(@PathVariable String txid) {
+        blockchainLock.readLock().lock();
+        try {
+            var receipt = blockchain.getStorage().loadReceipt(txid);
+            if (receipt == null) return ResponseEntity.status(404).body(Map.of("error", "Receipt not found"));
+            return ResponseEntity.ok(receipt);
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
+        } finally {
+            blockchainLock.readLock().unlock();
+        }
+    }
+
+    @GetMapping("/contracts/{address}/abi")
+    public ResponseEntity<?> getContractABI(@PathVariable String address) {
+        blockchainLock.readLock().lock();
+        try {
+            var account = blockchain.getState().getAccount(address);
+            if (account == null || account.getAbi() == null) {
+                return ResponseEntity.status(404).body(Map.of("error", "ABI not found"));
+            }
+            return ResponseEntity.ok(account.getAbi());
+        } finally {
+            blockchainLock.readLock().unlock();
+        }
+    }
+
+    // ============================================
+    // Phase 3: Multi-Token Registry
+    // ============================================
+    @GetMapping("/tokens/{tokenId}")
+    public ResponseEntity<?> getTokenInfo(@PathVariable String tokenId) {
+        blockchainLock.readLock().lock();
+        try {
+            var tokenRegistry = blockchain.getTokenRegistry();
+            if (tokenRegistry == null || !tokenRegistry.tokenExists(tokenId)) {
+                return ResponseEntity.status(404).body(Map.of("error", "Token not found"));
+            }
+            return ResponseEntity.ok(tokenRegistry.getTokenInfo(tokenId));
+        } finally {
+            blockchainLock.readLock().unlock();
+        }
+    }
+
+    @GetMapping("/tokens/{tokenId}/balance/{address}")
+    public ResponseEntity<?> getTokenBalance(@PathVariable String tokenId, @PathVariable String address) {
+        blockchainLock.readLock().lock();
+        try {
+            long balance = blockchain.getState().getTokenBalance(address, tokenId);
+            return ResponseEntity.ok(Map.of("address", address, "tokenId", tokenId, "balance", balance));
+        } finally {
+            blockchainLock.readLock().unlock();
+        }
+    }
+
+    // ============================================
+    // Phase 5: Transaction Indexer
+    // ============================================
+    @GetMapping("/address/{address}/transactions")
+    public ResponseEntity<?> getAddressTransactions(@PathVariable String address, @RequestParam(defaultValue = "0") int offset, @RequestParam(defaultValue = "50") int limit) {
+        blockchainLock.readLock().lock();
+        try {
+            var txs = blockchain.getStorage().getAddressTransactions(address, offset, null);
+            return ResponseEntity.ok(txs);
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
+        } finally {
+            blockchainLock.readLock().unlock();
+        }
+    }
+
+    // ============================================
+    // Phase 6: Device Telemetry
+    // ============================================
+    @GetMapping("/devices/{deviceId}/telemetry")
+    public ResponseEntity<?> getDeviceTelemetry(@PathVariable String deviceId, @RequestParam(defaultValue = "0") int fromBlock, @RequestParam(defaultValue = "-1") int toBlock) {
+        blockchainLock.readLock().lock();
+        try {
+            if (toBlock == -1) toBlock = blockchain.getHeight();
+            List<Map<String, Object>> records = blockchain.getStorage().getTelemetry(deviceId, fromBlock, toBlock);
+            return ResponseEntity.ok(records);
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
+        } finally {
+            blockchainLock.readLock().unlock();
+        }
+    }
+
+    // ============================================
+    // Phase 7: Checkpoints
+    // ============================================
+    @GetMapping("/checkpoint/latest")
+    public ResponseEntity<?> getLatestCheckpoint() {
+        blockchainLock.readLock().lock();
+        try {
+            var cp = blockchain.getStorage().loadLatestCheckpoint();
+            if (cp == null) return ResponseEntity.status(404).body(Map.of("error", "No checkpoints found"));
+            return ResponseEntity.ok(cp);
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
+        } finally {
+            blockchainLock.readLock().unlock();
+        }
+    }
+
+    @GetMapping("/checkpoint/{height}")
+    public ResponseEntity<?> getCheckpointByHeight(@PathVariable int height) {
+        blockchainLock.readLock().lock();
+        try {
+            var cp = blockchain.getStorage().loadCheckpointAtHeight(height);
+            if (cp == null) return ResponseEntity.status(404).body(Map.of("error", "Checkpoint not found"));
+            return ResponseEntity.ok(cp);
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
+        } finally {
+            blockchainLock.readLock().unlock();
+        }
     }
 
     @ExceptionHandler(Exception.class)

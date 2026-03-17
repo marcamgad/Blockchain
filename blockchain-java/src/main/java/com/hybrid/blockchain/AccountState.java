@@ -11,12 +11,20 @@ import java.util.Collections;
 import java.util.List;
 import java.util.ArrayList;
 
+/**
+ * Manages all account state for HybridChain, including multi-token balances, nonces,
+ * contract code/storage, capabilities, SSI, device lifecycle, and private data.
+ *
+ * <p>Each account's balance is stored in a {@code Map<String, Long> tokenBalances}
+ * where the key {@code "native"} holds the native chain token. Additional token IDs
+ * are used for custom tokens registered via {@link TokenRegistry}.
+ */
 public class AccountState {
-    private final Map<String, Account> state;
-    private final SSIManager ssiManager;
-    private final DeviceLifecycleManager lifecycleManager;
-    private final PrivateDataManager privateDataManager;
-    private final MerklePatriciaTrie mpt;
+    private Map<String, Account> state;
+    private SSIManager ssiManager;
+    private DeviceLifecycleManager lifecycleManager;
+    private PrivateDataManager privateDataManager;
+    private MerklePatriciaTrie mpt;
 
     public AccountState() {
         this.state = new ConcurrentHashMap<>();
@@ -24,6 +32,10 @@ public class AccountState {
         this.ssiManager = new SSIManager();
         this.lifecycleManager = new DeviceLifecycleManager(ssiManager);
         this.privateDataManager = new PrivateDataManager();
+    }
+
+    public java.util.Set<String> getAccountAddresses() {
+        return state.keySet();
     }
 
     public AccountState(Map<String, Account> obj) {
@@ -37,24 +49,41 @@ public class AccountState {
         this.privateDataManager = new PrivateDataManager();
     }
 
+    @SuppressWarnings("unchecked")
     public static AccountState fromMap(Map<String, Object> raw) {
         Map<String, Account> map = new HashMap<>();
         if (raw == null)
             return new AccountState(map);
 
-        // Load account balances and nonces
         Map<String, Object> accounts = (Map<String, Object>) raw.get("accounts");
         if (accounts != null) {
             for (Map.Entry<String, Object> e : accounts.entrySet()) {
                 Map<String, Object> accMap = (Map<String, Object>) e.getValue();
-                long balance = Utils.safeLong(accMap.get("balance"));
+
+                // Multi-token balances
+                Map<String, Long> tokenBalances = new HashMap<>();
+                if (accMap.containsKey("tokenBalances")) {
+                    Map<String, Object> tbRaw = (Map<String, Object>) accMap.get("tokenBalances");
+                    for (Map.Entry<String, Object> tb : tbRaw.entrySet()) {
+                        tokenBalances.put(tb.getKey(), Utils.safeLong(tb.getValue()));
+                    }
+                } else if (accMap.containsKey("balance")) {
+                    // Backward-compat: load legacy single balance as native
+                    tokenBalances.put("native", Utils.safeLong(accMap.get("balance")));
+                }
+
                 long nonce = Utils.safeLong(accMap.get("nonce"));
                 byte[] code = null;
                 if (accMap.containsKey("code")) {
                     code = HexUtils.decode((String) accMap.get("code"));
                 }
-                Account acc = new Account(balance, nonce, code);
-                
+                Account acc = new Account(tokenBalances, nonce, code);
+
+                // Load ABI
+                if (accMap.containsKey("abi")) {
+                    acc.setAbi(((String) accMap.get("abi")).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                }
+
                 // Load Storage
                 if (accMap.containsKey("storage")) {
                     Map<String, Object> storageMap = (Map<String, Object>) accMap.get("storage");
@@ -62,7 +91,7 @@ public class AccountState {
                         acc.getStorage().put(Long.parseLong(se.getKey()), Utils.safeLong(se.getValue()));
                     }
                 }
-                
+
                 // Load Capabilities
                 if (accMap.containsKey("capabilities")) {
                     List<Map<String, Object>> capsList = (List<Map<String, Object>>) accMap.get("capabilities");
@@ -72,26 +101,24 @@ public class AccountState {
                         acc.addCapability(new Capability(type, devId));
                     }
                 }
-                
+
                 map.put(e.getKey(), acc);
             }
         }
 
         AccountState accountState = new AccountState(map);
 
-        // Load SSI state
         if (raw.containsKey("ssi")) {
             SSIManager ssi = SSIManager.fromMap((Map<String, Object>) raw.get("ssi"));
             accountState.ssiManager.restore(ssi);
         }
 
-        // Load Lifecycle state
         if (raw.containsKey("lifecycle")) {
-            DeviceLifecycleManager lifecycle = DeviceLifecycleManager.fromMap((Map<String, Object>) raw.get("lifecycle"), accountState.ssiManager);
+            DeviceLifecycleManager lifecycle = DeviceLifecycleManager.fromMap(
+                    (Map<String, Object>) raw.get("lifecycle"), accountState.ssiManager);
             accountState.lifecycleManager.restore(lifecycle);
         }
 
-        // Load Private Data Manager state
         if (raw.containsKey("privateData")) {
             PrivateDataManager privateData = PrivateDataManager.fromMap((Map<String, Object>) raw.get("privateData"));
             accountState.privateDataManager.restore(privateData);
@@ -102,26 +129,32 @@ public class AccountState {
 
     public Map<String, Object> toJSON() {
         Map<String, Object> json = new HashMap<>();
-        
-        // Serialize accounts
+
         Map<String, Object> accounts = new HashMap<>();
         for (Map.Entry<String, Account> entry : state.entrySet()) {
             Account acc = entry.getValue();
             Map<String, Object> accJson = new HashMap<>();
+
+            // Multi-token balances
+            Map<String, Long> tbCopy = new HashMap<>(acc.getTokenBalances());
+            accJson.put("tokenBalances", tbCopy);
+            // Keep legacy "balance" field for tools that read it directly
             accJson.put("balance", acc.getBalance());
+
             accJson.put("nonce", acc.getNonce());
             if (acc.getCode() != null) {
                 accJson.put("code", HexUtils.bytesToHex(acc.getCode()));
             }
-            
-            // Serialize Storage
+            if (acc.getAbi() != null) {
+                accJson.put("abi", new String(acc.getAbi(), java.nio.charset.StandardCharsets.UTF_8));
+            }
+
             Map<String, Long> storage = new HashMap<>();
             for (Map.Entry<Long, Long> se : acc.getStorage().getStorage().entrySet()) {
                 storage.put(String.valueOf(se.getKey()), se.getValue());
             }
             accJson.put("storage", storage);
-            
-            // Serialize Capabilities
+
             List<Map<String, Object>> caps = new ArrayList<>();
             for (Capability cap : acc.getCapabilities()) {
                 Map<String, Object> capMap = new HashMap<>();
@@ -130,27 +163,119 @@ public class AccountState {
                 caps.add(capMap);
             }
             accJson.put("capabilities", caps);
-            
+
             accounts.put(entry.getKey(), accJson);
         }
         json.put("accounts", accounts);
-
-        // Serialize SSI Manager
         json.put("ssi", ssiManager.toJSON());
-
-        // Serialize Device Lifecycle Manager
         json.put("lifecycle", lifecycleManager.toJSON());
-
-        // Serialize Private Data Manager
         json.put("privateData", privateDataManager.toJSON());
 
         return json;
     }
 
+    // ─── Native balance helpers (backward-compat) ─────────────────────────────
+
+    /**
+     * Returns the native token balance of the given address.
+     *
+     * @param addr the account address
+     * @return native token balance
+     */
     public long getBalance(String addr) {
         Account acc = state.get(addr);
         return acc != null ? acc.getBalance() : 0;
     }
+
+    /**
+     * Credits the native token to the given address by the specified amount.
+     *
+     * @param addr   the account address
+     * @param amount the amount to credit
+     */
+    public void credit(String addr, long amount) {
+        if (amount < 0) throw new IllegalArgumentException("Invalid amount: cannot credit negative amount");
+        ensure(addr);
+        Account acc = state.get(addr);
+        acc.credit(amount);
+        updateMpt(addr, acc);
+    }
+
+    /**
+     * Debits the native token from the given address by the specified amount.
+     *
+     * @param addr   the account address
+     * @param amount the amount to debit
+     * @throws Exception if the balance is insufficient
+     */
+    public void debit(String addr, long amount) throws Exception {
+        ensure(addr);
+        Account acc = state.get(addr);
+        if (amount < 0) throw new IllegalArgumentException("Invalid amount: cannot debit negative amount");
+        if (acc.getBalance() < amount) throw new Exception("Insufficient balance");
+        acc.debit(amount);
+        updateMpt(addr, acc);
+    }
+
+    // ─── Multi-token helpers ──────────────────────────────────────────────────
+
+    /**
+     * Credits a specific token to an address.
+     *
+     * @param addr    the account address
+     * @param tokenId the token identifier ("native" for the chain token)
+     * @param amount  the amount to credit
+     */
+    public void creditToken(String addr, String tokenId, long amount) {
+        ensure(addr);
+        Account acc = state.get(addr);
+        acc.creditToken(tokenId, amount);
+        updateMpt(addr, acc);
+    }
+
+    /**
+     * Debits a specific token from an address.
+     *
+     * @param addr    the account address
+     * @param tokenId the token identifier
+     * @param amount  the amount to debit
+     * @throws Exception if the token balance is insufficient
+     */
+    public void debitToken(String addr, String tokenId, long amount) throws Exception {
+        ensure(addr);
+        Account acc = state.get(addr);
+        long bal = acc.getTokenBalance(tokenId);
+        if (bal < amount) {
+            throw new Exception("Insufficient " + tokenId + " balance for " + addr + ": " + bal + " < " + amount);
+        }
+        acc.debitToken(tokenId, amount);
+        updateMpt(addr, acc);
+    }
+
+    /**
+     * Returns the balance of a specific token for an address.
+     *
+     * @param addr    the account address
+     * @param tokenId the token identifier
+     * @return the token balance, or 0 if not found
+     */
+    public long getTokenBalance(String addr, String tokenId) {
+        Account acc = state.get(addr);
+        return acc != null ? acc.getTokenBalance(tokenId) : 0;
+    }
+
+    /**
+     * Returns all token balances for an address.
+     *
+     * @param addr the account address
+     * @return a copy of the token balance map, or empty map if address not found
+     */
+    public Map<String, Long> getAllTokenBalances(String addr) {
+        Account acc = state.get(addr);
+        return acc != null ? new HashMap<>(acc.getTokenBalances()) : new HashMap<>();
+    }
+
+    // ─── Other accessors ─────────────────────────────────────────────────────
 
     public long getNonce(String addr) {
         Account acc = state.get(addr);
@@ -170,13 +295,6 @@ public class AccountState {
         state.putIfAbsent(addr, new Account(0, 0));
     }
 
-    public void credit(String addr, long amount) {
-        ensure(addr);
-        Account acc = state.get(addr);
-        acc.credit(amount);
-        updateMpt(addr, acc);
-    }
-
     public void putStorage(String addr, long key, long value) {
         ensure(addr);
         Account acc = state.get(addr);
@@ -188,19 +306,6 @@ public class AccountState {
         ensure(addr);
         Account acc = state.get(addr);
         acc.addCapability(cap);
-        updateMpt(addr, acc);
-    }
-
-    public void debit(String addr, long amount) throws Exception {
-        ensure(addr);
-        Account acc = state.get(addr);
-        if (amount < 0) {
-            throw new Exception("Invalid amount: cannot debit negative amount");
-        }
-        if (acc.getBalance() < amount) {
-            throw new Exception("Insufficient balance");
-        }
-        acc.debit(amount);
         updateMpt(addr, acc);
     }
 
@@ -218,6 +323,20 @@ public class AccountState {
         updateMpt(addr, acc);
     }
 
+    public void setCode(String addr, byte[] code) {
+        ensure(addr);
+        Account acc = state.get(addr);
+        acc.setCode(code);
+        updateMpt(addr, acc);
+    }
+
+    public void setAbi(String addr, byte[] abi) {
+        ensure(addr);
+        Account acc = state.get(addr);
+        acc.setAbi(abi);
+        updateMpt(addr, acc);
+    }
+
     public ContractState getAccountStorage(String addr) {
         ensure(addr);
         return state.get(addr).getStorage();
@@ -228,45 +347,37 @@ public class AccountState {
         return state.get(addr).getCapabilities();
     }
 
-    // SSI Management
-    public SSIManager getSSIManager() {
-        return ssiManager;
-    }
+    public SSIManager getSSIManager() { return ssiManager; }
 
-    // Device Lifecycle Management
-    public DeviceLifecycleManager getLifecycleManager() {
-        return lifecycleManager;
-    }
+    public DeviceLifecycleManager getLifecycleManager() { return lifecycleManager; }
 
-    // Update blockchain height for lifecycle manager
     public void setBlockHeight(long height) {
         lifecycleManager.setCurrentBlockHeight(height);
     }
 
-    // Private Data Management
-    public PrivateDataManager getPrivateDataManager() {
-        return privateDataManager;
-    }
+    public PrivateDataManager getPrivateDataManager() { return privateDataManager; }
 
     /**
      * Calculates the Merkle Patricia Trie root hash of the current state.
-     * 
-     * @return The state root hash as a hex string.
+     *
+     * @return the state root hash as a hex string
      */
     public String calculateStateRoot() {
         try {
             ObjectMapper objectMapper = new ObjectMapper();
-            byte[] accountRoot = mpt.getRootHash();                           // 32 bytes
-            byte[] ssiBytes    = objectMapper.writeValueAsBytes(ssiManager.toJSON());
-            byte[] ssiHash     = Crypto.hash(ssiBytes);                       // 32 bytes
-            byte[] lcBytes     = objectMapper.writeValueAsBytes(lifecycleManager.toJSON());
-            byte[] lcHash      = Crypto.hash(lcBytes);                        // 32 bytes
+            objectMapper.configure(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
             
-            byte[] combined    = new byte[96];
+            byte[] accountRoot = mpt.getRootHash();
+            byte[] ssiBytes    = objectMapper.writeValueAsBytes(ssiManager.toJSON());
+            byte[] ssiHash     = Crypto.hash(ssiBytes);
+            byte[] lcBytes     = objectMapper.writeValueAsBytes(lifecycleManager.toJSON());
+            byte[] lcHash      = Crypto.hash(lcBytes);
+
+            byte[] combined = new byte[96];
             System.arraycopy(accountRoot, 0, combined,  0, 32);
             System.arraycopy(ssiHash,     0, combined, 32, 32);
             System.arraycopy(lcHash,      0, combined, 64, 32);
-            
+
             return Crypto.bytesToHex(Crypto.hash(combined));
         } catch (Exception e) {
             throw new RuntimeException("State root calculation failed", e);
@@ -275,26 +386,40 @@ public class AccountState {
 
     /**
      * Generates a Merkle Proof for an account address.
-     * 
-     * @param address The account address.
-     * @return A list of serialized MPT nodes for the account.
+     *
+     * @param address the account address
+     * @return a list of serialized MPT nodes for the account
      */
     public java.util.List<byte[]> getAccountProof(String address) {
         return mpt.getAccountProof(address.getBytes());
     }
 
     /**
-     * Generates a compact Merkle Proof for an account address as a single byte array.
-     * 
-     * @param address The account address.
-     * @return A single byte array containing all nodes in the proof.
+     * Generates a compact Merkle Proof as a single byte array.
+     *
+     * @param address the account address
+     * @return a single byte array containing all proof nodes
      */
     public byte[] getCompactAccountProof(String address) {
         return mpt.getCompactAccountProof(address.getBytes());
     }
-    
+
     public AccountState cloneState() {
         return AccountState.fromMap(this.toJSON());
+    }
+
+    /**
+     * Merges another AccountState into this one. Used for committing successful
+     * smart contract executions.
+     */
+    public void merge(AccountState other) {
+        // Since we are committing a simulated state that is about to be discarded,
+        // we can just take over its internal objects for speed and correctness.
+        this.state = other.state;
+        this.ssiManager = other.ssiManager;
+        this.lifecycleManager = other.lifecycleManager;
+        this.privateDataManager = other.privateDataManager;
+        this.mpt = other.mpt;
     }
 
     private void updateMpt(String addr, Account acc) {
@@ -303,46 +428,57 @@ public class AccountState {
     }
 
     private byte[] serializeAccount(Account acc) {
-        java.nio.ByteBuffer buf = java.nio.ByteBuffer.allocate(1024);
-        buf.order(java.nio.ByteOrder.BIG_ENDIAN);
-        buf.putLong(acc.getBalance());
-        buf.putLong(acc.getNonce());
-        
-        byte[] storageRoot = HexUtils.decode(acc.getStorage().calculateRoot());
-        buf.putInt(storageRoot.length);
-        buf.put(storageRoot);
+        try {
+            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+            java.io.DataOutputStream dos = new java.io.DataOutputStream(baos);
 
-        byte[] code = acc.getCode();
-        if (code == null) {
-            buf.putInt(0);
-        } else {
-            buf.putInt(code.length);
-            buf.put(code);
+            dos.writeLong(acc.getBalance());
+            dos.writeLong(acc.getNonce());
+
+            byte[] storageRoot = HexUtils.decode(acc.getStorage().calculateRoot());
+            dos.writeInt(storageRoot.length);
+            dos.write(storageRoot);
+
+            byte[] code = acc.getCode();
+            if (code == null) {
+                dos.writeInt(0);
+            } else {
+                dos.writeInt(code.length);
+                dos.write(code);
+            }
+
+            java.util.Set<Capability> caps = acc.getCapabilities();
+            dos.writeInt(caps.size());
+            java.util.List<Capability> sortedCaps = new java.util.ArrayList<>(caps);
+            sortedCaps.sort((c1, c2) -> {
+                int typeComp = c1.getType().compareTo(c2.getType());
+                if (typeComp != 0) return typeComp;
+                return Long.compare(c1.getDeviceId(), c2.getDeviceId());
+            });
+            for (Capability cap : sortedCaps) {
+                dos.writeInt(cap.getType().ordinal());
+                dos.writeLong(cap.getDeviceId());
+            }
+
+            dos.flush();
+            return baos.toByteArray();
+        } catch (java.io.IOException e) {
+            throw new RuntimeException("Serialization failed", e);
         }
-
-        java.util.Set<Capability> caps = acc.getCapabilities();
-        buf.putInt(caps.size());
-        java.util.List<Capability> sortedCaps = new java.util.ArrayList<>(caps);
-        sortedCaps.sort((c1, c2) -> {
-            int typeComp = c1.getType().compareTo(c2.getType());
-            if (typeComp != 0) return typeComp;
-            return Long.compare(c1.getDeviceId(), c2.getDeviceId());
-        });
-        for (Capability cap : sortedCaps) {
-            buf.putInt(cap.getType().ordinal());
-            buf.putLong(cap.getDeviceId());
-        }
-
-        buf.flip();
-        byte[] result = new byte[buf.remaining()];
-        buf.get(result);
-        return result;
     }
 
+    // ─── Account inner class ──────────────────────────────────────────────────
+
+    /**
+     * Represents a single account's state, including multi-token balances,
+     * nonce, contract code, contract storage, and capabilities.
+     */
     public static class Account {
-        private long balance;
+        /** Token balances: "native" key for the chain token, other keys for custom tokens. */
+        private final Map<String, Long> tokenBalances;
         private long nonce;
         private byte[] code;
+        private byte[] abi;
         private final ContractState storage;
         private final java.util.Set<Capability> capabilities;
 
@@ -351,55 +487,75 @@ public class AccountState {
         }
 
         public Account(long balance, long nonce, byte[] code) {
-            this.balance = balance;
+            this.tokenBalances = new ConcurrentHashMap<>();
+            this.tokenBalances.put("native", balance);
             this.nonce = nonce;
             this.code = code;
             this.storage = new ContractState();
             this.capabilities = Collections.synchronizedSet(new java.util.HashSet<>());
         }
 
-        public synchronized long getBalance() {
-            return balance;
-        }
-
-        public synchronized long getNonce() {
-            return nonce;
-        }
-
-        public ContractState getStorage() {
-            return storage;
-        }
-
-        public java.util.Set<Capability> getCapabilities() {
-            return capabilities;
-        }
-
-        public void addCapability(Capability cap) {
-            capabilities.add(cap);
-        }
-
-        public synchronized void credit(long amount) {
-            balance += amount;
-        }
-
-        public synchronized void debit(long amount) {
-            balance -= amount;
-        }
-
-        public synchronized void incrementNonce() {
-            nonce += 1;
-        }
-
-        public synchronized void setNonce(long n) {
-            nonce = n;
-        }
-
-        public synchronized byte[] getCode() {
-            return code;
-        }
-
-        public synchronized void setCode(byte[] code) {
+        public Account(Map<String, Long> tokenBalances, long nonce, byte[] code) {
+            this.tokenBalances = new ConcurrentHashMap<>(tokenBalances);
+            this.nonce = nonce;
             this.code = code;
+            this.storage = new ContractState();
+            this.capabilities = Collections.synchronizedSet(new java.util.HashSet<>());
         }
+
+        /** Returns the native token balance. */
+        public synchronized long getBalance() {
+            return tokenBalances.getOrDefault("native", 0L);
+        }
+
+        /** Returns the balance of a specific token. */
+        public synchronized long getTokenBalance(String tokenId) {
+            return tokenBalances.getOrDefault(tokenId, 0L);
+        }
+
+        /** Returns a copy of all token balances. */
+        public synchronized Map<String, Long> getTokenBalances() {
+            return new HashMap<>(tokenBalances);
+        }
+
+        public synchronized long getNonce() { return nonce; }
+
+        public ContractState getStorage() { return storage; }
+
+        public java.util.Set<Capability> getCapabilities() { return capabilities; }
+
+        public void addCapability(Capability cap) { capabilities.add(cap); }
+
+        /** Credits the native token. */
+        public synchronized void credit(long amount) {
+            tokenBalances.merge("native", amount, (a, b) -> a + b);
+        }
+
+        /** Credits a specific token. */
+        public synchronized void creditToken(String tokenId, long amount) {
+            tokenBalances.merge(tokenId, amount, (a, b) -> a + b);
+        }
+
+        /** Debits the native token (no balance check). */
+        public synchronized void debit(long amount) {
+            tokenBalances.merge("native", -amount, (a, b) -> a + b);
+        }
+
+        /** Debits a specific token (no balance check). */
+        public synchronized void debitToken(String tokenId, long amount) {
+            tokenBalances.merge(tokenId, -amount, (a, b) -> a + b);
+        }
+
+        public synchronized void incrementNonce() { nonce += 1; }
+
+        public synchronized void setNonce(long n) { nonce = n; }
+
+        public synchronized byte[] getCode() { return code; }
+
+        public synchronized void setCode(byte[] code) { this.code = code; }
+
+        public synchronized byte[] getAbi() { return abi; }
+
+        public synchronized void setAbi(byte[] abi) { this.abi = abi; }
     }
 }

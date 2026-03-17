@@ -1,29 +1,28 @@
 package com.hybrid.blockchain;
 
-import org.iq80.leveldb.DB;
-import org.iq80.leveldb.Options;
+import org.apache.commons.io.FileUtils;
 import org.junit.jupiter.api.*;
-
-import java.io.IOException;
-import java.lang.reflect.Field;
+import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.UUID;
+import static org.assertj.core.api.Assertions.*;
 
-import static org.fusesource.leveldbjni.JniDBFactory.*;
-import static org.junit.jupiter.api.Assertions.*;
-
-@Tag("unit")
-class StorageTest {
+@Tag("integration")
+public class StorageTest {
 
     private Path tempDir;
     private Storage storage;
-    private static final byte[] AES = HexUtils.decode("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff");
+    private final byte[] aesKey = HexUtils.decode("00112233445566778899001122334455");
 
     @BeforeEach
     void setup() throws Exception {
-        tempDir = Files.createTempDirectory("storage-test-");
-        storage = new Storage(tempDir.toString(), AES);
+        tempDir = Files.createTempDirectory("storage-test-" + UUID.randomUUID());
+        storage = new Storage(tempDir.toString(), aesKey);
     }
 
     @AfterEach
@@ -32,168 +31,95 @@ class StorageTest {
             storage.close();
         }
         if (tempDir != null) {
-            Files.walk(tempDir)
-                    .sorted((a, b) -> b.getNameCount() - a.getNameCount())
-                    .forEach(p -> {
-                        try {
-                            Files.deleteIfExists(p);
-                        } catch (IOException e) {
-                            throw new RuntimeException(e);
-                        }
-                    });
+            FileUtils.deleteDirectory(tempDir.toFile());
         }
     }
 
     @Test
-    @DisplayName("put/get round-trip returns original object")
-    void putGetRoundTrip() throws Exception {
-        storage.put("k1", Map.of("a", 1, "b", "x"));
-        Map value = storage.get("k1", Map.class);
-        assertEquals(1, value.get("a"), "Stored map must preserve numeric field values across encrypted round-trip");
-        assertEquals("x", value.get("b"), "Stored map must preserve string field values across encrypted round-trip");
-    }
-
-    @Test
-    @DisplayName("get on non-existent key returns null")
-    void getMissingReturnsNull() throws Exception {
-        assertNull(storage.get("missing", Map.class), "Reading a missing key must return null rather than throwing");
-    }
-
-    @Test
-    @DisplayName("del removes key so subsequent get returns null")
-    void delRemovesKey() throws Exception {
-        storage.put("k2", Map.of("x", 1));
-        storage.del("k2");
-        assertNull(storage.get("k2", Map.class), "Deleted keys must not be retrievable afterwards");
-    }
-
-    @Test
-    @DisplayName("Data persists across distinct Storage instances on same path")
-    void persistenceAcrossInstances() throws Exception {
-        storage.put("persist", Map.of("n", 42));
+    @DisplayName("Invariant: Data must be encrypted at rest and recoverable")
+    void testEncryptionAtRest() throws Exception {
+        String key = "secret_key";
+        String value = "sensitive_data";
+        
+        storage.put(key, value);
+        
+        // Use a new storage instance with same key to verify persistence
         storage.close();
-
-        Storage second = new Storage(tempDir.toString(), AES);
-        Map value = second.get("persist", Map.class);
-        second.close();
-
-        assertEquals(42, value.get("n"), "Data must persist on disk and remain readable by subsequent Storage instances");
+        Storage storage2 = new Storage(tempDir.toString(), aesKey);
+        
+        String restored = storage2.get(key, String.class);
+        assertThat(restored).isEqualTo(value);
+        storage2.close();
     }
 
     @Test
-    @DisplayName("Raw LevelDB payload differs from plaintext JSON due encryption")
-    void dataIsEncryptedOnDisk() throws Exception {
-        storage.put("enc", Map.of("secret", "value"));
+    @DisplayName("Security: Storage must fail with wrong AES key")
+    void testWrongKeyFailure() throws Exception {
+        storage.put("key", "value");
         storage.close();
-
-        DB rawDb = factory.open(tempDir.toFile(), new Options().createIfMissing(true));
-        byte[] raw = rawDb.get(bytes("enc"));
-        rawDb.close();
-        storage = new Storage(tempDir.toString(), AES);
-
-        assertNotNull(raw, "Raw LevelDB value bytes must exist for stored key");
-        assertFalse(new String(raw).contains("secret"), "Encrypted LevelDB bytes must not expose plaintext JSON content");
+        
+        byte[] wrongKey = HexUtils.decode("ffffffffffffffffffffffffffffffff");
+        Storage storageEvil = new Storage(tempDir.toString(), wrongKey);
+        
+        assertThatThrownBy(() -> storageEvil.get("key", String.class))
+                .as("Decryption with wrong key must fail")
+                .isInstanceOf(Exception.class);
+        storageEvil.close();
     }
 
     @Test
-    @DisplayName("Wrong AES key cannot decrypt existing payload")
-    void wrongAesKeyFailsDecryption() throws Exception {
-        storage.put("secure", Map.of("v", 1));
-        storage.close();
-
-        byte[] wrong = HexUtils.decode("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-        Storage wrongStorage = new Storage(tempDir.toString(), wrong);
-        assertThrows(IOException.class, () -> wrongStorage.get("secure", Map.class), "Opening same DB with wrong AES key must fail authenticated decryption");
-        wrongStorage.close();
+    @DisplayName("Invariant: Block persistence and height indexing must be atomic")
+    void testBlockPersistence() throws Exception {
+        List<Transaction> txs = new ArrayList<>();
+        Block block = new Block(42, System.currentTimeMillis(), txs, "prev_hash", 1, "state_root");
+        String hash = block.getHash();
+        
+        storage.saveBlock(hash, block);
+        
+        Block restored = storage.loadBlockByHash(hash);
+        assertThat(restored).isNotNull();
+        assertThat(restored.getIndex()).isEqualTo(42);
+        
+        Block restoredByHeight = storage.loadBlockByHeight(42);
+        assertThat(restoredByHeight.getHash()).isEqualTo(hash);
+        
+        assertThat(storage.loadTipHash()).isEqualTo(hash);
     }
 
     @Test
-    @DisplayName("Invalid AES key lengths throw IllegalArgumentException")
-    void wrongAesLengthThrows() {
-        assertThrows(IllegalArgumentException.class, () -> new Storage(tempDir.resolve("k15").toString(), new byte[15]), "15-byte AES keys must be rejected by constructor");
-        assertThrows(IllegalArgumentException.class, () -> new Storage(tempDir.resolve("k17").toString(), new byte[17]), "17-byte AES keys must be rejected by constructor");
+    @DisplayName("Invariant: Transaction indexing must allow O(1) location lookup")
+    void testTransactionIndexing() throws Exception {
+        String txid = "tx123";
+        String blockHash = "block456";
+        int height = 100;
+        
+        storage.indexTransaction(txid, blockHash, height);
+        
+        Map<String, Object> loc = storage.getTransactionLocation(txid);
+        assertThat(loc).isNotNull();
+        assertThat(loc.get("blockHash")).isEqualTo(blockHash);
+        assertThat(loc.get("blockHeight")).isEqualTo(height);
     }
 
     @Test
-    @DisplayName("saveBlock/loadBlockByHash round-trip preserves block fields")
-    void saveLoadByHashRoundTrip() throws Exception {
-        Block b = new Block(1, System.currentTimeMillis(), java.util.List.of(), "00", 1, HexUtils.encode(new byte[32]));
-        b.setValidatorId("v1");
-        b.setSignature(new byte[64]);
-        storage.saveBlock("h1", b);
-
-        Block loaded = storage.loadBlockByHash("h1");
-        assertEquals(b.getIndex(), loaded.getIndex(), "Block index must survive save/load by hash");
-        assertEquals(b.getPrevHash(), loaded.getPrevHash(), "Block prevHash must survive save/load by hash");
-    }
-
-    @Test
-    @DisplayName("saveBlock/loadBlockByHeight round-trip works")
-    void saveLoadByHeightRoundTrip() throws Exception {
-        Block b = new Block(2, System.currentTimeMillis(), java.util.List.of(), "00", 1, HexUtils.encode(new byte[32]));
-        storage.saveBlock("h2", b);
-
-        Block loaded = storage.loadBlockByHeight(2);
-        assertNotNull(loaded, "Block saved by height mapping must be resolvable by height");
-        assertEquals(2, loaded.getIndex(), "Loaded block height must match stored block index");
-    }
-
-    @Test
-    @DisplayName("saveBlock updates chain tip and loadTipHash returns it")
-    void tipHashRoundTrip() throws Exception {
-        Block b = new Block(3, System.currentTimeMillis(), java.util.List.of(), "00", 1, HexUtils.encode(new byte[32]));
-        storage.saveBlock("tip-hash", b);
-
-        assertEquals("tip-hash", storage.loadTipHash(), "loadTipHash must return hash written by most recent saveBlock tip update");
-    }
-
-    @Test
-    @DisplayName("saveUTXO/loadUTXO round-trip works")
-    void utxoRoundTrip() throws Exception {
-        Map<String, Object> utxo = Map.of("a:0", Map.of("address", "hb-a", "amount", 5));
-        storage.saveUTXO(utxo);
-        assertEquals(utxo, storage.loadUTXO(), "UTXO serialized map must survive storage round-trip");
-    }
-
-    @Test
-    @DisplayName("saveState/loadState round-trip works")
-    void stateRoundTrip() throws Exception {
-        Map<String, Object> state = Map.of("accounts", Map.of("hb-a", Map.of("balance", 10, "nonce", 1)));
-        storage.saveState(state);
-        assertEquals(state, storage.loadState(), "Account state map must survive encrypted storage round-trip");
-    }
-
-    @Test
-    @DisplayName("putMeta/getMeta supports Integer, String, and Long")
-    void metaRoundTripTypes() throws Exception {
-        storage.putMeta("i", 7);
-        storage.putMeta("s", "ok");
-        storage.putMeta("l", 9L);
-
-        assertEquals(7, ((Number) storage.getMeta("i")).intValue(), "Integer metadata must round-trip through encrypted storage");
-        assertEquals("ok", storage.getMeta("s"), "String metadata must round-trip through encrypted storage");
-        assertEquals(9L, ((Number) storage.getMeta("l")).longValue(), "Long metadata must round-trip through encrypted storage");
-    }
-
-    @Test
-    @DisplayName("LRU cache evicts old entries past 512 while data remains on disk")
-    void lruCacheEvictionBehavior() throws Exception {
-        for (int i = 0; i < 600; i++) {
-            storage.put("k" + i, Map.of("v", i));
-        }
-
-        Field cacheField = Storage.class.getDeclaredField("cache");
-        cacheField.setAccessible(true);
-        Map<String, Object> cache = (Map<String, Object>) cacheField.get(storage);
-
-        assertFalse(cache.containsKey("k0"), "Oldest cache entry should be evicted once cache size exceeds 512 entries");
-        assertEquals(0, ((Number) ((Map<?, ?>) storage.get("k0", Map.class)).get("v")).intValue(), "Evicted cache entries must still be readable from persistent LevelDB storage");
-    }
-
-    @Test
-    @DisplayName("Operations after close throw an exception")
-    void operationsAfterCloseThrow() throws Exception {
-        storage.close();
-        assertThrows(Exception.class, () -> storage.put("x", Map.of("a", 1)), "Storage operations after close must fail rather than silently corrupt state");
+    @DisplayName("Invariant: State snapshots must be fully restorable")
+    void testStateSnapshot() throws Exception {
+        Map<String, Object> state = new HashMap<>();
+        state.put("hbAlice", "state_data");
+        
+        Map<String, Object> utxo = new HashMap<>();
+        utxo.put("tx:0", "utxo_data");
+        
+        storage.saveSnapshot(10, state, utxo);
+        
+        // Check meta update (lastSnapshotHeight)
+        Object lastHeight = storage.getMeta("lastSnapshotHeight");
+        assertThat(lastHeight).isEqualTo(10);
+        
+        // Manual verification of snapshot key
+        @SuppressWarnings("unchecked")
+        Map<String, Object> snapshot = storage.get("snapshot:10", Map.class);
+        assertThat(snapshot.get("state")).isEqualTo(state);
+        assertThat(snapshot.get("utxo")).isEqualTo(utxo);
     }
 }

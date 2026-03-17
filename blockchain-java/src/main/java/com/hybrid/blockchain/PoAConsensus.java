@@ -8,6 +8,9 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class PoAConsensus implements Consensus {
+    @Override
+    public void shutdown() {} // No background resources to clean up in PoA
+
 
     private static final byte[] DOMAIN_PREFIX = "BLOCK\0".getBytes(StandardCharsets.UTF_8);
     private final List<Validator> validators;

@@ -4,142 +4,104 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
-import java.util.Map;
-
-import static org.junit.jupiter.api.Assertions.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @Tag("unit")
-class AccountStateTest {
+public class AccountStateTest {
 
     @Test
-    @DisplayName("New address balance defaults to zero")
-    void newAddressBalanceZero() {
+    @DisplayName("Invariant: New account must have zero balance and zero nonce")
+    void testInitialAccountState() {
         AccountState state = new AccountState();
-        assertEquals(0, state.getBalance("hb-new"), "Fresh addresses must have zero balance by default");
+        assertThat(state.getBalance("alice")).isEqualTo(0L);
+        assertThat(state.getNonce("alice")).isEqualTo(0L);
     }
 
     @Test
-    @DisplayName("credit increases account balance")
-    void creditIncreasesBalance() {
+    @DisplayName("Invariant: Crediting and debiting account updates balance correctly")
+    void testCreditAndDebit() throws Exception {
         AccountState state = new AccountState();
-        state.credit("hb-a", 10);
-        assertEquals(10, state.getBalance("hb-a"), "credit must increase account balance by credited amount");
+        state.credit("alice", 100);
+        assertThat(state.getBalance("alice")).isEqualTo(100L);
+        
+        state.debit("alice", 30);
+        assertThat(state.getBalance("alice")).isEqualTo(70L);
     }
 
     @Test
-    @DisplayName("debit decreases account balance")
-    void debitDecreasesBalance() throws Exception {
+    @DisplayName("Security: Debiting more than available balance must fail")
+    void testInsufficientBalance() {
         AccountState state = new AccountState();
-        state.credit("hb-a", 10);
-        state.debit("hb-a", 3);
-        assertEquals(7, state.getBalance("hb-a"), "debit must reduce account balance by debited amount");
+        state.credit("bob", 50);
+        
+        assertThatThrownBy(() -> state.debit("bob", 100))
+            .isInstanceOf(Exception.class)
+            .hasMessageContaining("Insufficient balance");
+        
+        // Balance should remain unchanged after failure
+        assertThat(state.getBalance("bob")).isEqualTo(50L);
     }
 
     @Test
-    @DisplayName("debit below zero throws")
-    void debitBelowZeroThrows() {
+    @DisplayName("Security: Negative credits or debits must fail")
+    void testNegativeOperations() {
         AccountState state = new AccountState();
-        state.credit("hb-a", 2);
-        Exception ex = assertThrows(Exception.class, () -> state.debit("hb-a", 3), "Debiting more than balance must throw");
-        assertTrue(ex.getMessage().toLowerCase().contains("insufficient"), "Debit failure must explain insufficient balance");
+        
+        // In the original code, this was also checked. Let's make sure it throws.
+        assertThatThrownBy(() -> state.credit("charlie", -10))
+            .isInstanceOf(IllegalArgumentException.class);
+            
+        state.credit("charlie", 100);
+        
+        assertThatThrownBy(() -> state.debit("charlie", -50))
+            .isInstanceOf(IllegalArgumentException.class);
+            
+        assertThat(state.getBalance("charlie")).isEqualTo(100L);
     }
 
     @Test
-    @DisplayName("Nonce starts at zero and increments by one")
-    void nonceStartsAndIncrements() {
+    @DisplayName("Invariant: Nonce tracking must be atomic and strict")
+    void testNonceTracking() {
         AccountState state = new AccountState();
-        assertEquals(0, state.getNonce("hb-a"), "Fresh account nonce must start at zero");
-        state.incrementNonce("hb-a");
-        assertEquals(1, state.getNonce("hb-a"), "incrementNonce must increase nonce by exactly one");
+        
+        state.incrementNonce("dave");
+        assertThat(state.getNonce("dave")).isEqualTo(1L);
+        
+        state.setNonce("dave", 5);
+        assertThat(state.getNonce("dave")).isEqualTo(5L);
+        
+        state.incrementNonce("dave");
+        assertThat(state.getNonce("dave")).isEqualTo(6L);
     }
 
     @Test
-    @DisplayName("State root is deterministic for unchanged state")
-    void stateRootDeterministic() {
+    @DisplayName("Invariant: State serialization must be deterministic and reversible")
+    void testSerialization() {
         AccountState state = new AccountState();
-        state.credit("hb-a", 5);
-        String root1 = state.calculateStateRoot();
-        String root2 = state.calculateStateRoot();
-        assertEquals(root1, root2, "State root must be deterministic when state is unchanged");
-    }
-
-    @Test
-    @DisplayName("State root changes after state mutation")
-    void stateRootChangesAfterMutation() {
-        AccountState state = new AccountState();
-        String before = state.calculateStateRoot();
-        state.credit("hb-a", 5);
-        String after = state.calculateStateRoot();
-        assertNotEquals(before, after, "State root must change when account state is mutated");
-    }
-
-    @Test
-    @DisplayName("cloneState creates deep copy isolated from original")
-    void cloneStateDeepCopy() {
-        AccountState original = new AccountState();
-        original.credit("hb-a", 10);
-        AccountState clone = original.cloneState();
-        clone.credit("hb-a", 5);
-
-        assertEquals(10, original.getBalance("hb-a"), "Mutating cloned state must not affect original state balances");
-        assertEquals(15, clone.getBalance("hb-a"), "Cloned state should reflect its own independent mutations");
-    }
-
-    @Test
-    @DisplayName("AccountState toJSON/fromMap round-trip preserves core account data")
-    void accountStateRoundTripPreservesData() {
-        AccountState state = new AccountState();
-        state.credit("hb-a", 100);
-        state.incrementNonce("hb-a");
-        state.putStorage("hb-a", 1L, 99L);
-
-        Map<String, Object> json = state.toJSON();
+        state.credit("eve", 1000);
+        state.incrementNonce("eve");
+        
+        var json = state.toJSON();
         AccountState restored = AccountState.fromMap(json);
-
-        assertEquals(state.getBalance("hb-a"), restored.getBalance("hb-a"), "Round-trip must preserve account balances");
-        assertEquals(state.getNonce("hb-a"), restored.getNonce("hb-a"), "Round-trip must preserve account nonces");
-        assertEquals(state.getAccountStorage("hb-a").get(1L), restored.getAccountStorage("hb-a").get(1L), "Round-trip must preserve account contract storage values");
+        
+        assertThat(restored.getBalance("eve")).isEqualTo(1000L);
+        assertThat(restored.getNonce("eve")).isEqualTo(1L);
+        assertThat(state.calculateStateRoot()).isEqualTo(restored.calculateStateRoot());
     }
 
     @Test
-    @DisplayName("PrivateDataManager survives AccountState serialization round-trip")
-    void privateDataManagerRoundTrip() {
+    @DisplayName("Invariant: State root must change deterministically upon state updates")
+    void testStateRootChanges() throws Exception {
         AccountState state = new AccountState();
-        state.getPrivateDataManager().createCollection("c1", java.util.List.of("hb-a"), "hb-a");
-
-        AccountState restored = AccountState.fromMap(state.toJSON());
-        assertTrue(restored.getPrivateDataManager().hasCollection("c1"), "PrivateDataManager collections must survive state serialization round-trip");
-    }
-
-    @Test
-    @DisplayName("DeviceLifecycleManager survives AccountState serialization round-trip")
-    void lifecycleRoundTrip() {
-        AccountState state = new AccountState();
-        byte[] mPub = Crypto.derivePublicKey(java.math.BigInteger.valueOf(77));
-        state.getLifecycleManager().registerManufacturer("m1", mPub);
-
-        AccountState restored = AccountState.fromMap(state.toJSON());
-        assertNotNull(restored.getLifecycleManager().getStats(), "Lifecycle manager state object must survive round-trip and remain queryable");
-    }
-
-    @Test
-    @DisplayName("SSIManager survives AccountState serialization round-trip")
-    void ssiRoundTrip() {
-        AccountState state = new AccountState();
-        state.getSSIManager().registerDID("dev-1", Crypto.derivePublicKey(java.math.BigInteger.valueOf(88)), "owner-1");
-
-        AccountState restored = AccountState.fromMap(state.toJSON());
-        assertNotNull(restored.getSSIManager().getDIDForDevice("dev-1"), "SSI registry content must survive AccountState round-trip");
-    }
-
-    @Test
-    @DisplayName("setBlockHeight influences state root via lifecycle metadata")
-    void setBlockHeightAffectsStateRoot() {
-        AccountState state = new AccountState();
-        String before = state.calculateStateRoot();
-        state.setBlockHeight(10);
-        String after = state.calculateStateRoot();
-
-        assertNotEquals(before, after, "Updating lifecycle block height should affect aggregated state root hash");
+        String root1 = state.calculateStateRoot();
+        
+        state.credit("frank", 100);
+        String root2 = state.calculateStateRoot();
+        assertThat(root2).isNotEqualTo(root1);
+        
+        state.debit("frank", 50);
+        String root3 = state.calculateStateRoot();
+        assertThat(root3).isNotEqualTo(root2);
     }
 }

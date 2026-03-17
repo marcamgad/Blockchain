@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <property name="LOG_FILE_PATH" value="logs"/>
+    <property name="LOG_FILE_NAME" value="hybridchain"/>
+
+    <!-- Console Appender -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss} %-5level [%thread] %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Rolling File Appender -->
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_FILE_PATH}/${LOG_FILE_NAME}.log</file>
+        <encoder>
+            <pattern>%d{HH:mm:ss} %-5level [%thread] %logger{36} - %msg%n</pattern>
+        </encoder>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <!-- Daily rollover, max 100MB per file -->
+            <fileNamePattern>${LOG_FILE_PATH}/${LOG_FILE_NAME}.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>100MB</maxFileSize>
+            <maxHistory>7</maxHistory>
+            <totalSizeCap>700MB</totalSizeCap>
+        </rollingPolicy>
+    </appender>
+
+    <!-- Spring Boot default logger -->
+    <logger name="org.springframework" level="INFO" />
+    <logger name="org.springframework.boot" level="INFO" />
+
+    <!-- HybridChain loggers -->
+    <logger name="com.hybrid" level="INFO" />
+    <logger name="com.hybrid.blockchain" level="INFO" />
+
+    <!-- Enable DEBUG for specific packages when DEBUG_PACKAGES env var is set -->
+    <springProperty name="DEBUG_PACKAGES" source="DEBUG_PACKAGES" default=""/>
+    <if condition='property("DEBUG_PACKAGES").contains("consensus")'>
+        <then>
+            <logger name="com.hybrid.blockchain.consensus" level="DEBUG" />
+        </then>
+    </if>
+    <if condition='property("DEBUG_PACKAGES").contains("p2p")'>
+        <then>
+            <logger name="com.hybrid.blockchain.p2p" level="DEBUG" />
+        </then>
+    </if>
+    <if condition='property("DEBUG_PACKAGES").contains("security")'>
+        <then>
+            <logger name="com.hybrid.blockchain.security" level="DEBUG" />
+        </then>
+    </if>
+
+    <!-- Root logger -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE" />
+        <appender-ref ref="FILE" />
+    </root>
+</configuration>

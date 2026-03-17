@@ -1,7 +1,5 @@
 package com.hybrid.blockchain;
 
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 
@@ -19,6 +17,7 @@ public class Block {
     public String txRoot;
     private String validatorId;
     private byte[] signature;
+    private int blockSizeBytes;
 
     public Block() {
     }
@@ -52,29 +51,33 @@ public class Block {
     }
 
     public byte[] serializeCanonical() {
-        ByteBuffer buf = ByteBuffer.allocate(1024).order(ByteOrder.BIG_ENDIAN);
-        buf.putInt(index);
-        buf.putLong(timestamp);
+        try {
+            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+            java.io.DataOutputStream dos = new java.io.DataOutputStream(baos);
 
-        byte[] ph = HexUtils.decode(prevHash);
-        buf.putInt(ph.length);
-        buf.put(ph);
+            dos.writeInt(index);
+            dos.writeLong(timestamp);
 
-        buf.putLong(nonce);
-        buf.putInt(difficulty);
+            byte[] ph = HexUtils.decode(prevHash);
+            dos.writeInt(ph.length);
+            dos.write(ph);
 
-        byte[] sr = HexUtils.decode(stateRoot);
-        buf.putInt(sr.length);
-        buf.put(sr);
+            dos.writeLong(nonce);
+            dos.writeInt(difficulty);
 
-        byte[] tr = HexUtils.decode(txRoot);
-        buf.putInt(tr.length);
-        buf.put(tr);
+            byte[] sr = HexUtils.decode(stateRoot);
+            dos.writeInt(sr.length);
+            dos.write(sr);
 
-        buf.flip();
-        byte[] out = new byte[buf.remaining()];
-        buf.get(out);
-        return out;
+            byte[] tr = HexUtils.decode(txRoot);
+            dos.writeInt(tr.length);
+            dos.write(tr);
+
+            dos.flush();
+            return baos.toByteArray();
+        } catch (java.io.IOException e) {
+            throw new RuntimeException("Serialization failed", e);
+        }
     }
 
     public void mine(int targetDifficulty, long maxNonce) {
@@ -157,5 +160,13 @@ public class Block {
 
     public void setTxRoot(String txRoot) {
         this.txRoot = txRoot;
+    }
+
+    public int getBlockSizeBytes() {
+        return blockSizeBytes;
+    }
+
+    public void setBlockSizeBytes(int blockSizeBytes) {
+        this.blockSizeBytes = blockSizeBytes;
     }
 }

@@ -1,7 +1,5 @@
 package com.hybrid.blockchain;
 
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.math.BigInteger;
 import java.util.*;
@@ -14,7 +12,8 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 public final class Transaction {
 
     public enum Type {
-        ACCOUNT, UTXO, CONTRACT, IOT_MANAGEMENT, MINT, BURN
+        ACCOUNT, UTXO, CONTRACT, IOT_MANAGEMENT, MINT, BURN, TOKEN_TRANSFER, TELEMETRY,
+        TOKEN_REGISTER, TOKEN_MINT, TOKEN_BURN
     }
 
     private static final byte[] DOMAIN_PREFIX = "TX\0".getBytes(StandardCharsets.UTF_8);
@@ -146,7 +145,9 @@ public final class Transaction {
         }
         public Transaction sign(BigInteger privateKey, byte[] publicKey) {
             this.pubKey = publicKey;
-            this.from = Crypto.deriveAddress(publicKey);
+            if (this.from == null) {
+                this.from = Crypto.deriveAddress(publicKey);
+            }
             Transaction unsigned = new Transaction(this);
             byte[] msg = unsigned.signingPayload();
             this.signature = Crypto.sign(msg, privateKey);
@@ -167,37 +168,41 @@ public final class Transaction {
     }
 
     public byte[] serializeCanonical() {
-        ByteBuffer buf = ByteBuffer.allocate(8192).order(ByteOrder.BIG_ENDIAN);
-        buf.putInt(version);
-        buf.putInt(type.ordinal());
-        buf.putInt(networkId);
-        buf.putLong(nonce);
-        buf.putLong(timestamp);
-        buf.putLong(validUntilBlock);
+        try {
+            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+            java.io.DataOutputStream dos = new java.io.DataOutputStream(baos);
 
-        putString(buf, from);
-        putString(buf, to);
-        buf.putLong(amount);
-        buf.putLong(fee);
-        buf.putInt(data.length);
-        buf.put(data);
+            dos.writeInt(version);
+            dos.writeInt(type.ordinal());
+            dos.writeInt(networkId);
+            dos.writeLong(nonce);
+            dos.writeLong(timestamp);
+            dos.writeLong(validUntilBlock);
 
-        buf.putInt(inputs.size());
-        for (UTXOInput i : inputs) {
-            putString(buf, i.getTxid());
-            buf.putInt(i.getIndex());
+            writeString(dos, from);
+            writeString(dos, to);
+            dos.writeLong(amount);
+            dos.writeLong(fee);
+            dos.writeInt(data.length);
+            dos.write(data);
+
+            dos.writeInt(inputs.size());
+            for (UTXOInput i : inputs) {
+                writeString(dos, i.getTxid());
+                dos.writeInt(i.getIndex());
+            }
+
+            dos.writeInt(outputs.size());
+            for (UTXOOutput o : outputs) {
+                writeString(dos, o.getAddress());
+                dos.writeLong(o.getAmount());
+            }
+
+            dos.flush();
+            return baos.toByteArray();
+        } catch (java.io.IOException e) {
+            throw new RuntimeException("Serialization failed", e);
         }
-
-        buf.putInt(outputs.size());
-        for (UTXOOutput o : outputs) {
-            putString(buf, o.getAddress());
-            buf.putLong(o.getAmount());
-        }
-
-        buf.flip();
-        byte[] out = new byte[buf.remaining()];
-        buf.get(out);
-        return out;
     }
 
     public void sign(BigInteger privateKey) {
@@ -206,13 +211,13 @@ public final class Transaction {
         this.txid = Crypto.bytesToHex(Crypto.hash(serializeCanonical()));
     }
 
-    private static void putString(ByteBuffer buf, String s) {
+    private static void writeString(java.io.DataOutputStream dos, String s) throws java.io.IOException {
         if (s == null) {
-            buf.putInt(0);
+            dos.writeInt(0);
         } else {
             byte[] b = s.getBytes(StandardCharsets.UTF_8);
-            buf.putInt(b.length);
-            buf.put(b);
+            dos.writeInt(b.length);
+            dos.write(b);
         }
     }
 
@@ -279,6 +284,14 @@ public final class Transaction {
 
     public byte[] getData() {
         return data;
+    }
+
+    public byte[] getSignature() {
+        return signature;
+    }
+
+    public byte[] getPubKey() {
+        return pubKey;
     }
 
     @JsonIgnore

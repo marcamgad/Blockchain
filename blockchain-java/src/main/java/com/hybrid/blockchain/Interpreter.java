@@ -12,9 +12,11 @@ import java.util.Stack;
 public class Interpreter {
     private final byte[] bytecode;
     private final Stack<Long> stack;
+    private byte[] memory = new byte[16384]; // 16KB sandbox memory
     private int pc = 0; // Program Counter
     private long gasRemaining;
     private final BlockchainContext context;
+    private byte[] returnData = null;
 
     public Interpreter(byte[] bytecode, long gasLimit, BlockchainContext context) {
         this.bytecode = bytecode;
@@ -35,12 +37,78 @@ public class Interpreter {
                 case STOP:
                     return;
 
+                case RETURN:
+                    long retLen = stack.pop();
+                    long retOffset = stack.pop();
+                    if (retOffset < 0 || retOffset + retLen > memory.length) throw new Exception("Memory access out of bounds");
+                    this.returnData = new byte[(int)retLen];
+                    System.arraycopy(memory, (int)retOffset, this.returnData, 0, (int)retLen);
+                    return;
+
+                case REVERT:
+                    long rLen = stack.pop();
+                    long rOff = stack.pop();
+                    if (rOff < 0 || rOff + rLen > memory.length) throw new Exception("Memory access out of bounds");
+                    byte[] rData = new byte[(int) rLen];
+                    System.arraycopy(memory, (int) rOff, rData, 0, (int) rLen);
+                    throw new RevertException(rData);
+
+                case JUMP:
+                    long dest = stack.pop();
+                    if (dest < 0 || dest >= bytecode.length) throw new Exception("Invalid JUMP destination");
+                    pc = (int) dest;
+                    break;
+
+                case JUMPI:
+                    long cond = stack.pop();
+                    long target = stack.pop();
+                    if (cond != 0) {
+                        if (target < 0 || target >= bytecode.length) throw new Exception("Invalid JUMPI destination");
+                        pc = (int) target;
+                    }
+                    break;
+
+                case CALL:
+                    @SuppressWarnings("unused") long callGas = stack.pop();
+                    @SuppressWarnings("unused") long toAddr = stack.pop(); 
+                    @SuppressWarnings("unused") long callValue = stack.pop();
+                    @SuppressWarnings("unused") long inOffset = stack.pop();
+                    @SuppressWarnings("unused") long inLen = stack.pop();
+                    @SuppressWarnings("unused") long outOffset = stack.pop();
+                    @SuppressWarnings("unused") long outLen = stack.pop();
+                    
+                    // Simple stub for intra-contract calls. 
+                    // In full implementation, this instantiates a new Interpreter.
+                    stack.push(1L); // 1 = success
+                    break;
+
+                case LOG:
+                    long topic = stack.pop();
+                    long dataLen = stack.pop();
+                    long dataOffset = stack.pop();
+                    if (dataOffset < 0 || dataOffset + dataLen > memory.length) throw new Exception("Memory access out of bounds");
+                    byte[] eventData = new byte[(int)dataLen];
+                    System.arraycopy(memory, (int)dataOffset, eventData, 0, (int)dataLen);
+                    context.events.add(new ContractEvent(context.contractAddress, topic, eventData, context.timestamp));
+                    break;
+
                 case PUSH:
                     stack.push(readLong());
                     break;
 
                 case POP:
                     stack.pop();
+                    break;
+
+                case DUP:
+                    stack.push(stack.peek());
+                    break;
+
+                case SWAP:
+                    long s1 = stack.pop();
+                    long s2 = stack.pop();
+                    stack.push(s1);
+                    stack.push(s2);
                     break;
 
                 case ADD:
@@ -57,6 +125,25 @@ public class Interpreter {
                     stack.push(stack.pop() * stack.pop());
                     break;
 
+                case MOD:
+                    long mDivisor = stack.pop();
+                    if (mDivisor == 0) throw new Exception("Division by zero");
+                    stack.push(stack.pop() % mDivisor);
+                    break;
+
+                case MLOAD:
+                    long mOffset = stack.pop();
+                    if (mOffset < 0 || mOffset + 8 > memory.length) throw new Exception("Memory access out of bounds");
+                    stack.push(ByteBuffer.wrap(memory, (int)mOffset, 8).order(ByteOrder.BIG_ENDIAN).getLong());
+                    break;
+
+                case MSTORE:
+                    long mOff = stack.pop();
+                    long mVal = stack.pop();
+                    if (mOff < 0 || mOff + 8 > memory.length) throw new Exception("Memory access out of bounds");
+                    ByteBuffer.wrap(memory, (int)mOff, 8).order(ByteOrder.BIG_ENDIAN).putLong(mVal);
+                    break;
+
                 case DIV:
                     long divisor = stack.pop();
                     if (divisor == 0)
@@ -64,15 +151,47 @@ public class Interpreter {
                     stack.push(stack.pop() / divisor);
                     break;
 
+                case EQ:
+                    stack.push(stack.pop().equals(stack.pop()) ? 1L : 0L);
+                    break;
+
+                case LT:
+                    long ltB = stack.pop();
+                    long ltA = stack.pop();
+                    stack.push(ltA < ltB ? 1L : 0L);
+                    break;
+
+                case GT:
+                    long gtB = stack.pop();
+                    long gtA = stack.pop();
+                    stack.push(gtA > gtB ? 1L : 0L);
+                    break;
+
                 case SLOAD:
                     long sKey = stack.pop();
-                    stack.push(context.state.getAccountStorage(context.contractAddress).get(sKey));
+                    stack.push(context.state.getAccountStorage(context.contractAddress).getOrDefault(sKey, 0L));
                     break;
 
                 case SSTORE:
-                    long val = stack.pop();
                     long k = stack.pop();
+                    long val = stack.pop();
                     context.state.putStorage(context.contractAddress, k, val);
+                    break;
+
+                case BALANCE:
+                    long addrSeed = stack.pop();
+                    // In our simplified VM, we derive address from the long seed if it's not a real address string
+                    // For now, look up by the address seed if it's already a known address or use a mapping.
+                    // This is a placeholder for real address conversion.
+                    stack.push(context.state.getBalance(context.state.getAccountAddresses().stream().skip(addrSeed % 10).findFirst().orElse(context.contractAddress))); 
+                    break;
+
+                case SELFBALANCE:
+                    stack.push(context.state.getBalance(context.contractAddress));
+                    break;
+
+                case VALUE:
+                    stack.push(context.value);
                     break;
 
                 case SYSCALL:
@@ -170,6 +289,7 @@ public class Interpreter {
         public AccountState state;
         public HardwareManager hardware;
         public String currentBlockHash;
+        public java.util.List<ContractEvent> events = new java.util.ArrayList<>();
 
         public BlockchainContext() {}
 
@@ -193,5 +313,9 @@ public class Interpreter {
 
     public Stack<Long> getStack() {
         return stack;
+    }
+
+    public byte[] getReturnData() {
+        return returnData != null ? returnData : new byte[0];
     }
 }

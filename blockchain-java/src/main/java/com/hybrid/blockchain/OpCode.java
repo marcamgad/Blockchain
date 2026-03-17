@@ -38,6 +38,13 @@ public enum OpCode {
     VALUE(0x42, 2),
     TIMESTAMP(0x43, 2),
     NUMBER(0x44, 2), // Block height
+    SELFBALANCE(0x45, 5),
+
+    // System Operations (0xF0)
+    RETURN(0xf3, 0),
+    REVERT(0xfd, 0),
+    CALL(0xf1, 700),
+    LOG(0xa0, 375),
 
     // IoT Capabilities (0x50 - 0x5F)
     SYSCALL(0x50, 100);

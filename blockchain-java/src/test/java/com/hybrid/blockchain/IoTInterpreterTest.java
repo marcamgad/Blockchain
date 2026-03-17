@@ -1,12 +1,17 @@
 package com.hybrid.blockchain;
 
-import org.junit.jupiter.api.Test;
 import java.nio.ByteBuffer;
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+@Tag("unit")
 public class IoTInterpreterTest {
 
     @Test
+    @DisplayName("Invariant: Basic arithmetic ops evaluate correctly")
     public void testBasicArithmetic() throws Exception {
         // PUSH 10, PUSH 20, ADD, STOP
         ByteBuffer code = ByteBuffer.allocate(20);
@@ -25,16 +30,17 @@ public class IoTInterpreterTest {
         Interpreter vm = new Interpreter(code.array(), 1000, ctx);
         vm.execute();
 
-        assertEquals(30L, vm.getStack().pop());
+        assertThat(vm.getStack().pop()).isEqualTo(30L);
     }
 
     @Test
+    @DisplayName("Invariant: Storage persistence writes and reads correctly")
     public void testStoragePersistence() throws Exception {
         ByteBuffer code = ByteBuffer.allocate(31);
-        code.put(OpCode.PUSH.getByte()).putLong(1L);
-        code.put(OpCode.PUSH.getByte()).putLong(100L);
+        code.put(OpCode.PUSH.getByte()).putLong(100L); // value
+        code.put(OpCode.PUSH.getByte()).putLong(1L);   // key
         code.put(OpCode.SSTORE.getByte());
-        code.put(OpCode.PUSH.getByte()).putLong(1L);
+        code.put(OpCode.PUSH.getByte()).putLong(1L);   // key
         code.put(OpCode.SLOAD.getByte());
         code.put(OpCode.STOP.getByte());
 
@@ -46,10 +52,11 @@ public class IoTInterpreterTest {
         Interpreter vm = new Interpreter(code.array(), 10000, ctx);
         vm.execute();
 
-        assertEquals(100L, state.getAccountStorage("contract1").get(1L));
+        assertThat(state.getAccountStorage("contract1").get(1L)).isEqualTo(100L);
     }
 
     @Test
+    @DisplayName("Security: Unauthorized system calls must be rejected")
     public void testSyscallUnauthorized() {
         ByteBuffer code = ByteBuffer.allocate(20);
         code.put(OpCode.PUSH.getByte()).putLong(1L);
@@ -62,11 +69,13 @@ public class IoTInterpreterTest {
                 System.currentTimeMillis(), 1, "alice", "contract1", 0, state, hw, "hash1");
 
         Interpreter vm = new Interpreter(code.array(), 1000, ctx);
-        Exception ex = assertThrows(Exception.class, vm::execute);
-        assertTrue(ex.getMessage().contains("Unauthorized"));
+        assertThatThrownBy(vm::execute)
+            .isInstanceOf(Exception.class)
+            .hasMessageContaining("Unauthorized");
     }
 
     @Test
+    @DisplayName("Security: Authorized system calls must succeed")
     public void testSyscallAuthorized() throws Exception {
         ByteBuffer code = ByteBuffer.allocate(20);
         code.put(OpCode.PUSH.getByte()).putLong(1L);
@@ -86,10 +95,11 @@ public class IoTInterpreterTest {
         Interpreter vm = new Interpreter(code.array(), 1000, ctx);
         vm.execute();
 
-        assertEquals(42L, vm.getStack().pop());
+        assertThat(vm.getStack().pop()).isEqualTo(42L);
     }
 
     @Test
+    @DisplayName("Feature: Deferred actuator actions only apply upon commit")
     public void testDeferredActuator() throws Exception {
         // PUSH 100 (ActuatorID), PUSH 1 (Value), PUSH 2 (WRITE_ACTUATOR), SYSCALL, STOP
         ByteBuffer code = ByteBuffer.allocate(31);
@@ -110,14 +120,15 @@ public class IoTInterpreterTest {
         vm.execute();
 
         // Verify it's NOT yet executed
-        assertEquals(0L, hw.getActuatorState(100L));
+        assertThat(hw.getActuatorState(100L)).isEqualTo(0L);
 
         // Commit and verify
         hw.commitDeferredActions("block_abc");
-        assertEquals(1L, hw.getActuatorState(100L));
+        assertThat(hw.getActuatorState(100L)).isEqualTo(1L);
     }
 
     @Test
+    @DisplayName("Security: Out of gas execution must throw exception")
     public void testOutOfGas() {
         ByteBuffer code = ByteBuffer.allocate(200);
         for (int i = 0; i < 15; i++)
@@ -129,6 +140,7 @@ public class IoTInterpreterTest {
                 System.currentTimeMillis(), 1, "alice", "contract1", 0, state, hw, "hash1");
 
         Interpreter vm = new Interpreter(code.array(), 10, ctx);
-        assertThrows(Exception.class, vm::execute);
+        assertThatThrownBy(vm::execute)
+            .isInstanceOf(Exception.class);
     }
 }
