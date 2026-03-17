@@ -8,8 +8,15 @@ import com.hybrid.blockchain.security.RateLimiter;
 import com.hybrid.blockchain.consensus.PBFTConsensus;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.concurrent.locks.ReadWriteLock;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+/**
+ * Core Blockchain implementation for HybridChain.
+ * Manages the chain state, transaction processing, and consensus integration.
+ */
 public class Blockchain {
+    private static final Logger log = LoggerFactory.getLogger(Blockchain.class);
 
     protected List<Block> chain;
     private Mempool mempool;
@@ -21,6 +28,10 @@ public class Blockchain {
     private final HardwareManager hardwareManager;
     private final RateLimiter transactionRateLimiter;
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
+    private TokenRegistry tokenRegistry;
+    private com.hybrid.blockchain.api.EventBus eventBus;
+    private PeerNode peerNode;
+    private long totalMinted = 0;
 
     public Blockchain(Storage storage, Mempool mempool, Consensus consensus) throws Exception {
         this.storage = storage != null ? storage : new Storage("data", Config.STORAGE_AES_KEY);
@@ -32,7 +43,14 @@ public class Blockchain {
         this.consensus = consensus;
         this.hardwareManager = new HardwareManager();
         this.transactionRateLimiter = RateLimiter.Presets.transactionLimiter();
+        this.tokenRegistry = new TokenRegistry(this.storage);
     }
+
+    public void setTokenRegistry(TokenRegistry registry) { this.tokenRegistry = registry; }
+    public TokenRegistry getTokenRegistry() { return tokenRegistry; }
+    public void setEventBus(com.hybrid.blockchain.api.EventBus bus) { this.eventBus = bus; }
+    public com.hybrid.blockchain.api.EventBus getEventBus() { return eventBus; }
+    public void setPeerNode(PeerNode peerNode) { this.peerNode = peerNode; }
 
     public void init() throws Exception {
         lock.writeLock().lock();
@@ -42,7 +60,7 @@ public class Blockchain {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> snap = storage.get("snapshot:" + snapHeight, Map.class);
                 if (snap != null) {
-                    System.out.println("[INIT] Loaded snapshot at height " + snapHeight);
+                    log.info("[INIT] Loaded snapshot at height {}", snapHeight);
                     @SuppressWarnings("unchecked")
                     Map<String, Object> rawState = (Map<String, Object>) snap.get("state");
                     @SuppressWarnings("unchecked")
@@ -57,7 +75,7 @@ public class Blockchain {
                             difficulty = ((Number) diffObj).intValue();
                         return;
                     } else {
-                        System.out.println("[INIT] Snapshot block at height " + snapHeight + " was pruned; falling back to tip-hash");
+                        log.info("[INIT] Snapshot block at height {} was pruned; falling back to tip-hash", snapHeight);
                     }
                 }
             }
@@ -72,10 +90,36 @@ public class Blockchain {
                 state = AccountState.fromMap(rawState != null ? rawState : new HashMap<>());
                 Object diffObj = storage.getMeta("difficulty");
                 if (diffObj instanceof Number) difficulty = ((Number) diffObj).intValue();
-                System.out.println("[INIT] Resumed from height " + tip.getIndex());
+                
+                Object mintedObj = storage.getMeta("totalMinted");
+                if (mintedObj instanceof Number) totalMinted = ((Number) mintedObj).longValue();
+                
+                log.info("[INIT] Resumed from height {} (totalMinted: {})", tip.getIndex(), totalMinted);
                 return;
             }
-            System.out.println("[INIT] Creating genesis block");
+
+            // Fast Sync: Check for latest checkpoint if no tip is found
+            Checkpoint latestCp = storage.loadLatestCheckpoint();
+            if (latestCp != null) {
+                log.info("[INIT] Fast sync from checkpoint at height {}", latestCp.getBlockHeight());
+                Block cpBlock = storage.loadBlockByHash(latestCp.getBlockHash());
+                if (cpBlock != null) {
+                    chain.add(cpBlock);
+                    Map<String, Object> rawUTXO = storage.loadUTXO();
+                    utxo = UTXOSet.fromMap(rawUTXO != null ? rawUTXO : new HashMap<>());
+                    Map<String, Object> rawState = storage.loadState();
+                    state = AccountState.fromMap(rawState != null ? rawState : new HashMap<>());
+                    // Validation: state root must match checkpoint
+                    if (state.calculateStateRoot().equals(latestCp.getStateRoot())) {
+                        log.info("[INIT] Fast sync successful at height {}", latestCp.getBlockHeight());
+                        return;
+                    } else {
+                        log.warn("[INIT] Checkpoint state root mismatch! Falling back to genesis.");
+                    }
+                }
+            }
+
+            log.info("[INIT] Creating genesis block");
             Block genesis = new Block(0, System.currentTimeMillis(), new ArrayList<>(), "0000000000000000000000000000000000000000000000000000000000000000", difficulty, state.calculateStateRoot());
             genesis.setHash(genesis.calculateHash());
             chain.add(genesis);
@@ -98,6 +142,8 @@ public class Blockchain {
             lock.readLock().unlock();
         }
     }
+
+    public long getTotalMinted() { return totalMinted; }
 
     // Validate a transaction according to type
     public void validateTransaction(Transaction tx) throws Exception {
@@ -180,6 +226,14 @@ public class Blockchain {
             case MINT:
                 if (tx.getFrom() != null)
                     throw new Exception("MINT must be system-initiated (from address must be null)");
+                // Enforce scheduled reward amount against tokenomics
+                {
+                    long expectedReward = Tokenomics.getCurrentReward(getHeight() + 1, Tokenomics.getTotalMinted(this));
+                    if (expectedReward == 0)
+                        throw new Exception("MINT rejected: supply cap reached");
+                    if (tx.getAmount() > expectedReward)
+                        throw new Exception("MINT amount " + tx.getAmount() + " exceeds scheduled reward " + expectedReward);
+                }
                 break;
             case BURN:
                 if (tx.getFrom() == null)
@@ -198,13 +252,118 @@ public class Blockchain {
                     throw new Exception("Insufficient funds for burn");
                 break;
 
+            case TOKEN_TRANSFER:
+                if (tx.getFrom() == null)
+                    throw new Exception("TOKEN_TRANSFER must have a from address");
+                if (tx.getTo() == null)
+                    throw new Exception("TOKEN_TRANSFER must have a to address");
+                if (tx.getData() == null || tx.getData().length == 0)
+                    throw new Exception("TOKEN_TRANSFER missing tokenId in data");
+                {
+                    String tokenId = new String(tx.getData(), java.nio.charset.StandardCharsets.UTF_8).trim();
+                    if (tokenRegistry == null || !tokenRegistry.tokenExists(tokenId))
+                        throw new Exception("Unknown token: " + tokenId);
+                    long tokenBal = state.getTokenBalance(tx.getFrom(), tokenId);
+                    if (tokenBal < tx.getAmount())
+                        throw new Exception("Insufficient " + tokenId + " balance");
+                    // Native fee check
+                    long baseFee = FeeMarket.getCurrentBaseFee(storage);
+                    if (tx.getFee() < baseFee)
+                        throw new Exception("Fee " + tx.getFee() + " below baseFee " + baseFee);
+                    long nativeBal = state.getBalance(tx.getFrom());
+                    if (nativeBal < tx.getFee())
+                        throw new Exception("Insufficient native balance for fee");
+                    long ttExpected = state.getNonce(tx.getFrom()) + 1;
+                    if (tx.getNonce() != ttExpected)
+                        throw new Exception("Invalid nonce: expected " + ttExpected + " got " + tx.getNonce());
+                }
+                break;
+
+            case TELEMETRY:
+                if (tx.getFrom() == null)
+                    throw new Exception("TELEMETRY must have a from address (device)");
+                if (tx.getData() == null || tx.getData().length == 0)
+                    throw new Exception("TELEMETRY tx has no data payload");
+                {
+                    // Device must be ACTIVE in the lifecycle manager
+                    com.hybrid.blockchain.lifecycle.DeviceLifecycleManager lcm = state.getLifecycleManager();
+                    if (!lcm.isDeviceOperational(tx.getFrom()))
+                        throw new Exception("TELEMETRY rejected: device not in ACTIVE state");
+                    long baseFee = FeeMarket.getCurrentBaseFee(storage);
+                    if (tx.getFee() < baseFee)
+                        throw new Exception("Fee " + tx.getFee() + " below baseFee " + baseFee);
+                    long telemBal = state.getBalance(tx.getFrom());
+                    if (telemBal < tx.getFee())
+                        throw new Exception("Insufficient funds for telemetry fee");
+                    long telemExpectedNonce = state.getNonce(tx.getFrom()) + 1;
+                    if (tx.getNonce() != telemExpectedNonce)
+                        throw new Exception("Invalid nonce: expected " + telemExpectedNonce + " got " + tx.getNonce());
+                }
+                break;
+
+            case TOKEN_REGISTER:
+                if (tx.getFrom() == null)
+                    throw new Exception("TOKEN_REGISTER must have a from address (owner)");
+                if (tx.getData() == null || tx.getData().length == 0)
+                    throw new Exception("TOKEN_REGISTER missing token metadata in data");
+                {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> metadata = new ObjectMapper().readValue(tx.getData(), Map.class);
+                    String tokenId = (String) metadata.get("tokenId");
+                    if (tokenId == null || tokenId.trim().isEmpty())
+                        throw new Exception("TOKEN_REGISTER missing tokenId");
+                    long trExpected = state.getNonce(tx.getFrom()) + 1;
+                    if (tx.getNonce() != trExpected)
+                        throw new Exception("Invalid nonce: expected " + trExpected + " got " + tx.getNonce());
+                }
+                break;
+
+            case TOKEN_MINT:
+                if (tx.getFrom() == null)
+                    throw new Exception("TOKEN_MINT must have a from address (owner)");
+                if (tx.getTo() == null)
+                    throw new Exception("TOKEN_MINT must have a to address (recipient)");
+                if (tx.getData() == null || tx.getData().length == 0)
+                    throw new Exception("TOKEN_MINT missing tokenId in data");
+                {
+                    String tokenId = new String(tx.getData(), java.nio.charset.StandardCharsets.UTF_8).trim();
+                    if (tokenRegistry == null) throw new Exception("TokenRegistry not configured");
+                    TokenRegistry.TokenInfo info = tokenRegistry.getTokenInfo(tokenId);
+                    if (info == null) throw new Exception("Unknown token: " + tokenId);
+                    if (!info.owner.equals(tx.getFrom()))
+                        throw new Exception("Only token owner can mint: " + info.owner);
+                    if (info.maxSupply > 0 && info.totalMinted + tx.getAmount() > info.maxSupply)
+                        throw new Exception("Minting would exceed max supply for " + tokenId);
+                    long tmExpected = state.getNonce(tx.getFrom()) + 1;
+                    if (tx.getNonce() != tmExpected)
+                        throw new Exception("Invalid nonce: expected " + tmExpected + " got " + tx.getNonce());
+                }
+                break;
+
+            case TOKEN_BURN:
+                if (tx.getFrom() == null)
+                    throw new Exception("TOKEN_BURN must have a from address");
+                if (tx.getData() == null || tx.getData().length == 0)
+                    throw new Exception("TOKEN_BURN missing tokenId in data");
+                {
+                    String tokenId = new String(tx.getData(), java.nio.charset.StandardCharsets.UTF_8).trim();
+                    long tokenBal = state.getTokenBalance(tx.getFrom(), tokenId);
+                    if (tokenBal < tx.getAmount())
+                        throw new Exception("Insufficient " + tokenId + " balance for burn");
+                    long tbExpected = state.getNonce(tx.getFrom()) + 1;
+                    if (tx.getNonce() != tbExpected)
+                        throw new Exception("Invalid nonce: expected " + tbExpected + " got " + tx.getNonce());
+                }
+                break;
+
             default:
-                throw new Exception("Unknown transaction type");
+                throw new Exception("Unknown transaction type: " + tx.getType());
         }
     }
 
     // Apply block to chain, update UTXO and account state
     public void applyBlock(Block block) throws Exception {
+        validateBlock(block);
         lock.writeLock().lock();
         try {
             Block latest = getLatestBlock();
@@ -235,10 +394,41 @@ public class Blockchain {
         state.setBlockHeight(block.getIndex());
 
         long totalFees = 0;
-        // Apply transactions
+        int txCountForFeeMkt = 0;
+        // Apply transactions and create receipts
         for (Transaction tx : block.getTransactions()) {
             totalFees += tx.getFee();
-            applyTransactionToState(state, utxo, tx, block.getIndex(), block.getTimestamp(), block.getHash());
+            txCountForFeeMkt++;
+            String receiptStatus = TransactionReceipt.STATUS_SUCCESS;
+            String receiptError = null;
+            long gasUsed = 0;
+            List<ContractEvent> events = new ArrayList<>();
+            try {
+                applyTransactionToState(state, utxo, tx, block.getIndex(), block.getTimestamp(), block.getHash(), events);
+                if (tx.getType() == Transaction.Type.MINT) {
+                    totalMinted += tx.getAmount();
+                }
+            } catch (RevertException re) {
+                receiptStatus = TransactionReceipt.STATUS_REVERTED;
+                receiptError = re.getMessage();
+            } catch (Exception ex) {
+                receiptStatus = TransactionReceipt.STATUS_FAILED;
+                receiptError = ex.getMessage();
+            }
+            // Build and save receipt
+            TransactionReceipt receipt = new TransactionReceipt(
+                    tx.getId(), block.getHash(), (int) block.getIndex(),
+                    receiptStatus, gasUsed, receiptError, events, block.getTimestamp());
+            try {
+                storage.saveReceipt(tx.getId(), receipt);
+                storage.indexTransaction(tx.getId(), block.getHash(), (int) block.getIndex());
+                if (tx.getFrom() != null) {
+                    storage.indexAddressTx(tx.getFrom(), tx.getId(), block.getTimestamp());
+                }
+                if (tx.getTo() != null) {
+                    storage.indexAddressTx(tx.getTo(), tx.getId(), block.getTimestamp());
+                }
+            } catch (Exception ignored) {}
             mempool.remove(tx.getId());
         }
 
@@ -255,11 +445,11 @@ public class Blockchain {
                 long actualBurn = Math.min(validatorBalance, penalty);
                 if (actualBurn > 0) {
                     state.debit(slashedId, actualBurn);
-                    System.out.println("[BLOCKCHAIN] SLASHED validator " + slashedId + ": burned " + actualBurn + " tokens");
+                    log.warn("[BLOCKCHAIN] SLASHED validator {}: burned {} tokens", slashedId, actualBurn);
                 }
                 consensus.clearSlashedValidator(slashedId);
             } catch (Exception e) {
-                System.out.println("[ERROR] Failed to slash validator " + slashedId + ": " + e.getMessage());
+                log.error("[ERROR] Failed to slash validator {}: {}", slashedId, e.getMessage());
             }
         }
 
@@ -277,17 +467,47 @@ public class Blockchain {
 
         chain.add(block);
 
+        // Update base fee for next block
+        long currentBaseFee = FeeMarket.getCurrentBaseFee(storage);
+        long nextBaseFee = FeeMarket.calculateNextBaseFee(currentBaseFee, txCountForFeeMkt, Config.TARGET_GAS_PER_BLOCK);
+        FeeMarket.saveBaseFee(storage, nextBaseFee);
+
+        storage.putMeta("totalMinted", totalMinted);
+
         storage.saveBlock(block.getHash(), block);
         storage.saveUTXO(utxo.toJSON());
         storage.saveState(state.toJSON());
         pruneBlock(block);
 
-        // Adjust difficulty if needed
-            if ((chain.size() - 1) % Config.DIFFICULTY_ADJUSTMENT_INTERVAL == 0) {
-                int newDiff = Difficulty.adjustDifficulty(chain, difficulty);
-                difficulty = newDiff;
-                storage.putMeta("difficulty", difficulty);
+        // Checkpoint every 1000 blocks
+        if (block.getIndex() > 0 && block.getIndex() % 1000 == 0) {
+            try {
+                Map<String, String> sigs = new HashMap<>();
+                Checkpoint cp = new Checkpoint(
+                        (int) block.getIndex(), block.getHash(),
+                        block.getStateRoot(), Crypto.bytesToHex(Crypto.hash(utxo.toJSON().toString().getBytes())),
+                        block.getTimestamp(), sigs);
+                storage.saveCheckpoint(cp);
+                log.info("[CHECKPOINT] Saved at height {}", block.getIndex());
+                if (peerNode != null) {
+                    peerNode.broadcastCheckpointRequest(cp);
+                }
+            } catch (Exception e) {
+                log.warn("[CHECKPOINT] Failed to save/broadcast checkpoint: {}", e.getMessage());
             }
+        }
+
+        // Publish block event
+        if (eventBus != null) {
+            try { eventBus.publish("blocks", block); } catch (Exception ignored) {}
+        }
+
+        // Adjust difficulty if needed
+        if ((chain.size() - 1) % Config.DIFFICULTY_ADJUSTMENT_INTERVAL == 0) {
+            int newDiff = Difficulty.adjustDifficulty(chain, difficulty);
+            difficulty = newDiff;
+            storage.putMeta("difficulty", difficulty);
+        }
         } finally {
             lock.writeLock().unlock();
         }
@@ -301,25 +521,51 @@ public class Blockchain {
                 throw new Exception("Missing destination");
             if (tx.getFrom() != null && !tx.verify()) {
                 if (!Config.isDebug()) {
-                    throw new Exception("Invalid transaction");
+                    throw new Exception("Invalid transaction signature");
                 }
             }
-            // Skipping balance check in DEBUG mode for tests
-            if (!Config.isDebug() && tx.getFrom() != null) {
-                long balance = getBalance(tx.getFrom());
-                long total;
-                try {
-                    total = Math.addExact(tx.getAmount(), tx.getFee());
-                } catch (ArithmeticException e) {
-                    throw new Exception("Invalid amount overflow", e);
+
+            // Nonce check: must be > current ledger nonce
+            if (tx.getFrom() != null) {
+                long currentNonce = state.getNonce(tx.getFrom());
+                if (tx.getNonce() <= currentNonce) {
+                    throw new Exception("Invalid nonce: " + tx.getNonce() + " <= current ledger nonce " + currentNonce);
                 }
-                if (balance < total)
-                    throw new Exception("Insufficient funds");
+            }
+            // Balance check: must account for pending transactions in mempool
+            if (tx.getFrom() != null) {
+                long balance = getBalance(tx.getFrom());
+                
+                // Effective balance = committed balance - pending spends in mempool
+                long pendingSpend = 0;
+                for (Transaction ptx : mempool.toArray()) {
+                    if (tx.getFrom().equals(ptx.getFrom())) {
+                        try {
+                            pendingSpend = Math.addExact(pendingSpend, Math.addExact(ptx.getAmount(), ptx.getFee()));
+                        } catch (ArithmeticException e) {
+                            pendingSpend = Long.MAX_VALUE; // Sentinel for overflow
+                        }
+                    }
+                }
+
+                long totalRequired;
+                try {
+                    totalRequired = Math.addExact(tx.getAmount(), tx.getFee());
+                } catch (ArithmeticException e) {
+                    throw new Exception("Invalid amount overflow");
+                }
+
+                if (balance < Math.addExact(pendingSpend, totalRequired)) {
+                    throw new Exception("Insufficient funds (including pending transactions)");
+                }
             }
             if (tx.getFrom() != null && !transactionRateLimiter.allowRequest(tx.getFrom())) {
                 throw new Exception("Rate limit exceeded for sender");
             }
             mempool.add(tx);
+            if (eventBus != null) {
+                try { eventBus.publish("transactions", tx); } catch (Exception ignored) {}
+            }
             return true;
         } finally {
             lock.writeLock().unlock();
@@ -363,13 +609,18 @@ public class Blockchain {
             List<Transaction> candidateTxs = mempool.getTop(maxTx);
             List<Transaction> txsToInclude = new ArrayList<>();
             
-            // Miner reward (coinbase)
-            Transaction rewardTx = new Transaction.Builder()
-                    .type(Transaction.Type.MINT)
-                    .to(minerAddress)
-                    .amount(Config.MINER_REWARD)
-                    .build();
-            txsToInclude.add(rewardTx);
+            // Miner reward simulation for post-state root calculation
+            long totalMintedSim = Tokenomics.getTotalMinted(this);
+            long blockRewardSim = Tokenomics.getCurrentReward(nextIndex, totalMintedSim);
+            Transaction simRewardTx = null;
+            if (blockRewardSim > 0) {
+                simRewardTx = new Transaction.Builder()
+                        .type(Transaction.Type.MINT)
+                        .to(minerAddress)
+                        .amount(blockRewardSim)
+                        .build();
+                txsToInclude.add(simRewardTx);
+            }
 
             // Simulate transactions on a clone of state to get the post-state root
             AccountState clonedState = state.cloneState();
@@ -378,16 +629,30 @@ public class Blockchain {
             long timestamp = System.currentTimeMillis();
             String tempHash = "SIMULATION_" + timestamp;
             try {
-                applyTransactionToState(clonedState, clonedUtxo, rewardTx, nextIndex, timestamp, tempHash);
+                if (simRewardTx != null) {
+                    applyTransactionToState(clonedState, clonedUtxo, simRewardTx, nextIndex, timestamp, tempHash, new ArrayList<>());
+                }
             } catch (Exception ignored) {
             }
             
+            // Enforce block size limit (2 MB)
+            int blockBytesUsed = 0;
             for (Transaction tx : candidateTxs) {
                 try {
                     validateTransaction(tx);
-                    applyTransactionToState(clonedState, clonedUtxo, tx, nextIndex, timestamp, tempHash);
+                    byte[] serializedTx = tx.serializeCanonical();
+                    int txSize = serializedTx.length;
+                    
+                    if (blockBytesUsed + txSize > Config.MAX_BLOCK_SIZE) {
+                        log.warn("[Blockchain] Block full at {}/{} bytes. Stopping tx inclusion.", blockBytesUsed, Config.MAX_BLOCK_SIZE);
+                        break; 
+                    }
+                    
+                    applyTransactionToState(clonedState, clonedUtxo, tx, nextIndex, timestamp, tempHash, new ArrayList<>());
                     txsToInclude.add(tx);
-                } catch (Exception ignored) {
+                    blockBytesUsed += txSize;
+                } catch (Exception e) {
+                    log.debug("[Blockchain] Candidate tx {} validation failed: {}", tx.getId(), e.getMessage());
                 }
             }
             
@@ -405,7 +670,7 @@ public class Blockchain {
         }
     }
 
-    private void applyTransactionToState(AccountState targetState, UTXOSet targetUtxo, Transaction tx, long blockIndex, long timestamp, String blockHash) throws Exception {
+    void applyTransactionToState(AccountState targetState, UTXOSet targetUtxo, Transaction tx, long blockIndex, long timestamp, String blockHash, List<ContractEvent> transactionEvents) throws Exception {
         switch (tx.getType()) {
             case UTXO:
                 for (UTXOInput inp : tx.getInputs()) {
@@ -441,30 +706,38 @@ public class Blockchain {
                     long nonce = targetState.getNonce(creator);
                     contractAddr = Crypto.deriveAddress(Crypto.hash((creator + nonce).getBytes()));
                     targetState.ensure(contractAddr);
-                    targetState.getAccount(contractAddr).setCode(code);
+                    targetState.setCode(contractAddr, code);
                     // Nonce already incremented for fee debit
                 } else {
                     AccountState.Account account = targetState.getAccount(contractAddr);
                     if (account != null && account.getCode() != null) {
                         code = account.getCode();
                     }
-
+                    AccountState contractSimState = targetState.cloneState();
                     Interpreter.BlockchainContext ctx = new Interpreter.BlockchainContext(
                             timestamp,
                             (int) blockIndex,
                             tx.getFrom(),
                             contractAddr,
                             tx.getAmount(),
-                            targetState,
+                            contractSimState, // use cloned state for execution
                             hardwareManager,
                             blockHash);
+                    ctx.events = transactionEvents;
 
-                    if (isWasm(code)) {
-                        WasmContractEngine wasmEngine = new WasmContractEngine(code, tx.getFee() * 1000, ctx);
-                        wasmEngine.execute("main", new ArrayList<>());
-                    } else {
-                        Interpreter vm = new Interpreter(code, tx.getFee() * 1000, ctx);
-                        vm.execute();
+                    try {
+                        if (isWasm(code)) {
+                            WasmContractEngine wasmEngine = new WasmContractEngine(code, tx.getFee() * 1000, ctx);
+                            wasmEngine.execute("main", new ArrayList<>());
+                        } else {
+                            Interpreter vm = new Interpreter(code, tx.getFee() * 1000, ctx);
+                            vm.execute();
+                        }
+                        // Execution succeeded, commit state changes
+                        targetState.merge(contractSimState);
+                    } catch (Exception e) {
+                        // Execution failed/reverted, discard contractSimState
+                        throw e; // Rethrow to be caught by applyBlock/validateTransaction
                     }
                 }
                 break;
@@ -481,6 +754,69 @@ public class Blockchain {
             case BURN:
                 targetState.debit(tx.getFrom(), Math.addExact(tx.getAmount(), tx.getFee()));
                 targetState.incrementNonce(tx.getFrom());
+                break;
+            case TOKEN_TRANSFER:
+                if (tokenRegistry == null) throw new Exception("TokenRegistry not configured");
+                {
+                    String tokenId = new String(tx.getData(), java.nio.charset.StandardCharsets.UTF_8).trim();
+                    tokenRegistry.transferToken(targetState, tokenId, tx.getFrom(), tx.getTo(), tx.getAmount());
+                    targetState.debit(tx.getFrom(), tx.getFee());
+                    targetState.incrementNonce(tx.getFrom());
+                }
+                break;
+            case TELEMETRY:
+                {
+                    targetState.debit(tx.getFrom(), tx.getFee());
+                    targetState.incrementNonce(tx.getFrom());
+                    // Store telemetry data; hash large payloads (>= 1024 bytes)
+                    byte[] rawData = tx.getData();
+                    byte[] toStore = rawData.length >= 1024 ? Crypto.hash(rawData) : rawData;
+                    try {
+                        storage.saveTelemetry(tx.getFrom(), (int) blockIndex, tx.getId(), toStore);
+                    } catch (Exception e) {
+                        log.warn("[TELEMETRY] Failed to save telemetry for {}: {}", tx.getFrom(), e.getMessage());
+                    }
+                }
+                break;
+
+            case TOKEN_REGISTER:
+                if (tx.getFrom() != null) {
+                    targetState.debit(tx.getFrom(), tx.getFee());
+                    targetState.incrementNonce(tx.getFrom());
+                    if (tokenRegistry != null) {
+                        Map<String, Object> metadata = new ObjectMapper().readValue(tx.getData(), Map.class);
+                        tokenRegistry.registerToken(
+                            (String) metadata.get("tokenId"),
+                            (String) metadata.get("name"),
+                            (String) metadata.get("symbol"),
+                            ((Number) metadata.get("decimals")).intValue(),
+                            ((Number) metadata.get("maxSupply")).longValue(),
+                            tx.getFrom()
+                        );
+                    }
+                }
+                break;
+
+            case TOKEN_MINT:
+                if (tx.getFrom() != null) {
+                    targetState.debit(tx.getFrom(), tx.getFee());
+                    targetState.incrementNonce(tx.getFrom());
+                    if (tokenRegistry != null) {
+                        String tokenId = new String(tx.getData(), java.nio.charset.StandardCharsets.UTF_8).trim();
+                        tokenRegistry.mintToken(targetState, tokenId, tx.getTo(), tx.getAmount());
+                    }
+                }
+                break;
+
+            case TOKEN_BURN:
+                if (tx.getFrom() != null) {
+                    targetState.debit(tx.getFrom(), tx.getFee());
+                    targetState.incrementNonce(tx.getFrom());
+                    if (tokenRegistry != null) {
+                        String tokenId = new String(tx.getData(), java.nio.charset.StandardCharsets.UTF_8).trim();
+                        tokenRegistry.burnToken(targetState, tokenId, tx.getFrom(), tx.getAmount());
+                    }
+                }
                 break;
         }
     }
@@ -572,6 +908,14 @@ public class Blockchain {
         return mempool;
     }
 
+    public AccountState getAccountState() {
+        return state;
+    }
+
+    public UTXOSet getUTXOSet() {
+        return utxo;
+    }
+
     public HardwareManager getHardwareManager() {
         return hardwareManager;
     }
@@ -604,6 +948,59 @@ public class Blockchain {
         // WASM magic bytes: \0asm (0x00 0x61 0x73 0x6D)
         return data != null && data.length >= 4 && 
                data[0] == 0x00 && data[1] == 0x61 && data[2] == 0x73 && data[3] == 0x6D;
+    }
+
+    /**
+     * Pre-validates an incoming peer block before calling {@link #applyBlock(Block)}.
+     * Checks structural integrity without requiring full state replay.
+     *
+     * @param block the block to validate
+     * @throws BlockValidationException if the block fails pre-validation
+     */
+    public void validateBlock(Block block) throws BlockValidationException {
+        if (block == null)
+            throw new BlockValidationException("Block is null", "null", -1);
+        if (block.getHash() == null || block.getHash().isEmpty())
+            throw new BlockValidationException("Block has no hash", "null", block.getIndex());
+        if (!block.getHash().equals(block.calculateHash()))
+            throw new BlockValidationException("Block hash mismatch", block.getHash(), block.getIndex());
+        if (block.getValidatorId() == null)
+            throw new BlockValidationException("Block has no validatorId", block.getHash(), block.getIndex());
+        if (block.getSignature() == null)
+            throw new BlockValidationException("Block has no signature", block.getHash(), block.getIndex());
+        lock.readLock().lock();
+        try {
+            Block latest = getLatestBlock();
+            if (block.getIndex() != latest.getIndex() + 1)
+                throw new BlockValidationException("Block height mismatch: expected "
+                        + (latest.getIndex() + 1) + " got " + block.getIndex(), block.getHash(), block.getIndex());
+            if (!block.getPrevHash().equals(latest.getHash()))
+                throw new BlockValidationException("Block prevHash does not chain to tip", block.getHash(), block.getIndex());
+        } finally {
+            lock.readLock().unlock();
+        }
+        if (block.getTimestamp() > System.currentTimeMillis() + Config.MAX_TIMESTAMP_DRIFT)
+            throw new BlockValidationException("Block timestamp too far in future", block.getHash(), block.getIndex());
+        if (!consensus.isValidator(block.getValidatorId()))
+            throw new BlockValidationException("Unknown validator: " + block.getValidatorId(), block.getHash(), block.getIndex());
+        if (block.getTransactions() != null) {
+            int currentBlockSize = 0;
+            for (Transaction tx : block.getTransactions()) {
+                currentBlockSize += serializeTransaction(tx).length;
+            }
+            if (currentBlockSize > Config.MAX_BLOCK_SIZE) {
+                throw new BlockValidationException("Block size " + currentBlockSize + " exceeds limit " + Config.MAX_BLOCK_SIZE, block.getHash(), block.getIndex());
+            }
+        }
+    }
+
+    /**
+     * Returns the total base fee currently required for new transactions.
+     *
+     * @return current base fee
+     */
+    public long getCurrentBaseFee() {
+        return FeeMarket.getCurrentBaseFee(storage);
     }
 
     public void shutdown() throws IOException {

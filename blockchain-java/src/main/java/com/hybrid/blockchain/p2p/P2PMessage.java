@@ -19,7 +19,10 @@ public class P2PMessage {
         CONSENSUS,
         PEER_DISCOVERY,
         PING,
-        PONG
+        PONG,
+        REQUEST_BLOCKS,
+        BLOCKS_RESPONSE,
+        CHECKPOINT
     }
 
     private final String messageId;

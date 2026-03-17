@@ -50,13 +50,17 @@ public class MQTTAdapter {
             public void deliveryComplete(IMqttDeliveryToken token) {}
         });
 
-        client.connect(options);
-        // Subscribe to management and telemetry topics
-        // Topics: blockchain/iot/<deviceId>/mgmt, blockchain/iot/<deviceId>/telemetry
-        client.subscribe("blockchain/iot/+/mgmt");
-        client.subscribe("blockchain/iot/+/telemetry");
+        try {
+            client.connect(options);
+            // Subscribe to management and telemetry topics
+            // Topics: blockchain/iot/<deviceId>/mgmt, blockchain/iot/<deviceId>/telemetry
+            client.subscribe("blockchain/iot/+/mgmt");
+            client.subscribe("blockchain/iot/+/telemetry");
 
-        log.info("MQTT Adapter started, connected to broker: {}", brokerUrl);
+            log.info("MQTT Adapter started, connected to broker: {}", brokerUrl);
+        } catch (MqttException e) {
+            log.warn("MQTT Adapter failed to connect to broker at {}. Operating without MQTT: {}", brokerUrl, e.getMessage());
+        }
     }
 
     private void handleMessage(String topic, String payload) {

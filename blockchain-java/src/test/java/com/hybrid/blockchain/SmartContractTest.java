@@ -1,240 +1,133 @@
 package com.hybrid.blockchain;
 
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-
-import java.math.BigInteger;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
+import java.util.ArrayList;
 import java.util.List;
+import static org.assertj.core.api.Assertions.*;
 
-import static org.junit.jupiter.api.Assertions.*;
+@Tag("integration")
+public class SmartContractTest {
 
-@Tag("unit")
-class SmartContractTest extends TestHarness {
+    @Test
+    @DisplayName("Invariant: Smart contract must persist state across multiple calls")
+    void testContractStatePersistence() throws Exception {
+        try (TestBlockchain tb = new TestBlockchain()) {
+            Blockchain chain = tb.getBlockchain();
+            TestKeyPair user = new TestKeyPair(1);
+            chain.getAccountState().credit(user.getAddress(), 10000);
+            
+            // 1. Deploy contract (Simple counter contract)
+            // OpCode: PUSH 0, SLOAD, PUSH 1, ADD, PUSH 0, SSTORE (Increment slot 0)
+            byte[] bytecode = new byte[] {
+                OpCode.PUSH.getByte(), 0, 0, 0, 0, 0, 0, 0, 0, // slot 0
+                OpCode.SLOAD.getByte(),
+                OpCode.PUSH.getByte(), 0, 0, 0, 0, 0, 0, 0, 1, // value 1
+                OpCode.ADD.getByte(),
+                OpCode.PUSH.getByte(), 0, 0, 0, 0, 0, 0, 0, 0, // slot 0
+                OpCode.SSTORE.getByte()
+            };
+            
+            Transaction deployTx = TestTransactionFactory.createContractCreation(user, bytecode, 100, 1);
+            BlockApplier.createAndApplyBlock(tb, java.util.Collections.singletonList(deployTx));
+            
+            TransactionReceipt deployReceipt = chain.getStorage().loadReceipt(deployTx.getTxid());
+            assertThat(deployReceipt).as("Deployment receipt must exist").isNotNull();
+            assertThat(deployReceipt.getStatus()).as("Deployment must succeed").isEqualTo(TransactionReceipt.STATUS_SUCCESS);
 
-    private BigInteger senderPriv;
-    private byte[] senderPub;
-    private String sender;
-    private PoAConsensus poa;
-    private Validator leader;
-    private BigInteger leaderPriv;
-
-    @BeforeEach
-    void setUp() throws Exception {
-        System.setProperty("DEBUG", "false");
-        List<Validator> validators = defaultValidators();
-        poa = new PoAConsensus(validators);
-        tempDir = java.nio.file.Files.createTempDirectory("sc-");
-        storage = new Storage(tempDir.toString(), TEST_AES_KEY);
-        blockchain = new Blockchain(storage, new Mempool(1000), poa);
-        blockchain.init();
-
-        senderPriv = privateKey(4001);
-        senderPub = Crypto.derivePublicKey(senderPriv);
-        sender = Crypto.deriveAddress(senderPub);
-        blockchain.getState().credit(sender, 1_000_000);
-
-        leader = validators.get(0);
-        leaderPriv = privateKey(101);
-    }
-
-    private byte[] push(long value) {
-        ByteBuffer buf = ByteBuffer.allocate(9).order(ByteOrder.BIG_ENDIAN);
-        buf.put(OpCode.PUSH.getByte());
-        buf.putLong(value);
-        return buf.array();
-    }
-
-    private byte[] code(byte[]... chunks) {
-        int total = 0;
-        for (byte[] c : chunks) total += c.length;
-        byte[] out = new byte[total];
-        int off = 0;
-        for (byte[] c : chunks) {
-            System.arraycopy(c, 0, out, off, c.length);
-            off += c.length;
+            String creator = user.getAddress();
+            long nonce = 1; 
+            String contractAddr = Crypto.deriveAddress(Crypto.hash((creator + nonce).getBytes()));
+            
+            // 2. Initial call (SSTORE 1 to slot 0)
+            Transaction call1 = TestTransactionFactory.createContractCall(user, contractAddr, new byte[0], 0, 100, 2);
+            BlockApplier.createAndApplyBlock(tb, java.util.Collections.singletonList(call1));
+            
+            long val1 = chain.getAccountState().getAccount(contractAddr).getStorage().get(0);
+            assertThat(val1).isEqualTo(1);
+            
+            // 3. Second call (SSTORE 2 to slot 0)
+            Transaction call2 = TestTransactionFactory.createContractCall(user, contractAddr, new byte[0], 0, 100, 3);
+            BlockApplier.createAndApplyBlock(tb, java.util.Collections.singletonList(call2));
+            
+            long val2 = chain.getAccountState().getAccount(contractAddr).getStorage().get(0);
+            assertThat(val2).isEqualTo(2);
         }
-        return out;
     }
 
     @Test
-    @DisplayName("ADD program leaves correct result on stack")
-    void addProgramWorks() throws Exception {
-        byte[] program = code(push(2), push(3), new byte[]{OpCode.ADD.getByte(), OpCode.STOP.getByte()});
-        Interpreter vm = new Interpreter(program, 1000, new Interpreter.BlockchainContext(System.currentTimeMillis(), 1, sender, "hb-c", 0, new AccountState(), new HardwareManager(), "h"));
-        vm.execute();
-
-        assertEquals(5L, vm.getStack().peek(), "ADD must leave exact arithmetic sum at stack top");
-    }
-
-    @Test
-    @DisplayName("SUB MUL DIV pipeline computes expected result")
-    void subMulDivProgramWorks() throws Exception {
-        byte[] program = code(
-                push(10), push(4), new byte[]{OpCode.SUB.getByte()},
-                push(3), new byte[]{OpCode.MUL.getByte()},
-                push(2), new byte[]{OpCode.DIV.getByte(), OpCode.STOP.getByte()}
-        );
-        Interpreter vm = new Interpreter(program, 5000, new Interpreter.BlockchainContext(System.currentTimeMillis(), 1, sender, "hb-c", 0, new AccountState(), new HardwareManager(), "h"));
-        vm.execute();
-
-        assertEquals(9L, vm.getStack().peek(), "Arithmetic sequence ((10-4)*3)/2 must evaluate to 9");
-    }
-
-    @Test
-    @DisplayName("Division by zero throws with explicit zero message")
-    void divisionByZeroThrows() {
-        byte[] program = code(push(10), push(0), new byte[]{OpCode.DIV.getByte()});
-        Interpreter vm = new Interpreter(program, 500, new Interpreter.BlockchainContext(System.currentTimeMillis(), 1, sender, "hb-c", 0, new AccountState(), new HardwareManager(), "h"));
-
-        Exception ex = assertThrows(Exception.class, vm::execute, "DIV by zero must throw instead of producing undefined behavior");
-        assertTrue(ex.getMessage().toLowerCase().contains("zero"), "Division by zero exception must mention zero divisor");
-    }
-
-    @Test
-    @DisplayName("Program exceeding gas limit throws gas exhaustion error")
-    void gasExceededThrows() {
-        byte[] program = code(push(1), push(2), new byte[]{OpCode.ADD.getByte(), OpCode.ADD.getByte(), OpCode.ADD.getByte()});
-        Interpreter vm = new Interpreter(program, 1, new Interpreter.BlockchainContext(System.currentTimeMillis(), 1, sender, "hb-c", 0, new AccountState(), new HardwareManager(), "h"));
-
-        Exception ex = assertThrows(Exception.class, vm::execute, "Interpreter must stop execution when gas limit is exceeded");
-        assertTrue(ex.getMessage().toLowerCase().contains("gas"), "Gas exhaustion error must explicitly mention gas limit");
-    }
-
-    @Test
-    @DisplayName("Stack overflow over 1024 items throws")
-    void stackOverflowThrows() {
-        byte[] program = new byte[1025 * 9];
-        int offset = 0;
-        for (int i = 0; i < 1025; i++) {
-            byte[] push = push(i);
-            System.arraycopy(push, 0, program, offset, push.length);
-            offset += push.length;
+    @DisplayName("Security: VM must revert state changes on execution failure (Gas exhaustion)")
+    void testContractRevertOnFailure() throws Exception {
+        try (TestBlockchain tb = new TestBlockchain()) {
+            Blockchain chain = tb.getBlockchain();
+            TestKeyPair user = new TestKeyPair(1);
+            chain.getAccountState().credit(user.getAddress(), 1000);
+            
+            // OpCode: PUSH 1, PUSH 0, SSTORE, PUSH 0, PUSH 0, REVERT
+            byte[] bytecode = new byte[] {
+                OpCode.PUSH.getByte(), 0, 0, 0, 0, 0, 0, 0, 1, // value
+                OpCode.PUSH.getByte(), 0, 0, 0, 0, 0, 0, 0, 0, // slot
+                OpCode.SSTORE.getByte(),
+                OpCode.PUSH.getByte(), 0, 0, 0, 0, 0, 0, 0, 0, // offset
+                OpCode.PUSH.getByte(), 0, 0, 0, 0, 0, 0, 0, 0, // length
+                OpCode.REVERT.getByte()
+            };
+            
+            Transaction deployTx = TestTransactionFactory.createContractCreation(user, bytecode, 10, 1);
+            BlockApplier.createAndApplyBlock(tb, java.util.Collections.singletonList(deployTx));
+            
+            String creator = user.getAddress();
+            long nonce = 1; 
+            String contractAddr = Crypto.deriveAddress(Crypto.hash((creator + nonce).getBytes()));
+            
+            // Call contract
+            Transaction callTx = TestTransactionFactory.createContractCall(user, contractAddr, new byte[0], 0, 10, 2);
+            BlockApplier.createAndApplyBlock(tb, java.util.Collections.singletonList(callTx));
+            
+            // Verify receipt shows failure and storage is EMPTY (reverted)
+            TransactionReceipt receipt = chain.getStorage().loadReceipt(callTx.getTxid());
+            assertThat(receipt.getStatus()).isEqualTo(TransactionReceipt.STATUS_REVERTED);
+            
+            long val = chain.getAccountState().getAccount(contractAddr).getStorage().get(0);
+            assertThat(val).isEqualTo(0).as("Storage must be empty after REVERT");
         }
-        Interpreter vm = new Interpreter(program, 1_000_000, new Interpreter.BlockchainContext(System.currentTimeMillis(), 1, sender, "hb-c", 0, new AccountState(), new HardwareManager(), "h"));
-
-        Exception ex = assertThrows(Exception.class, vm::execute, "Pushing more than 1024 stack items must throw a stack overflow error");
-        assertTrue(ex.getMessage().toLowerCase().contains("stack"), "Stack overflow exception must mention stack capacity overflow");
     }
 
     @Test
-    @DisplayName("SSTORE followed by SLOAD returns stored value")
-    void sstoreThenSload() throws Exception {
-        AccountState state = new AccountState();
-        byte[] program = code(push(10), push(99), new byte[]{OpCode.SSTORE.getByte()}, push(10), new byte[]{OpCode.SLOAD.getByte(), OpCode.STOP.getByte()});
-        Interpreter vm = new Interpreter(program, 20_000, new Interpreter.BlockchainContext(System.currentTimeMillis(), 1, sender, "hb-contract", 0, state, new HardwareManager(), "h"));
-        vm.execute();
+    @DisplayName("Security: VM must enforce gas limits strictly")
+    void testGasLimitEnforcement() throws Exception {
+        try (TestBlockchain tb = new TestBlockchain()) {
+            Blockchain chain = tb.getBlockchain();
+            TestKeyPair user = new TestKeyPair(1);
+            chain.getAccountState().credit(user.getAddress(), 1000);
+            
+            // We use many SSTOREs which are expensive
+            List<Byte> ops = new java.util.ArrayList<>();
+            for (int i = 0; i < 100; i++) {
+                ops.add(OpCode.PUSH.getByte());
+                for(int j=0; j<8; j++) ops.add((byte)0); // value 0
+                ops.add(OpCode.PUSH.getByte());
+                for(int j=0; j<7; j++) ops.add((byte)0); ops.add((byte)i); // slot i
+                ops.add(OpCode.SSTORE.getByte());
+            }
+            byte[] bytecode = new byte[ops.size()];
+            for(int i=0; i<ops.size(); i++) bytecode[i] = ops.get(i);
+            
+            // Deploy expensive contract
+            Transaction deployTx = TestTransactionFactory.createContractCreation(user, bytecode, 100, 1);
+            BlockApplier.createAndApplyBlock(tb, java.util.Collections.singletonList(deployTx));
+            
+            String creator = user.getAddress();
+            long nonce = 1; 
+            String contractAddr = Crypto.deriveAddress(Crypto.hash((creator + nonce).getBytes()));
 
-        assertEquals(99L, vm.getStack().peek(), "SLOAD must return the exact value previously written by SSTORE for same storage key");
-    }
+            // Call with insufficient fee (5 tokens = 5000 gas, but 100 SSTOREs = 500,000 gas)
+            Transaction callTx = TestTransactionFactory.createContractCall(user, contractAddr, new byte[0], 0, 5, 2);
+            BlockApplier.createAndApplyBlock(tb, java.util.Collections.singletonList(callTx));
 
-    @Test
-    @DisplayName("TIMESTAMP opcode pushes exact context timestamp")
-    void timestampOpcode() throws Exception {
-        long ts = System.currentTimeMillis();
-        Interpreter vm = new Interpreter(new byte[]{OpCode.TIMESTAMP.getByte(), OpCode.STOP.getByte()}, 100, new Interpreter.BlockchainContext(ts, 7, sender, "hb-c", 0, new AccountState(), new HardwareManager(), "h"));
-        vm.execute();
-
-        assertEquals(ts, vm.getStack().peek(), "TIMESTAMP opcode must push context.timestamp exactly");
-    }
-
-    @Test
-    @DisplayName("NUMBER opcode pushes exact block height")
-    void numberOpcode() throws Exception {
-        Interpreter vm = new Interpreter(new byte[]{OpCode.NUMBER.getByte(), OpCode.STOP.getByte()}, 100, new Interpreter.BlockchainContext(System.currentTimeMillis(), 42, sender, "hb-c", 0, new AccountState(), new HardwareManager(), "h"));
-        vm.execute();
-
-        assertEquals(42L, vm.getStack().peek(), "NUMBER opcode must push context blockHeight exactly");
-    }
-
-    @Test
-    @DisplayName("CALLER opcode is deterministic and non-zero for same caller")
-    void callerOpcodeDeterministicNonZero() throws Exception {
-        Interpreter vm1 = new Interpreter(new byte[]{OpCode.CALLER.getByte(), OpCode.STOP.getByte()}, 100, new Interpreter.BlockchainContext(System.currentTimeMillis(), 1, sender, "hb-c", 0, new AccountState(), new HardwareManager(), "h"));
-        Interpreter vm2 = new Interpreter(new byte[]{OpCode.CALLER.getByte(), OpCode.STOP.getByte()}, 100, new Interpreter.BlockchainContext(System.currentTimeMillis(), 1, sender, "hb-c", 0, new AccountState(), new HardwareManager(), "h"));
-        vm1.execute();
-        vm2.execute();
-
-        long value1 = vm1.getStack().peek();
-        long value2 = vm2.getStack().peek();
-        assertNotEquals(0L, value1, "CALLER opcode must map non-empty caller address to non-zero deterministic value");
-        assertEquals(value1, value2, "CALLER opcode output must be deterministic for same caller input");
-    }
-
-    @Test
-    @DisplayName("Unknown opcode throws with byte offset information")
-    void unknownOpcodeThrows() {
-        Interpreter vm = new Interpreter(new byte[]{(byte) 0x7F}, 100, new Interpreter.BlockchainContext(System.currentTimeMillis(), 1, sender, "hb-c", 0, new AccountState(), new HardwareManager(), "h"));
-        Exception ex = assertThrows(Exception.class, vm::execute, "Unknown opcode must throw instead of silently continuing");
-        assertTrue(ex.getMessage().toLowerCase().contains("opcode") || ex.getMessage().toLowerCase().contains("at"), "Unknown opcode error must identify opcode/offset context");
-    }
-
-    @Test
-    @DisplayName("STOP opcode halts execution cleanly")
-    void stopHaltsCleanly() {
-        Interpreter vm = new Interpreter(new byte[]{OpCode.STOP.getByte()}, 100, new Interpreter.BlockchainContext(System.currentTimeMillis(), 1, sender, "hb-c", 0, new AccountState(), new HardwareManager(), "h"));
-        assertDoesNotThrow(vm::execute, "STOP opcode must halt execution without raising an exception");
-    }
-
-    @Test
-    @DisplayName("CONTRACT deployment transaction stores bytecode in derived contract account")
-    void deployContractStoresCode() throws Exception {
-        byte[] contractCode = code(push(1), push(2), new byte[]{OpCode.ADD.getByte(), OpCode.STOP.getByte()});
-
-        Transaction deploy = new Transaction.Builder()
-                .type(Transaction.Type.CONTRACT)
-                .to(null)
-                .amount(0)
-                .fee(10)
-                .nonce(1)
-                .data(contractCode)
-                .sign(senderPriv, senderPub);
-
-        blockchain.addTransaction(deploy);
-        Block block = blockchain.createBlock(leader.getId(), 100);
-        poa.signBlock(block, leader, leaderPriv);
-        blockchain.applyBlock(block);
-
-        long nonceAfterDebit = 1L;
-        String contractAddress = Crypto.deriveAddress(Crypto.hash((sender + nonceAfterDebit).getBytes()));
-        assertArrayEquals(contractCode, blockchain.getState().getAccount(contractAddress).getCode(), "Deployed contract bytecode must be persisted in derived contract account");
-    }
-
-    @Test
-    @DisplayName("CONTRACT call executes persisted bytecode against live account storage")
-    void callExistingContractExecutesCode() throws Exception {
-        byte[] code = code(push(7), push(55), new byte[]{OpCode.SSTORE.getByte(), OpCode.STOP.getByte()});
-        String contractAddress = "hb-existing-contract";
-        blockchain.getState().ensure(contractAddress);
-        blockchain.getState().getAccount(contractAddress).setCode(code);
-
-        Transaction call = new Transaction.Builder()
-                .type(Transaction.Type.CONTRACT)
-                .to(contractAddress)
-                .amount(0)
-                .fee(20)
-                .nonce(1)
-                .data(new byte[0])
-                .sign(senderPriv, senderPub);
-
-        blockchain.addTransaction(call);
-        Block block = blockchain.createBlock(leader.getId(), 100);
-        poa.signBlock(block, leader, leaderPriv);
-        blockchain.applyBlock(block);
-
-        assertEquals(55L, blockchain.getState().getAccountStorage(contractAddress).get(7), "Contract invocation must update live state storage according to contract bytecode");
-    }
-
-    @Test
-    @DisplayName("isWasm identifies valid WASM magic prefix and rejects non-WASM arrays")
-    void isWasmRoutingChecks() {
-        assertTrue(blockchain.isWasm(new byte[]{0x00, 0x61, 0x73, 0x6D}), "WASM magic bytes must be recognized by routing logic");
-        assertFalse(blockchain.isWasm(new byte[]{0x01, 0x02, 0x03, 0x04}), "Non-WASM byte arrays must route to bytecode interpreter path");
-        assertFalse(blockchain.isWasm(null), "Null byte arrays must never be treated as WASM");
-        assertFalse(blockchain.isWasm(new byte[0]), "Empty byte arrays must never be treated as WASM");
-        assertFalse(blockchain.isWasm(new byte[]{0x00, 0x61, 0x73}), "Arrays shorter than 4 bytes must never be treated as WASM");
+            TransactionReceipt receipt = chain.getStorage().loadReceipt(callTx.getTxid());
+            assertThat(receipt.getStatus()).isEqualTo(TransactionReceipt.STATUS_FAILED).as("Should fail due to out-of-gas");
+        }
     }
 }

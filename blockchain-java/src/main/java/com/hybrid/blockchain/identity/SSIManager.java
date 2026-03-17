@@ -2,7 +2,7 @@ package com.hybrid.blockchain.identity;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.hybrid.blockchain.Crypto;
+
 import java.math.BigInteger;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -87,8 +87,6 @@ public class SSIManager {
      */
     public void transferOwnership(String did, String newOwner, byte[] signature) {
         DecentralizedIdentifier didDoc = resolveDID(did);
-        String currentOwner = didDoc.getController();
-
         // Verification: Current owner must sign the intent to transfer
         // Message is: transfer:<did>:<newOwner>
         byte[] message = ("transfer:" + did + ":" + newOwner).getBytes();
@@ -196,6 +194,13 @@ public class SSIManager {
         revokedDIDs.add(did);
         deviceToDID.remove(didDoc.getDeviceId());
         System.out.println("[SSI] Revoked DID: " + did + " Reason: " + reason);
+    }
+
+    /**
+     * Check if a DID is revoked
+     */
+    public boolean isDIDRevoked(String did) {
+        return revokedDIDs.contains(did);
     }
 
     /**

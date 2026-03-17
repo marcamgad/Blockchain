@@ -16,6 +16,7 @@ public class PeerManager {
         private double score;
         private long lastSeen;
         private long latency;
+        private long blockHeight;
         private final Map<P2PMessage.Type, AtomicInteger> messageCounts = new ConcurrentHashMap<>();
 
         public PeerInfo(String id, String address, int port) {
@@ -24,6 +25,7 @@ public class PeerManager {
             this.port = port;
             this.score = 50.0; // Initial neutral score
             this.lastSeen = System.currentTimeMillis();
+            this.blockHeight = 0;
         }
 
         public void updateScore(double delta) {
@@ -46,13 +48,17 @@ public class PeerManager {
         public double getScore() { return score; }
         public long getLastSeen() { return lastSeen; }
         public long getLatency() { return latency; }
+        public long getBlockHeight() { return blockHeight; }
+        public void setBlockHeight(long height) { this.blockHeight = height; }
     }
 
     private final Map<String, PeerInfo> peers = new ConcurrentHashMap<>();
     private final Set<String> bannedIps = ConcurrentHashMap.newKeySet();
+    private static final int MAX_PEERS = 50;
 
     public void addPeer(String id, String address, int port) {
         if (bannedIps.contains(address)) return;
+        if (peers.size() >= MAX_PEERS) return;
         peers.putIfAbsent(id, new PeerInfo(id, address, port));
     }
 

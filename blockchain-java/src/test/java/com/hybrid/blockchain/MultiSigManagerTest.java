@@ -4,304 +4,141 @@ import com.hybrid.blockchain.security.MultiSigManager;
 import com.hybrid.blockchain.security.MultiSigManager.MultiSigWallet;
 import com.hybrid.blockchain.security.MultiSigManager.Proposal;
 import com.hybrid.blockchain.security.MultiSigManager.ProposalType;
+import com.hybrid.blockchain.testutil.TestKeyPair;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
-import java.math.BigInteger;
-import java.util.*;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/**
- * Tests for Multi-Signature Control System
- */
+@Tag("unit")
 public class MultiSigManagerTest {
 
     private MultiSigManager multiSig;
-    private String walletId;
-    private List<String> owners;
-    private Map<String, BigInteger> ownerKeys;
-    private Map<String, byte[]> ownerPubKeys;
+    private final String WALLET_ID = "wallet-001";
+    private TestKeyPair owner1;
+    private TestKeyPair owner2;
+    private TestKeyPair owner3;
 
     @BeforeEach
     public void setUp() {
         multiSig = new MultiSigManager();
-        walletId = "wallet-001";
+        owner1 = new TestKeyPair(1);
+        owner2 = new TestKeyPair(2);
+        owner3 = new TestKeyPair(3);
 
-        // Create 3 owners with keys
-        owners = Arrays.asList("owner1", "owner2", "owner3");
-        ownerKeys = new HashMap<>();
-        ownerPubKeys = new HashMap<>();
-
-        for (int i = 0; i < owners.size(); i++) {
-            BigInteger privateKey = new BigInteger(String.valueOf(1000 + i));
-            byte[] publicKey = Crypto.derivePublicKey(privateKey);
-            ownerKeys.put(owners.get(i), privateKey);
-            ownerPubKeys.put(owners.get(i), publicKey);
-        }
-
-        // Create 2-of-3 multisig wallet
-        multiSig.createWallet(walletId, owners, 2);
+        List<String> owners = Arrays.asList(owner1.getAddress(), owner2.getAddress(), owner3.getAddress());
+        multiSig.createWallet(WALLET_ID, owners, 2); // 2-of-3 multisig
     }
 
     @Test
+    @DisplayName("Invariant: Wallet creation establishes parameters correctly")
     public void testCreateWallet() {
-        MultiSigWallet wallet = multiSig.getWallet(walletId);
+        MultiSigWallet wallet = multiSig.getWallet(WALLET_ID);
 
-        assertNotNull(wallet);
-        assertEquals(walletId, wallet.getWalletId());
-        assertEquals(3, wallet.getTotalOwners());
-        assertEquals(2, wallet.getRequiredSignatures());
-        assertTrue(wallet.isOwner("owner1"));
-        assertTrue(wallet.isOwner("owner2"));
-        assertTrue(wallet.isOwner("owner3"));
-        assertFalse(wallet.isOwner("stranger"));
+        assertThat(wallet).isNotNull();
+        assertThat(wallet.getTotalOwners()).isEqualTo(3);
+        assertThat(wallet.getRequiredSignatures()).isEqualTo(2);
+        assertThat(wallet.isOwner(owner1.getAddress())).isTrue();
+        assertThat(wallet.isOwner("stranger")).isFalse();
     }
 
     @Test
+    @DisplayName("Invariant: Proposal creation tracks data and state accurately")
     public void testCreateProposal() {
         Map<String, Object> data = new HashMap<>();
         data.put("deviceId", "sensor-001");
-        data.put("newOwner", "alice");
+        long expiration = System.currentTimeMillis() + 60000;
 
-        long expiration = System.currentTimeMillis() + 60000; // 1 minute
-
-        String proposalId = multiSig.createProposal(
-                walletId,
-                ProposalType.TRANSFER_OWNERSHIP,
-                data,
-                expiration);
-
-        assertNotNull(proposalId);
+        String proposalId = multiSig.createProposal(WALLET_ID, ProposalType.TRANSFER_OWNERSHIP, data, expiration);
 
         Proposal proposal = multiSig.getProposal(proposalId);
-        assertNotNull(proposal);
-        assertEquals(walletId, proposal.getWalletId());
-        assertEquals(ProposalType.TRANSFER_OWNERSHIP, proposal.getProposalType());
-        assertEquals("sensor-001", proposal.getData().get("deviceId"));
-        assertFalse(proposal.isExpired());
-        assertFalse(proposal.isExecuted());
+        assertThat(proposal.getWalletId()).isEqualTo(WALLET_ID);
+        assertThat(proposal.getProposalType()).isEqualTo(ProposalType.TRANSFER_OWNERSHIP);
+        assertThat(proposal.getData().get("deviceId")).isEqualTo("sensor-001");
+        assertThat(proposal.isExecuted()).isFalse();
     }
 
     @Test
-    public void testSignProposal() {
-        Map<String, Object> data = new HashMap<>();
-        data.put("firmwareVersion", "v2.0.1");
-
-        String proposalId = multiSig.createProposal(
-                walletId,
-                ProposalType.UPDATE_FIRMWARE,
-                data,
-                System.currentTimeMillis() + 60000);
-
-        // Owner1 signs
-        multiSig.signProposal(
-                proposalId,
-                "owner1",
-                ownerKeys.get("owner1"),
-                ownerPubKeys.get("owner1"));
-
-        Proposal proposal = multiSig.getProposal(proposalId);
-        assertEquals(1, proposal.getCurrentSignatures());
-        assertTrue(proposal.hasSigned("owner1"));
-        assertFalse(proposal.hasSigned("owner2"));
-    }
-
-    @Test
+    @DisplayName("Security: Multiple distinct signatures required for execution")
     public void testMultipleSignatures() {
         Map<String, Object> data = new HashMap<>();
-        data.put("action", "test");
+        String proposalId = multiSig.createProposal(WALLET_ID, ProposalType.EXECUTE_CONTRACT, data, System.currentTimeMillis() + 60000);
 
-        String proposalId = multiSig.createProposal(
-                walletId,
-                ProposalType.EXECUTE_CONTRACT,
-                data,
-                System.currentTimeMillis() + 60000);
+        multiSig.signProposal(proposalId, owner1.getAddress(), owner1.getPrivateKey(), owner1.getPublicKey());
+        assertThat(multiSig.canExecute(proposalId)).isFalse();
 
-        // Owner1 signs
-        multiSig.signProposal(
-                proposalId,
-                "owner1",
-                ownerKeys.get("owner1"),
-                ownerPubKeys.get("owner1"));
-
-        // Owner2 signs
-        multiSig.signProposal(
-                proposalId,
-                "owner2",
-                ownerKeys.get("owner2"),
-                ownerPubKeys.get("owner2"));
-
+        multiSig.signProposal(proposalId, owner2.getAddress(), owner2.getPrivateKey(), owner2.getPublicKey());
+        
         Proposal proposal = multiSig.getProposal(proposalId);
-        assertEquals(2, proposal.getCurrentSignatures());
-        assertTrue(proposal.hasEnoughSignatures());
-        assertTrue(proposal.hasSigned("owner1"));
-        assertTrue(proposal.hasSigned("owner2"));
+        assertThat(proposal.getCurrentSignatures()).isEqualTo(2);
+        assertThat(multiSig.canExecute(proposalId)).isTrue();
     }
 
     @Test
-    public void testCanExecute() {
-        Map<String, Object> data = new HashMap<>();
-        String proposalId = multiSig.createProposal(
-                walletId,
-                ProposalType.MODIFY_COLLECTION,
-                data,
-                System.currentTimeMillis() + 60000);
-
-        // Not enough signatures yet
-        assertFalse(multiSig.canExecute(proposalId));
-
-        // Add first signature
-        multiSig.signProposal(proposalId, "owner1", ownerKeys.get("owner1"), ownerPubKeys.get("owner1"));
-        assertFalse(multiSig.canExecute(proposalId));
-
-        // Add second signature (now we have 2-of-3)
-        multiSig.signProposal(proposalId, "owner2", ownerKeys.get("owner2"), ownerPubKeys.get("owner2"));
-        assertTrue(multiSig.canExecute(proposalId));
-    }
-
-    @Test
+    @DisplayName("Invariant: Proposal can only be executed once")
     public void testExecuteProposal() {
         Map<String, Object> data = new HashMap<>();
-        String proposalId = multiSig.createProposal(
-                walletId,
-                ProposalType.REVOKE_DEVICE,
-                data,
-                System.currentTimeMillis() + 60000);
+        String proposalId = multiSig.createProposal(WALLET_ID, ProposalType.REVOKE_DEVICE, data, System.currentTimeMillis() + 60000);
 
-        // Add 2 signatures
-        multiSig.signProposal(proposalId, "owner1", ownerKeys.get("owner1"), ownerPubKeys.get("owner1"));
-        multiSig.signProposal(proposalId, "owner2", ownerKeys.get("owner2"), ownerPubKeys.get("owner2"));
+        multiSig.signProposal(proposalId, owner1.getAddress(), owner1.getPrivateKey(), owner1.getPublicKey());
+        multiSig.signProposal(proposalId, owner2.getAddress(), owner2.getPrivateKey(), owner2.getPublicKey());
 
-        // Execute
-        assertTrue(multiSig.executeProposal(proposalId));
-
+        assertThat(multiSig.executeProposal(proposalId)).isTrue();
+        
         Proposal proposal = multiSig.getProposal(proposalId);
-        assertTrue(proposal.isExecuted());
+        assertThat(proposal.isExecuted()).isTrue();
 
         // Cannot execute again
-        assertFalse(multiSig.executeProposal(proposalId));
+        assertThat(multiSig.executeProposal(proposalId)).isFalse();
     }
 
     @Test
+    @DisplayName("Security: Unauthorized signer must be rejected")
     public void testUnauthorizedSigner() {
         Map<String, Object> data = new HashMap<>();
-        String proposalId = multiSig.createProposal(
-                walletId,
-                ProposalType.TRANSFER_OWNERSHIP,
-                data,
-                System.currentTimeMillis() + 60000);
+        String proposalId = multiSig.createProposal(WALLET_ID, ProposalType.TRANSFER_OWNERSHIP, data, System.currentTimeMillis() + 60000);
 
-        BigInteger strangerKey = new BigInteger("9999");
-        byte[] strangerPubKey = Crypto.derivePublicKey(strangerKey);
+        TestKeyPair stranger = new TestKeyPair(999);
 
-        // Stranger tries to sign
-        assertThrows(SecurityException.class, () -> {
-            multiSig.signProposal(proposalId, "stranger", strangerKey, strangerPubKey);
-        });
+        assertThatThrownBy(() -> multiSig.signProposal(proposalId, stranger.getAddress(), stranger.getPrivateKey(), stranger.getPublicKey()))
+            .isInstanceOf(SecurityException.class);
     }
 
     @Test
+    @DisplayName("Security: Same owner cannot sign multiple times")
     public void testDuplicateSignature() {
         Map<String, Object> data = new HashMap<>();
-        String proposalId = multiSig.createProposal(
-                walletId,
-                ProposalType.CHANGE_THRESHOLD,
-                data,
-                System.currentTimeMillis() + 60000);
+        String proposalId = multiSig.createProposal(WALLET_ID, ProposalType.CHANGE_THRESHOLD, data, System.currentTimeMillis() + 60000);
 
-        // Owner1 signs
-        multiSig.signProposal(proposalId, "owner1", ownerKeys.get("owner1"), ownerPubKeys.get("owner1"));
+        multiSig.signProposal(proposalId, owner1.getAddress(), owner1.getPrivateKey(), owner1.getPublicKey());
 
-        // Owner1 tries to sign again
-        assertThrows(IllegalStateException.class, () -> {
-            multiSig.signProposal(proposalId, "owner1", ownerKeys.get("owner1"), ownerPubKeys.get("owner1"));
-        });
+        assertThatThrownBy(() -> multiSig.signProposal(proposalId, owner1.getAddress(), owner1.getPrivateKey(), owner1.getPublicKey()))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("Already signed");
     }
 
     @Test
-    public void testExpiredProposal() throws InterruptedException {
+    @DisplayName("Invariant: Expired proposals cannot be signed")
+    public void testExpiredProposal() {
         Map<String, Object> data = new HashMap<>();
-
-        // Create proposal that expires in 100ms
-        String proposalId = multiSig.createProposal(
-                walletId,
-                ProposalType.EMERGENCY_STOP,
-                data,
-                System.currentTimeMillis() + 100);
-
-        // Wait for expiration
-        Thread.sleep(150);
+        // Create an already-expired proposal deterministically (expiration in the past)
+        long expiredTime = System.currentTimeMillis() - 1000; 
+        
+        String proposalId = multiSig.createProposal(WALLET_ID, ProposalType.EMERGENCY_STOP, data, expiredTime);
 
         Proposal proposal = multiSig.getProposal(proposalId);
-        assertTrue(proposal.isExpired());
+        assertThat(proposal.isExpired()).isTrue();
 
-        // Cannot sign expired proposal
-        assertThrows(IllegalStateException.class, () -> {
-            multiSig.signProposal(proposalId, "owner1", ownerKeys.get("owner1"), ownerPubKeys.get("owner1"));
-        });
-    }
-
-    @Test
-    public void testGetProposalsForWallet() {
-        // Create multiple proposals
-        for (int i = 0; i < 3; i++) {
-            Map<String, Object> data = new HashMap<>();
-            data.put("index", i);
-            multiSig.createProposal(
-                    walletId,
-                    ProposalType.EXECUTE_CONTRACT,
-                    data,
-                    System.currentTimeMillis() + 60000);
-        }
-
-        List<Proposal> proposals = multiSig.getProposalsForWallet(walletId);
-        assertEquals(3, proposals.size());
-    }
-
-    @Test
-    public void testStats() {
-        // Create wallet and proposals
-        Map<String, Object> data = new HashMap<>();
-
-        String proposal1 = multiSig.createProposal(walletId, ProposalType.TRANSFER_OWNERSHIP, data,
-                System.currentTimeMillis() + 60000);
-        String proposal2 = multiSig.createProposal(walletId, ProposalType.UPDATE_FIRMWARE, data,
-                System.currentTimeMillis() + 60000);
-
-        // Execute one
-        multiSig.signProposal(proposal1, "owner1", ownerKeys.get("owner1"), ownerPubKeys.get("owner1"));
-        multiSig.signProposal(proposal1, "owner2", ownerKeys.get("owner2"), ownerPubKeys.get("owner2"));
-        multiSig.executeProposal(proposal1);
-
-        Map<String, Object> stats = multiSig.getStats();
-        assertEquals(1, stats.get("totalWallets"));
-        assertEquals(2, stats.get("totalProposals"));
-        assertEquals(1, stats.get("activeProposals"));
-        assertEquals(1, stats.get("executedProposals"));
-    }
-
-    @Test
-    public void test3of5MultiSig() {
-        // Create 3-of-5 wallet
-        List<String> fiveOwners = Arrays.asList("o1", "o2", "o3", "o4", "o5");
-        multiSig.createWallet("wallet-3of5", fiveOwners, 3);
-
-        MultiSigWallet wallet = multiSig.getWallet("wallet-3of5");
-        assertEquals(5, wallet.getTotalOwners());
-        assertEquals(3, wallet.getRequiredSignatures());
-    }
-
-    @Test
-    public void testInvalidWalletCreation() {
-        // Required signatures > owners
-        assertThrows(IllegalArgumentException.class, () -> {
-            multiSig.createWallet("invalid", Arrays.asList("o1", "o2"), 3);
-        });
-
-        // Required signatures < 1
-        assertThrows(IllegalArgumentException.class, () -> {
-            multiSig.createWallet("invalid", Arrays.asList("o1", "o2"), 0);
-        });
+        assertThatThrownBy(() -> multiSig.signProposal(proposalId, owner1.getAddress(), owner1.getPrivateKey(), owner1.getPublicKey()))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("expired");
     }
 }

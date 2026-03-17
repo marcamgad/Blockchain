@@ -15,8 +15,61 @@ import java.security.cert.X509Certificate;
 import java.util.Date;
 import java.util.List;
 
+/**
+ * SSL/TLS utilities for secure P2P communication.
+ * 
+ * Provides methods for creating SSLContext with either self-signed or CA-signed certificates.
+ */
 public class SSLUtils {
 
+    /**
+     * Create SSLContext with a CA-signed node certificate.
+     * This is the recommended method for production mTLS where a CA exists.
+     * 
+     * @param ca the CertificateAuthority instance
+     * @param nodeKeyPair the node's EC keypair
+     * @param nodeId the node identifier
+     * @return configured SSLContext
+     * @throws Exception if SSL context initialization fails
+     */
+    public static SSLContext createSSLContextWithCA(CertificateAuthority ca, KeyPair nodeKeyPair, String nodeId) throws Exception {
+        // Get CA certificate and node certificate
+        X509Certificate caCert = ca.getCACertificate();
+        X509Certificate nodeCert = ca.issueNodeCertificate(nodeId, nodeKeyPair.getPublic(), (PrivateKey) nodeKeyPair.getPrivate());
+
+        // Create KeyStore with node certificate and private key
+        KeyStore keyStore = KeyStore.getInstance("PKCS12");
+        keyStore.load(null, null);
+        keyStore.setKeyEntry("node", nodeKeyPair.getPrivate(), "password".toCharArray(), 
+            new java.security.cert.Certificate[]{nodeCert, caCert});
+
+        KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+        kmf.init(keyStore, "password".toCharArray());
+
+        // Create TrustStore with CA certificate only
+        KeyStore trustStore = KeyStore.getInstance("JKS");
+        trustStore.load(null, null);
+        trustStore.setCertificateEntry("ca", caCert);
+
+        TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        tmf.init(trustStore);
+
+        SSLContext sslContext = SSLContext.getInstance("TLSv1.3");
+        sslContext.init(kmf.getKeyManagers(), tmf.getTrustManagers(), new SecureRandom());
+
+        return sslContext;
+    }
+
+    /**
+     * Create SSLContext with self-signed certificate (legacy method).
+     * Use createSSLContextWithCA() for production deployments with a CA.
+     * 
+     * @param keyPair the keypair for the node
+     * @param identity the node identifier
+     * @param trustedCerts list of peer certificates to trust
+     * @return configured SSLContext
+     * @throws Exception if SSL context initialization fails
+     */
     public static SSLContext createSSLContext(KeyPair keyPair, String identity, List<X509Certificate> trustedCerts) throws Exception {
         X509Certificate cert = generateSelfSignedCertificate(keyPair, identity);
 
@@ -84,3 +137,4 @@ public class SSLUtils {
         return new JcaX509CertificateConverter().setProvider("BC").getCertificate(certHolder);
     }
 }
+

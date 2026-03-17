@@ -37,6 +37,10 @@ public class UTXOSet {
         return json;
     }
 
+    public UTXOSet cloneUtxo() {
+        return new UTXOSet(new HashMap<>(this.map));
+    }
+
     public void addOutput(String txid, int index, String address, long amount) {
         String key = txid + ":" + index;
         map.put(key, new UTXO(address, amount));

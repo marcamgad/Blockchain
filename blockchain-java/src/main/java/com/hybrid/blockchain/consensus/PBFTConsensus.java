@@ -442,6 +442,7 @@ public class PBFTConsensus implements Consensus {
         return stats;
     }
 
+    @Override
     public void shutdown() {
         if (currentTimerTask != null) {
             currentTimerTask.cancel(true);
