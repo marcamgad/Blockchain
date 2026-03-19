@@ -32,6 +32,8 @@ public class Blockchain {
     private com.hybrid.blockchain.api.EventBus eventBus;
     private PeerNode peerNode;
     private long totalMinted = 0;
+    private com.hybrid.blockchain.monitoring.BlockchainMonitor monitor;
+    private com.hybrid.blockchain.audit.AuditLogger auditLogger;
 
     public Blockchain(Storage storage, Mempool mempool, Consensus consensus) throws Exception {
         this.storage = storage != null ? storage : new Storage("data", Config.STORAGE_AES_KEY);
@@ -51,6 +53,10 @@ public class Blockchain {
     public void setEventBus(com.hybrid.blockchain.api.EventBus bus) { this.eventBus = bus; }
     public com.hybrid.blockchain.api.EventBus getEventBus() { return eventBus; }
     public void setPeerNode(PeerNode peerNode) { this.peerNode = peerNode; }
+    public void setMonitor(com.hybrid.blockchain.monitoring.BlockchainMonitor monitor) { this.monitor = monitor; }
+    public com.hybrid.blockchain.monitoring.BlockchainMonitor getMonitor() { return monitor; }
+    public void setAuditLogger(com.hybrid.blockchain.audit.AuditLogger auditLogger) { this.auditLogger = auditLogger; }
+    public com.hybrid.blockchain.audit.AuditLogger getAuditLogger() { return auditLogger; }
 
     public void init() throws Exception {
         lock.writeLock().lock();
@@ -226,13 +232,13 @@ public class Blockchain {
             case MINT:
                 if (tx.getFrom() != null)
                     throw new Exception("MINT must be system-initiated (from address must be null)");
-                // Enforce scheduled reward amount against tokenomics
+                // Enforce scheduled reward amount against tokenomics (exact amount required)
                 {
                     long expectedReward = Tokenomics.getCurrentReward(getHeight() + 1, Tokenomics.getTotalMinted(this));
                     if (expectedReward == 0)
                         throw new Exception("MINT rejected: supply cap reached");
-                    if (tx.getAmount() > expectedReward)
-                        throw new Exception("MINT amount " + tx.getAmount() + " exceeds scheduled reward " + expectedReward);
+                    if (tx.getAmount() != expectedReward)
+                        throw new Exception("MINT amount " + tx.getAmount() + " does not match scheduled reward " + expectedReward);
                 }
                 break;
             case BURN:
@@ -404,7 +410,7 @@ public class Blockchain {
             long gasUsed = 0;
             List<ContractEvent> events = new ArrayList<>();
             try {
-                applyTransactionToState(state, utxo, tx, block.getIndex(), block.getTimestamp(), block.getHash(), events);
+                gasUsed = applyTransactionToState(state, utxo, tx, block.getIndex(), block.getTimestamp(), block.getHash(), events);
                 if (tx.getType() == Transaction.Type.MINT) {
                     totalMinted += tx.getAmount();
                 }
@@ -478,6 +484,26 @@ public class Blockchain {
         storage.saveUTXO(utxo.toJSON());
         storage.saveState(state.toJSON());
         pruneBlock(block);
+        
+        // Record monitoring metrics
+        if (monitor != null) {
+            monitor.recordMetric("blocks.created", 1);
+            monitor.recordMetric("blocks.size", block.serializeCanonical().length);
+            monitor.recordMetric("transactions.validated", block.getTransactions().size());
+        }
+        
+        // Audit log block creation
+        if (auditLogger != null) {
+            java.util.HashMap<String, Object> metadata = new java.util.HashMap<>();
+            metadata.put("blockHash", block.getHash());
+            metadata.put("blockHeight", block.getIndex());
+            metadata.put("txCount", block.getTransactions().size());
+            auditLogger.log(
+                com.hybrid.blockchain.audit.AuditLogger.AuditEventType.BLOCK_CREATED,
+                block.getValidatorId(),
+                "Block created at height " + block.getIndex(),
+                metadata);
+        }
 
         // Checkpoint every 1000 blocks
         if (block.getIndex() > 0 && block.getIndex() % 1000 == 0) {
@@ -487,13 +513,13 @@ public class Blockchain {
                         (int) block.getIndex(), block.getHash(),
                         block.getStateRoot(), Crypto.bytesToHex(Crypto.hash(utxo.toJSON().toString().getBytes())),
                         block.getTimestamp(), sigs);
-                storage.saveCheckpoint(cp);
-                log.info("[CHECKPOINT] Saved at height {}", block.getIndex());
+                // NOTE: Checkpoint is NOT saved here - it's only saved in PeerNode after quorum is reached
+                log.info("[CHECKPOINT] Broadcasting checkpoint request at height {}", block.getIndex());
                 if (peerNode != null) {
                     peerNode.broadcastCheckpointRequest(cp);
                 }
             } catch (Exception e) {
-                log.warn("[CHECKPOINT] Failed to save/broadcast checkpoint: {}", e.getMessage());
+                log.warn("[CHECKPOINT] Failed to broadcast checkpoint: {}", e.getMessage());
             }
         }
 
@@ -566,6 +592,24 @@ public class Blockchain {
             if (eventBus != null) {
                 try { eventBus.publish("transactions", tx); } catch (Exception ignored) {}
             }
+            
+            // Record monitoring and audit for transaction submission
+            if (monitor != null) {
+                monitor.recordMetric("transactions.submitted", 1);
+            }
+            if (auditLogger != null) {
+                java.util.HashMap<String, Object> metadata = new java.util.HashMap<>();
+                metadata.put("txId", tx.getId());
+                metadata.put("txType", tx.getType().toString());
+                metadata.put("amount", tx.getAmount());
+                metadata.put("fee", tx.getFee());
+                auditLogger.log(
+                    com.hybrid.blockchain.audit.AuditLogger.AuditEventType.TRANSACTION_SUBMITTED,
+                    tx.getFrom() != null ? tx.getFrom() : "system",
+                    "Transaction submitted: " + tx.getId(),
+                    metadata);
+            }
+            
             return true;
         } finally {
             lock.writeLock().unlock();
@@ -670,7 +714,7 @@ public class Blockchain {
         }
     }
 
-    void applyTransactionToState(AccountState targetState, UTXOSet targetUtxo, Transaction tx, long blockIndex, long timestamp, String blockHash, List<ContractEvent> transactionEvents) throws Exception {
+    long applyTransactionToState(AccountState targetState, UTXOSet targetUtxo, Transaction tx, long blockIndex, long timestamp, String blockHash, List<ContractEvent> transactionEvents) throws Exception {
         switch (tx.getType()) {
             case UTXO:
                 for (UTXOInput inp : tx.getInputs()) {
@@ -681,14 +725,14 @@ public class Blockchain {
                     UTXOOutput out = outs.get(i);
                     targetUtxo.addOutput(tx.getId(), i, out.getAddress(), out.getAmount());
                 }
-                break;
+                return 0;
             case ACCOUNT:
                 if (tx.getFrom() != null) {
                     targetState.debit(tx.getFrom(), Math.addExact(tx.getAmount(), tx.getFee()));
                     targetState.incrementNonce(tx.getFrom());
                 }
                 targetState.credit(tx.getTo(), tx.getAmount());
-                break;
+                return 0;
             case CONTRACT:
                 if (!Config.ENABLE_SMART_CONTRACTS)
                     throw new Exception("Contracts disabled");
@@ -700,6 +744,7 @@ public class Blockchain {
 
                 byte[] code = tx.getData();
                 String contractAddr = tx.getTo();
+                long gasLimit = tx.getFee() * 1000;
 
                 if (contractAddr == null) {
                     String creator = tx.getFrom();
@@ -708,6 +753,7 @@ public class Blockchain {
                     targetState.ensure(contractAddr);
                     targetState.setCode(contractAddr, code);
                     // Nonce already incremented for fee debit
+                    return 0;
                 } else {
                     AccountState.Account account = targetState.getAccount(contractAddr);
                     if (account != null && account.getCode() != null) {
@@ -725,36 +771,46 @@ public class Blockchain {
                             blockHash);
                     ctx.events = transactionEvents;
 
+                    // Populate address registry: map each address to a deterministic long key
+                    for (String addr : contractSimState.getAllAddresses()) {
+                        byte[] h = Crypto.hash(addr.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        long addrKey = java.nio.ByteBuffer.wrap(h, 0, 8)
+                            .order(java.nio.ByteOrder.BIG_ENDIAN).getLong();
+                        ctx.addressRegistry.put(addrKey, addr);
+                    }
+
                     try {
                         if (isWasm(code)) {
-                            WasmContractEngine wasmEngine = new WasmContractEngine(code, tx.getFee() * 1000, ctx);
+                            WasmContractEngine wasmEngine = new WasmContractEngine(code, gasLimit, ctx);
                             wasmEngine.execute("main", new ArrayList<>());
+                            targetState.merge(contractSimState);
+                            return gasLimit; // WASM engine doesn't expose remaining gas — use full limit as conservative estimate
                         } else {
-                            Interpreter vm = new Interpreter(code, tx.getFee() * 1000, ctx);
+                            Interpreter vm = new Interpreter(code, gasLimit, ctx);
                             vm.execute();
+                            // Execution succeeded, commit state changes
+                            targetState.merge(contractSimState);
+                            return gasLimit - vm.getGasRemaining(); // actual gas consumed
                         }
-                        // Execution succeeded, commit state changes
-                        targetState.merge(contractSimState);
                     } catch (Exception e) {
                         // Execution failed/reverted, discard contractSimState
                         throw e; // Rethrow to be caught by applyBlock/validateTransaction
                     }
                 }
-                break;
             case IOT_MANAGEMENT:
                 if (tx.getFrom() != null) {
                     targetState.debit(tx.getFrom(), tx.getFee());
                     targetState.incrementNonce(tx.getFrom());
                 }
                 processIoTTransactionWithState(targetState, tx, blockIndex);
-                break;
+                return 0;
             case MINT:
                 targetState.credit(tx.getTo(), tx.getAmount());
-                break;
+                return 0;
             case BURN:
                 targetState.debit(tx.getFrom(), Math.addExact(tx.getAmount(), tx.getFee()));
                 targetState.incrementNonce(tx.getFrom());
-                break;
+                return 0;
             case TOKEN_TRANSFER:
                 if (tokenRegistry == null) throw new Exception("TokenRegistry not configured");
                 {
@@ -763,7 +819,7 @@ public class Blockchain {
                     targetState.debit(tx.getFrom(), tx.getFee());
                     targetState.incrementNonce(tx.getFrom());
                 }
-                break;
+                return 0;
             case TELEMETRY:
                 {
                     targetState.debit(tx.getFrom(), tx.getFee());
@@ -777,7 +833,7 @@ public class Blockchain {
                         log.warn("[TELEMETRY] Failed to save telemetry for {}: {}", tx.getFrom(), e.getMessage());
                     }
                 }
-                break;
+                return 0;
 
             case TOKEN_REGISTER:
                 if (tx.getFrom() != null) {
@@ -795,7 +851,7 @@ public class Blockchain {
                         );
                     }
                 }
-                break;
+                return 0;
 
             case TOKEN_MINT:
                 if (tx.getFrom() != null) {
@@ -806,7 +862,7 @@ public class Blockchain {
                         tokenRegistry.mintToken(targetState, tokenId, tx.getTo(), tx.getAmount());
                     }
                 }
-                break;
+                return 0;
 
             case TOKEN_BURN:
                 if (tx.getFrom() != null) {
@@ -817,8 +873,9 @@ public class Blockchain {
                         tokenRegistry.burnToken(targetState, tokenId, tx.getFrom(), tx.getAmount());
                     }
                 }
-                break;
+                return 0;
         }
+        return 0;  // Default return for any unhandled cases
     }
 
     private void processIoTTransactionWithState(AccountState targetState, Transaction tx, long blockHeight) throws Exception {

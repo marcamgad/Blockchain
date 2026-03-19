@@ -4,6 +4,8 @@ import com.hybrid.blockchain.Crypto;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Comprehensive Audit Logging System for Blockchain Operations
@@ -23,6 +25,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * - Query and export capabilities
  */
 public class AuditLogger {
+    private static final Logger log = LoggerFactory.getLogger(AuditLogger.class);
 
     private final Queue<AuditEntry> auditLog;
     private String lastEntryHash;
@@ -49,8 +52,8 @@ public class AuditLogger {
         auditLog.add(entry);
         lastEntryHash = entry.getHash();
 
-        // Print to console for immediate visibility
-        System.out.println("[AUDIT] " + entry.toString());
+        // Log to audit trail with SLF4J for structured logging
+        log.info("[AUDIT] {}", entry.toString());
     }
 
     /**
@@ -114,14 +117,14 @@ public class AuditLogger {
         String expectedHash = "0";
         for (AuditEntry entry : auditLog) {
             if (!entry.getPreviousHash().equals(expectedHash)) {
-                System.err.println("[AUDIT] Integrity violation: expected previous hash " +
-                        expectedHash + " but got " + entry.getPreviousHash());
+                log.error("[AUDIT] Integrity violation: expected previous hash {} but got {}",
+                        expectedHash, entry.getPreviousHash());
                 return false;
             }
 
             // Verify entry's own hash
             if (!entry.getHash().equals(entry.calculateHash())) {
-                System.err.println("[AUDIT] Integrity violation: entry hash mismatch");
+                log.error("[AUDIT] Integrity violation: entry hash mismatch");
                 return false;
             }
 

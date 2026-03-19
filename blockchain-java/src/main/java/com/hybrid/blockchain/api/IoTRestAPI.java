@@ -603,6 +603,125 @@ public class IoTRestAPI {
         }
     }
 
+    // ============================================
+    // Admin Endpoints (require authentication)
+    // ============================================
+
+    @GetMapping("/admin/status")
+    public ResponseEntity<?> adminStatus() {
+        blockchainLock.readLock().lock();
+        try {
+            return ResponseEntity.ok(Map.of(
+                    "nodeId", Config.NODE_ID,
+                    "height", blockchain.getHeight(),
+                    "difficulty", blockchain.getDifficulty(),
+                    "totalMinted", blockchain.getTotalMinted(),
+                    "mempoolSize", mempool.size(),
+                    "peers", sharedPeerNode != null ? sharedPeerNode.getPeers().size() : 0,
+                    "timestamp", System.currentTimeMillis()));
+        } finally {
+            blockchainLock.readLock().unlock();
+        }
+    }
+
+   @GetMapping("/admin/peers")
+public ResponseEntity<?> adminPeers() {
+    if (sharedPeerNode == null) {
+        Map<String, Object> resp = new HashMap<>();
+        resp.put("peers", Collections.emptyList());
+        return ResponseEntity.ok(resp);
+    }
+
+    List<Map<String, Object>> peerList = sharedPeerNode.getPeers().stream()
+            .map(p -> {
+                Map<String, Object> map = new HashMap<>();
+                map.put("id", p.getId() != null ? p.getId() : "unknown");
+                map.put("address", p.getAddress() != null ? p.getAddress() : "unknown");
+                map.put("port", p.getPort());
+                return map;
+            })
+            .collect(Collectors.toList());
+
+    Map<String, Object> response = new HashMap<>();
+    response.put("peers", peerList);
+    response.put("count", peerList.size());
+
+    return ResponseEntity.ok(response);
+}
+
+    @PostMapping("/admin/broadcast-block")
+    public ResponseEntity<?> adminBroadcastBlock(@RequestBody Map<String, Object> payload) {
+        try {
+            // This endpoint allows forcing a block broadcast to the network
+            // Used for testing consensus recovery scenarios
+            blockchainLock.readLock().lock();
+            try {
+                Block latestBlock = blockchain.getLatestBlock();
+                if (sharedPeerNode != null) {
+                    sharedPeerNode.broadcastBlock(latestBlock);
+                    return ResponseEntity.ok(Map.of(
+                            "status", "broadcasted",
+                            "blockHash", latestBlock.getHash(),
+                            "blockHeight", latestBlock.getIndex()));
+                } else {
+                    return ResponseEntity.status(400).body(Map.of("error", "PeerNode not initialized"));
+                }
+            } finally {
+                blockchainLock.readLock().unlock();
+            }
+        } catch (Exception e) {
+            log.error("Failed to broadcast block: {}", e.getMessage());
+            return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @DeleteMapping("/admin/peers/{peerId}")
+    public ResponseEntity<?> adminDisconnectPeer(@PathVariable String peerId) {
+        try {
+            if (sharedPeerNode == null) {
+                return ResponseEntity.status(400).body(Map.of("error", "PeerNode not initialized"));
+            }
+            
+            sharedPeerNode.disconnectPeer(peerId);
+            log.info("Disconnected peer: {}", peerId);
+            
+            return ResponseEntity.ok(Map.of(
+                    "status", "disconnected",
+                    "peerId", peerId));
+        } catch (Exception e) {
+            log.error("Failed to disconnect peer {}: {}", peerId, e.getMessage());
+            return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @GetMapping("/admin/metrics")
+public ResponseEntity<?> adminMetrics() {
+    blockchainLock.readLock().lock();
+    try {
+        com.hybrid.blockchain.monitoring.BlockchainMonitor monitor = blockchain.getMonitor();
+        if (monitor == null) {
+            Map<String, Object> resp = new HashMap<>();
+            resp.put("error", "Monitor not initialized");
+            return ResponseEntity.status(400).body(resp);
+        }
+
+        com.hybrid.blockchain.monitoring.BlockchainMonitor.Dashboard dashboard = monitor.getDashboard();
+        Map<String, Object> resp = new HashMap<>();
+        resp.put("nodeId", dashboard.getNodeId());  // Use getter
+        resp.put("uptime", dashboard.getUptime());  // Use getter
+        resp.put("timestamp", System.currentTimeMillis());
+
+        return ResponseEntity.ok(resp);
+    } catch (Exception e) {
+        log.error("Failed to retrieve metrics: {}", e.getMessage());
+        Map<String, Object> resp = new HashMap<>();
+        resp.put("error", e.getMessage());
+        return ResponseEntity.status(500).body(resp);
+    } finally {
+        blockchainLock.readLock().unlock();
+    }
+}
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<?> handleException(Exception e) {
         log.error("Error occurred: {}", e.getMessage(), e);

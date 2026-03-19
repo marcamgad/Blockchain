@@ -50,6 +50,14 @@ public class App {
             TokenRegistry tokenRegistry = new TokenRegistry(storage);
             blockchain.setTokenRegistry(tokenRegistry);
             
+            // 3b. Initialize Monitoring and Auditing
+            com.hybrid.blockchain.monitoring.BlockchainMonitor monitor = 
+                new com.hybrid.blockchain.monitoring.BlockchainMonitor(Config.NODE_ID);
+            blockchain.setMonitor(monitor);
+            com.hybrid.blockchain.audit.AuditLogger auditLogger = 
+                new com.hybrid.blockchain.audit.AuditLogger(Config.NODE_ID);
+            blockchain.setAuditLogger(auditLogger);
+            
             // 4. Initialize Networking (P2P)
             PeerNode peerNode = new PeerNode(Config.P2P_PORT, blockchain, consensus, privateKey);
             consensus.setMessenger(peerNode);

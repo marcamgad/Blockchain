@@ -38,6 +38,14 @@ public class AccountState {
         return state.keySet();
     }
 
+    /**
+     * Returns an unmodifiable set of all account addresses in state.
+     * @return immutable set of address strings
+     */
+    public java.util.Set<String> getAllAddresses() {
+        return Collections.unmodifiableSet(state.keySet());
+    }
+
     public AccountState(Map<String, Account> obj) {
         this.state = new HashMap<>(obj);
         this.mpt = new MerklePatriciaTrie();

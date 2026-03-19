@@ -3,6 +3,8 @@ package com.hybrid.blockchain.monitoring;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Real-Time Monitoring and Metrics System
@@ -21,6 +23,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * - Incident response
  */
 public class BlockchainMonitor {
+    private static final Logger log = LoggerFactory.getLogger(BlockchainMonitor.class);
 
     private final String nodeId;
     private final Map<String, MetricCollector> metrics;
@@ -121,7 +124,14 @@ public class BlockchainMonitor {
             alerts.remove(0);
         }
 
-        System.out.println("[ALERT] " + alert);
+        // Log alert with SLF4J
+        if (level == AlertLevel.CRITICAL) {
+            log.error("[ALERT] {} - {}", title, alert);
+        } else if (level == AlertLevel.WARNING) {
+            log.warn("[ALERT] {} - {}", title, alert);
+        } else {
+            log.info("[ALERT] {} - {}", title, alert);
+        }
     }
 
     /**
@@ -411,6 +421,7 @@ public class BlockchainMonitor {
         public PerformanceMetrics getPerformance() {
             return performance;
         }
+        
     }
 
     /**

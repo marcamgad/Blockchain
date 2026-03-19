@@ -87,4 +87,8 @@ public class Mempool {
     public int size() {
         return map.size();
     }
+
+    public void clear() {
+        map.clear();
+    }
 }
