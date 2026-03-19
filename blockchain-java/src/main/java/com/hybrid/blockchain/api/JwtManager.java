@@ -24,6 +24,19 @@ public class JwtManager {
                 .compact();
     }
 
+    public boolean validateToken(String token) {
+        try {
+            Jwts.parser()
+                    .setSigningKey(SECRET)
+                    .parseClaimsJws(token);
+            return true;
+        } catch (ExpiredJwtException e) {
+            return false;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     public boolean validateToken(String token, String deviceId) {
         try {
             Claims claims = Jwts.parser()
@@ -36,6 +49,14 @@ public class JwtManager {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    /**
+     * Extract subject (user/device ID) from JWT token.
+     * Used for authentication context setup.
+     */
+    public String getSubject(String token) {
+        return getDeviceId(token);
     }
 
     public String getDeviceId(String token) {

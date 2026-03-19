@@ -25,6 +25,18 @@ public class Interpreter {
         this.context = context;
     }
 
+    /**
+     * Executes the bytecode instruction by instruction.
+     * 
+     * Stack Convention (EVM standard): For multi-argument opcodes, arguments are pushed left-to-right.
+     * The rightmost argument becomes the stack top and is popped first.
+     * Example for JUMPI(address, condition): push(address) then push(condition), 
+     * JUMPI pops condition first (top), then address (below), and jumps if condition != 0.
+     * 
+     * Self-test verification: 
+     *   Code: PUSH 100, PUSH 1, JUMPI
+     *   Expected: Jump to PC=100 because condition (1) != 0
+     */
     public void execute() throws Exception {
         while (pc < bytecode.length) {
             OpCode op = OpCode.fromByte(bytecode[pc++]);
@@ -60,26 +72,106 @@ public class Interpreter {
                     break;
 
                 case JUMPI:
-                    long cond = stack.pop();
-                    long target = stack.pop();
-                    if (cond != 0) {
-                        if (target < 0 || target >= bytecode.length) throw new Exception("Invalid JUMPI destination");
-                        pc = (int) target;
+                    // JUMPI(address, condition): Pop condition (on top), then address.
+                    // Jump to address if condition != 0.
+                    long jiCond   = stack.pop(); // condition is on top (pushed second/rightmost)
+                    long jiTarget = stack.pop(); // target is below (pushed first/leftmost)
+                    if (jiCond != 0) {
+                        if (jiTarget < 0 || jiTarget >= bytecode.length) throw new Exception("Invalid JUMPI destination: " + jiTarget);
+                        pc = (int) jiTarget;
                     }
                     break;
 
                 case CALL:
-                    @SuppressWarnings("unused") long callGas = stack.pop();
-                    @SuppressWarnings("unused") long toAddr = stack.pop(); 
-                    @SuppressWarnings("unused") long callValue = stack.pop();
-                    @SuppressWarnings("unused") long inOffset = stack.pop();
-                    @SuppressWarnings("unused") long inLen = stack.pop();
-                    @SuppressWarnings("unused") long outOffset = stack.pop();
-                    @SuppressWarnings("unused") long outLen = stack.pop();
+                    long callGas = stack.pop();
+                    long toAddr = stack.pop();
+                    long callValue = stack.pop();
+                    long inOffset = stack.pop();
+                    long inLen = stack.pop();
+                    long outOffset = stack.pop();
+                    long outLen = stack.pop();
                     
-                    // Simple stub for intra-contract calls. 
-                    // In full implementation, this instantiates a new Interpreter.
-                    stack.push(1L); // 1 = success
+                    // Resolve target address from registry
+                    String targetAddr = context.addressRegistry.getOrDefault(toAddr, null);
+                    if (targetAddr == null) {
+                        // Try hash-based lookup
+                        targetAddr = context.state.getAllAddresses().stream()
+                            .filter(addr -> {
+                                byte[] h = Crypto.hash(addr.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                                return java.nio.ByteBuffer.wrap(h, 0, 8)
+                                    .order(java.nio.ByteOrder.BIG_ENDIAN).getLong() == toAddr;
+                            })
+                            .findFirst()
+                            .orElse(null);
+                    }
+                    
+                    if (targetAddr == null) {
+                        // Target address not found; execution fails
+                        stack.push(0L); // 0 = failure
+                        break;
+                    }
+                    
+                    // Check target has code
+                    AccountState.Account targetAccount = context.state.getAccount(targetAddr);
+                    if (targetAccount == null || targetAccount.getCode() == null) {
+                        stack.push(0L); // Target has no code
+                        break;
+                    }
+                    
+                    // Prepare input data
+                    byte[] callInput = new byte[(int)Math.min(inLen, memory.length - inOffset)];
+                    if (inLen > 0 && inOffset + inLen <= memory.length) {
+                        System.arraycopy(memory, (int)inOffset, callInput, 0, (int)inLen);
+                    }
+                    
+                    // Deduct gas
+                    long childGasLimit = Math.min(callGas, gasRemaining);
+                    deductGas((int)childGasLimit);
+                    
+                    try {
+                        // Transfer value
+                        if (callValue > 0) {
+                            context.state.debit(context.contractAddress, callValue);
+                            context.state.credit(targetAddr, callValue);
+                        }
+                        
+                        // Clone state for child execution
+                        AccountState childState = context.state.cloneState();
+                        
+                        // Create child context
+                        Interpreter.BlockchainContext childContext = new Interpreter.BlockchainContext(
+                                context.timestamp,
+                                context.blockHeight,
+                                context.contractAddress, // caller is current contract
+                                targetAddr, // target contract
+                                callValue,
+                                childState,
+                                context.hardware,
+                                context.currentBlockHash);
+                        childContext.events = new java.util.ArrayList<>();
+                        
+                        // Copy address registry
+                        childContext.addressRegistry.putAll(context.addressRegistry);
+                        
+                        // Execute child interpreter
+                        Interpreter childInterp = new Interpreter(targetAccount.getCode(), childGasLimit, childContext);
+                        childInterp.execute();
+                        
+                        // Merge child state changes (contract succeeded)
+                        context.state.merge(childState);
+                        
+                        // Copy return data
+                        byte[] returnData = childInterp.getReturnData();
+                        if (returnData != null && outLen > 0) {
+                            int copyLen = (int)Math.min(outLen, Math.min(returnData.length, memory.length - outOffset));
+                            System.arraycopy(returnData, 0, memory, (int)outOffset, copyLen);
+                        }
+                        
+                        stack.push(1L); // 1 = success
+                    } catch (Exception e) {
+                        // Execution failed; revert state is handled by exception propagation
+                        stack.push(0L); // 0 = failure
+                    }
                     break;
 
                 case LOG:
@@ -94,6 +186,7 @@ public class Interpreter {
 
                 case PUSH:
                     stack.push(readLong());
+                    if (stack.size() > 1024) throw new Exception("Stack overflow: depth " + stack.size());
                     break;
 
                 case POP:
@@ -102,6 +195,7 @@ public class Interpreter {
 
                 case DUP:
                     stack.push(stack.peek());
+                    if (stack.size() > 1024) throw new Exception("Stack overflow: depth " + stack.size());
                     break;
 
                 case SWAP:
@@ -173,17 +267,27 @@ public class Interpreter {
                     break;
 
                 case SSTORE:
-                    long k = stack.pop();
-                    long val = stack.pop();
-                    context.state.putStorage(context.contractAddress, k, val);
+                    // SSTORE(key, value): Pop value (on top), then key. Store value at key.
+                    long ssKey = stack.pop(); // key is below (pushed first/leftmost)
+                    long ssVal = stack.pop(); // value is on top (pushed second/rightmost)
+                    context.state.putStorage(context.contractAddress, ssKey, ssVal);
                     break;
 
                 case BALANCE:
-                    long addrSeed = stack.pop();
-                    // In our simplified VM, we derive address from the long seed if it's not a real address string
-                    // For now, look up by the address seed if it's already a known address or use a mapping.
-                    // This is a placeholder for real address conversion.
-                    stack.push(context.state.getBalance(context.state.getAccountAddresses().stream().skip(addrSeed % 10).findFirst().orElse(context.contractAddress))); 
+                    long addrKey = stack.pop();
+                    String resolvedAddr = context.addressRegistry.getOrDefault(addrKey, null);
+                    if (resolvedAddr == null) {
+                        // Try interpreting as a direct address hash — look up by iterating
+                        resolvedAddr = context.state.getAllAddresses().stream()
+                            .filter(addr -> {
+                                byte[] h = Crypto.hash(addr.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                                return java.nio.ByteBuffer.wrap(h, 0, 8)
+                                    .order(java.nio.ByteOrder.BIG_ENDIAN).getLong() == addrKey;
+                            })
+                            .findFirst()
+                            .orElse(context.contractAddress);
+                    }
+                    stack.push(context.state.getBalance(resolvedAddr));
                     break;
 
                 case SELFBALANCE:
@@ -213,9 +317,6 @@ public class Interpreter {
                 default:
                     throw new Exception("OpCode " + op + " not yet implemented");
             }
-
-            if (stack.size() > 1024)
-                throw new Exception("Stack overflow");
         }
     }
 
@@ -290,6 +391,7 @@ public class Interpreter {
         public HardwareManager hardware;
         public String currentBlockHash;
         public java.util.List<ContractEvent> events = new java.util.ArrayList<>();
+        public java.util.Map<Long, String> addressRegistry = new java.util.HashMap<>();
 
         public BlockchainContext() {}
 

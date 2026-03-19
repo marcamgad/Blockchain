@@ -24,12 +24,57 @@ data/
 test-data-*/
 *.db
 
-# Environment
+# Environment and secrets (CRITICAL - never commit these!)
 .env
 .env.local
+.env.*.local
+.env.20nodes
+.env.*.yml
 STORAGE_AES_KEY
 NODE_PRIVATE_KEY
+*.key
+*.pem
+*.jks
+*.p12
+
+# Node modules and package managers
+node_modules/
+package-lock.json
+yarn.lock
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Build artifacts
+build/
+dist/
+*.class
+*.jar
+*.war
+*.ear
+
+# Gradle
+.gradle/
+gradle-wrapper.jar
+
+# Test generated files
+surefire-reports/
+integration_test_*/
+test_data_*/
+
+# IDE generated files
+.classpath
+.factorypath
+.springBeans
+.sts4-cache
+bin/
+
+# Temporary files
+~*
+*.swp
+*.swo
+*~
+.cache/
+temp/
+

@@ -173,6 +173,16 @@ public class Storage implements AutoCloseable {
         return get("meta:" + key, Object.class);
     }
 
+    /**
+     * Get the current size of the in-memory cache.
+     * Useful for monitoring memory usage and cache effectiveness.
+     * 
+     * @return the number of entries in the cache
+     */
+    public int getCacheSize() {
+        return cache.size();
+    }
+
     @Override
     public void close() throws IOException {
         db.close();

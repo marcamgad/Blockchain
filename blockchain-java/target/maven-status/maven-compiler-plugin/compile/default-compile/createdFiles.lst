@@ -55,7 +55,6 @@ com\hybrid\blockchain\MerklePatriciaTrie$LeafNode.class
 com\hybrid\blockchain\FeeMarket.class
 com\hybrid\blockchain\Tokenomics.class
 com\hybrid\blockchain\api\IoTDeviceManager.class
-com\hybrid\blockchain\api\IoTRestAPI$ContractRequest.class
 com\hybrid\blockchain\monitoring\BlockchainMonitor$HealthStatus.class
 com\hybrid\blockchain\monitoring\BlockchainMonitor$MetricCollector.class
 com\hybrid\blockchain\monitoring\BlockchainMonitor$HealthCheck.class
@@ -100,11 +99,9 @@ com\hybrid\blockchain\App.class
 com\hybrid\blockchain\Config$NodeRole.class
 com\hybrid\blockchain\Mempool.class
 com\hybrid\blockchain\UTXOInput.class
-com\hybrid\blockchain\api\IoTRestAPI.class
 com\hybrid\blockchain\Blockchain$1.class
 com\hybrid\blockchain\consensus\PBFTConsensus$PBFTMessage.class
 com\hybrid\blockchain\monitoring\BlockchainMonitor$MetricSummary.class
-com\hybrid\blockchain\api\IoTRestAPI$SubmitTransactionRequest.class
 com\hybrid\blockchain\api\WebSocketConfig.class
 com\hybrid\blockchain\security\RateLimiter$Presets.class
 com\hybrid\blockchain\identity\DecentralizedIdentifier.class
@@ -130,6 +127,7 @@ com\hybrid\blockchain\lifecycle\DeviceLifecycleManager$DeviceStatus.class
 com\hybrid\blockchain\ContractEvent.class
 com\hybrid\blockchain\lifecycle\DeviceLifecycleManager$FirmwareUpdate.class
 com\hybrid\blockchain\Interpreter$1.class
+com\hybrid\blockchain\security\JwtAuthFilter.class
 com\hybrid\blockchain\api\JwtManager.class
 com\hybrid\blockchain\privacy\ZKProofSystem$RangeProof.class
 com\hybrid\blockchain\privacy\ZKProofSystem$ThresholdProof.class

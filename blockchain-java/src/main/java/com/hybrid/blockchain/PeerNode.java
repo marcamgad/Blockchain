@@ -771,6 +771,25 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
     }
 
     /**
+     * Disconnect a specific peer by ID.
+     * Used for administrative peer management.
+     * 
+     * @param peerId the ID of the peer to disconnect
+     */
+    public void disconnectPeer(String peerId) {
+        DataOutputStream out = peerConnections.remove(peerId);
+        if (out != null) {
+            try {
+                out.close();
+                log.info("[P2P] Disconnected peer: {}", peerId);
+            } catch (IOException e) {
+                log.warn("[P2P] Error closing connection to peer {}: {}", peerId, e.getMessage());
+            }
+        }
+        peerManager.removePeer(peerId);
+    }
+
+    /**
      * Gracefully stop the P2P node, closing all peer connections and shutting down the executor.
      * 
      * @throws IOException if an I/O error occurs
