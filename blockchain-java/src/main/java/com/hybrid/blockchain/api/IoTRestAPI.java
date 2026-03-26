@@ -27,6 +27,7 @@ import java.util.*;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.stream.Collectors;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -104,12 +105,16 @@ public class IoTRestAPI {
         };
     }
 
+    @Autowired
+    private MDCCorrelationInterceptor mdcInterceptor;
+
     @Bean
-    public WebMvcConfigurer webMvcConfigurer(HandlerInterceptor apiRateLimitInterceptor) {
+    public WebMvcConfigurer webMvcConfigurer() {
         return new WebMvcConfigurer() {
             @Override
             public void addInterceptors(InterceptorRegistry registry) {
-                registry.addInterceptor(apiRateLimitInterceptor).addPathPatterns("/api/v1/**");
+                registry.addInterceptor(mdcInterceptor).addPathPatterns("/api/v1/**", "/metrics");
+                registry.addInterceptor(apiRateLimitInterceptor()).addPathPatterns("/api/v1/**");
             }
         };
     }
@@ -132,6 +137,20 @@ public class IoTRestAPI {
                 "status", "ok",
                 "height", blockchain != null ? blockchain.getHeight() : -1,
                 "peers", sharedPeerNode != null ? sharedPeerNode.getPeers().size() : 0));
+    }
+
+    @GetMapping(value = "/metrics", produces = "text/plain")
+    public String metrics() {
+        blockchainLock.readLock().lock();
+        try {
+            if (blockchain == null || blockchain.getMonitor() == null) {
+                return "# Monitor not initialized\n";
+            }
+            com.hybrid.blockchain.monitoring.PrometheusBridge bridge = new com.hybrid.blockchain.monitoring.PrometheusBridge(blockchain.getMonitor());
+            return bridge.buildMetrics();
+        } finally {
+            blockchainLock.readLock().unlock();
+        }
     }
 
     @GetMapping("/chain/height")
@@ -204,7 +223,7 @@ public class IoTRestAPI {
     }
 
     @GetMapping("/accounts/{address}")
-    public ResponseEntity<?> getAccount(@PathVariable String address,
+    public ResponseEntity<?> getAccount(@PathVariable("address") String address,
             @RequestHeader("Authorization") String auth) throws Exception {
         String token = auth.replace("Bearer ", "");
         if (!verifyToken(token, address))
@@ -277,7 +296,7 @@ public class IoTRestAPI {
     }
 
     @GetMapping("/transactions/{txId}")
-    public ResponseEntity<?> getTransaction(@PathVariable String txId) {
+    public ResponseEntity<?> getTransaction(@PathVariable("txId") String txId) {
         blockchainLock.readLock().lock();
         try {
             for (Transaction tx : mempool.toArray()) {
@@ -298,7 +317,7 @@ public class IoTRestAPI {
 
     @GetMapping("/transactions/pending")
     public ResponseEntity<?> getPendingTransactions(@RequestHeader("Authorization") String auth,
-            @RequestParam(required = false) Integer limit) {
+            @RequestParam(value = "limit", required = false) Integer limit) {
         blockchainLock.readLock().lock();
         try {
             List<Transaction> pending = mempool.toArray();
@@ -321,7 +340,7 @@ public class IoTRestAPI {
     }
 
     @GetMapping("/blocks/height/{height}")
-    public ResponseEntity<?> getBlockByHeight(@PathVariable int height) {
+    public ResponseEntity<?> getBlockByHeight(@PathVariable("height") int height) {
         blockchainLock.readLock().lock();
         try {
             if (height < 0 || height >= blockchain.getChain().size())
@@ -333,7 +352,7 @@ public class IoTRestAPI {
     }
 
     @GetMapping("/blocks/{hash}")
-    public ResponseEntity<?> getBlockByHash(@PathVariable String hash) {
+    public ResponseEntity<?> getBlockByHash(@PathVariable("hash") String hash) {
         blockchainLock.readLock().lock();
         try {
             for (Block block : blockchain.getChain()) {
@@ -377,7 +396,7 @@ public class IoTRestAPI {
     }
 
     @GetMapping("/proof/{address}")
-    public ResponseEntity<?> getAccountProof(@PathVariable String address) {
+    public ResponseEntity<?> getAccountProof(@PathVariable("address") String address) {
         blockchainLock.readLock().lock();
         try {
             byte[] proof = blockchain.getState().getCompactAccountProof(address);
@@ -421,7 +440,7 @@ public class IoTRestAPI {
     }
 
     @GetMapping("/iot/devices/{deviceId}")
-    public ResponseEntity<?> getIoTDevice(@PathVariable String deviceId) {
+    public ResponseEntity<?> getIoTDevice(@PathVariable("deviceId") String deviceId) {
         blockchainLock.readLock().lock();
         try {
             var record = blockchain.getState().getLifecycleManager().getDeviceRecord(deviceId);
@@ -448,7 +467,7 @@ public class IoTRestAPI {
     }
 
     @PostMapping("/contracts/{address}/call")
-    public ResponseEntity<?> callContract(@PathVariable String address,
+    public ResponseEntity<?> callContract(@PathVariable("address") String address,
             @RequestBody ContractRequest payload) throws Exception {
         log.info("Contract call request received (Stub)");
         return ResponseEntity
@@ -484,7 +503,7 @@ public class IoTRestAPI {
     // Phase 2: Transaction Receipts
     // ============================================
     @GetMapping("/tx/{txid}/receipt")
-    public ResponseEntity<?> getTransactionReceipt(@PathVariable String txid) {
+    public ResponseEntity<?> getTransactionReceipt(@PathVariable("txid") String txid) {
         blockchainLock.readLock().lock();
         try {
             var receipt = blockchain.getStorage().loadReceipt(txid);
@@ -498,7 +517,7 @@ public class IoTRestAPI {
     }
 
     @GetMapping("/contracts/{address}/abi")
-    public ResponseEntity<?> getContractABI(@PathVariable String address) {
+    public ResponseEntity<?> getContractABI(@PathVariable("address") String address) {
         blockchainLock.readLock().lock();
         try {
             var account = blockchain.getState().getAccount(address);
@@ -515,7 +534,7 @@ public class IoTRestAPI {
     // Phase 3: Multi-Token Registry
     // ============================================
     @GetMapping("/tokens/{tokenId}")
-    public ResponseEntity<?> getTokenInfo(@PathVariable String tokenId) {
+    public ResponseEntity<?> getTokenInfo(@PathVariable("tokenId") String tokenId) {
         blockchainLock.readLock().lock();
         try {
             var tokenRegistry = blockchain.getTokenRegistry();
@@ -529,7 +548,7 @@ public class IoTRestAPI {
     }
 
     @GetMapping("/tokens/{tokenId}/balance/{address}")
-    public ResponseEntity<?> getTokenBalance(@PathVariable String tokenId, @PathVariable String address) {
+    public ResponseEntity<?> getTokenBalance(@PathVariable("tokenId") String tokenId, @PathVariable("address") String address) {
         blockchainLock.readLock().lock();
         try {
             long balance = blockchain.getState().getTokenBalance(address, tokenId);
@@ -543,7 +562,7 @@ public class IoTRestAPI {
     // Phase 5: Transaction Indexer
     // ============================================
     @GetMapping("/address/{address}/transactions")
-    public ResponseEntity<?> getAddressTransactions(@PathVariable String address, @RequestParam(defaultValue = "0") int offset, @RequestParam(defaultValue = "50") int limit) {
+    public ResponseEntity<?> getAddressTransactions(@PathVariable("address") String address, @RequestParam(value = "offset", defaultValue = "0") int offset, @RequestParam(value = "limit", defaultValue = "50") int limit) {
         blockchainLock.readLock().lock();
         try {
             var txs = blockchain.getStorage().getAddressTransactions(address, offset, null);
@@ -555,11 +574,27 @@ public class IoTRestAPI {
         }
     }
 
+    // Explorer aliases
+    @GetMapping("/explorer/address/{address}")
+    public ResponseEntity<?> explorerAddress(@PathVariable("address") String address, @RequestParam(value = "offset", defaultValue = "0") int offset) {
+        return getAddressTransactions(address, offset, 50);
+    }
+
+    @GetMapping("/explorer/block/{hash}")
+    public ResponseEntity<?> explorerBlock(@PathVariable("hash") String hash) {
+        return getBlockByHash(hash);
+    }
+
+    @GetMapping("/explorer/tx/{txId}")
+    public ResponseEntity<?> explorerTx(@PathVariable("txId") String txId) {
+        return getTransaction(txId);
+    }
+
     // ============================================
     // Phase 6: Device Telemetry
     // ============================================
     @GetMapping("/devices/{deviceId}/telemetry")
-    public ResponseEntity<?> getDeviceTelemetry(@PathVariable String deviceId, @RequestParam(defaultValue = "0") int fromBlock, @RequestParam(defaultValue = "-1") int toBlock) {
+    public ResponseEntity<?> getDeviceTelemetry(@PathVariable("deviceId") String deviceId, @RequestParam(value = "fromBlock", defaultValue = "0") int fromBlock, @RequestParam(value = "toBlock", defaultValue = "-1") int toBlock) {
         blockchainLock.readLock().lock();
         try {
             if (toBlock == -1) toBlock = blockchain.getHeight();
@@ -590,7 +625,7 @@ public class IoTRestAPI {
     }
 
     @GetMapping("/checkpoint/{height}")
-    public ResponseEntity<?> getCheckpointByHeight(@PathVariable int height) {
+    public ResponseEntity<?> getCheckpointByHeight(@PathVariable("height") int height) {
         blockchainLock.readLock().lock();
         try {
             var cp = blockchain.getStorage().loadCheckpointAtHeight(height);
@@ -618,10 +653,50 @@ public class IoTRestAPI {
                     "totalMinted", blockchain.getTotalMinted(),
                     "mempoolSize", mempool.size(),
                     "peers", sharedPeerNode != null ? sharedPeerNode.getPeers().size() : 0,
+                    "paused", blockchain != null ? blockchain.isPaused() : false,
                     "timestamp", System.currentTimeMillis()));
         } finally {
             blockchainLock.readLock().unlock();
         }
+    }
+
+    @PostMapping("/admin/node/pause")
+    public ResponseEntity<?> adminPauseNode() {
+        blockchainLock.writeLock().lock();
+        try {
+            blockchain.setPaused(true);
+            log.info("Node PAUSED by admin");
+            return ResponseEntity.ok(Map.of("status", "paused"));
+        } finally {
+            blockchainLock.writeLock().unlock();
+        }
+    }
+
+    @PostMapping("/admin/node/resume")
+    public ResponseEntity<?> adminResumeNode() {
+        blockchainLock.writeLock().lock();
+        try {
+            blockchain.setPaused(false);
+            log.info("Node RESUMED by admin");
+            return ResponseEntity.ok(Map.of("status", "resumed"));
+        } finally {
+            blockchainLock.writeLock().unlock();
+        }
+    }
+
+    @PostMapping("/admin/config/update")
+    public ResponseEntity<?> adminUpdateConfig(@RequestBody Map<String, Object> payload) {
+        // Limited dynamic config updates for production
+        if (payload.containsKey("maxTransactionsPerBlock")) {
+            Config.MAX_TRANSACTIONS_PER_BLOCK = ((Number) payload.get("maxTransactionsPerBlock")).intValue();
+        }
+        if (payload.containsKey("targetBlockTimeMs")) {
+            Config.TARGET_BLOCK_TIME_MS = ((Number) payload.get("targetBlockTimeMs")).longValue();
+        }
+        return ResponseEntity.ok(Map.of("status", "updated", "config", Map.of(
+            "maxTransactionsPerBlock", Config.MAX_TRANSACTIONS_PER_BLOCK,
+            "targetBlockTimeMs", Config.TARGET_BLOCK_TIME_MS
+        )));
     }
 
    @GetMapping("/admin/peers")
@@ -676,7 +751,7 @@ public ResponseEntity<?> adminPeers() {
     }
 
     @DeleteMapping("/admin/peers/{peerId}")
-    public ResponseEntity<?> adminDisconnectPeer(@PathVariable String peerId) {
+    public ResponseEntity<?> adminDisconnectPeer(@PathVariable("peerId") String peerId) {
         try {
             if (sharedPeerNode == null) {
                 return ResponseEntity.status(400).body(Map.of("error", "PeerNode not initialized"));

@@ -1,4 +1,6 @@
 package com.hybrid.blockchain.privacy;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.hybrid.blockchain.Crypto;
 import javax.crypto.Cipher;
@@ -21,6 +23,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * - Secure inter-device communication
  */
 public class PrivateDataCollection {
+    private static final Logger log = LoggerFactory.getLogger(PrivateDataCollection.class);
 
     private final String collectionId;
     private final List<String> authorizedMembers; // Addresses allowed to access
@@ -64,7 +67,7 @@ public class PrivateDataCollection {
         byte[] hash = Crypto.hash(data);
         publicHashes.put(key, hash);
 
-        System.out.println("[PrivateData] Written to collection " + collectionId + " key: " + key);
+        log.info("[PrivateData] Written to collection {} key: {}", collectionId, key);
     }
 
     /**
@@ -129,7 +132,7 @@ public class PrivateDataCollection {
 
         if (!authorizedMembers.contains(address)) {
             authorizedMembers.add(address);
-            System.out.println("[PrivateData] Added member " + address + " to collection " + collectionId);
+            log.info("[PrivateData] Added member {} to collection {}", address, collectionId);
         }
     }
 
@@ -142,7 +145,7 @@ public class PrivateDataCollection {
         }
 
         authorizedMembers.remove(address);
-        System.out.println("[PrivateData] Removed member " + address + " from collection " + collectionId);
+        log.info("[PrivateData] Removed member {} from collection {}", address, collectionId);
     }
 
     /**
@@ -183,7 +186,7 @@ public class PrivateDataCollection {
 
         privateData.remove(key);
         publicHashes.remove(key);
-        System.out.println("[PrivateData] Deleted from collection " + collectionId + " key: " + key);
+        log.info("[PrivateData] Deleted from collection {} key: {}", collectionId, key);
     }
 
     // Encryption/Decryption

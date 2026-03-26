@@ -1,8 +1,11 @@
 package com.hybrid.blockchain;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.LinkedList;
 
 public class PrunedBlockchain extends Blockchain {
+    private static final Logger log = LoggerFactory.getLogger(PrunedBlockchain.class);
 
     private final int maxBlocks;
     @SuppressWarnings("unused")
@@ -29,7 +32,7 @@ public class PrunedBlockchain extends Blockchain {
             storage.del("block:" + old.getHash());
             storage.del("height:" + old.getIndex());
 
-            System.out.println("[PRUNE] Removed block " + old.getIndex());
+            log.info("[PRUNE] Removed block {}", old.getIndex());
 
             storage.saveSnapshot(
                 old.getIndex(),

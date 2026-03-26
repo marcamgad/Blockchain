@@ -27,6 +27,9 @@ public class EventBus {
     /** topic → set of WebSocket sessions subscribed to that topic */
     private final Map<String, Set<WebSocketSession>> subscribers = new ConcurrentHashMap<>();
 
+    /** session → Map of filters (e.g., "address", "eventName") */
+    private final Map<WebSocketSession, Map<String, String>> sessionFilters = new ConcurrentHashMap<>();
+
     /**
      * Subscribes a WebSocket session to the given topic.
      *
@@ -34,8 +37,20 @@ public class EventBus {
      * @param session the WebSocket session to subscribe
      */
     public void subscribe(String topic, WebSocketSession session) {
+        subscribe(topic, session, Collections.emptyMap());
+    }
+
+    /**
+     * Subscribes a WebSocket session to the given topic with optional filters.
+     */
+    public void subscribe(String topic, WebSocketSession session, Map<String, String> filter) {
         subscribers.computeIfAbsent(topic, k -> ConcurrentHashMap.newKeySet()).add(session);
-        log.info("[EventBus] Session {} subscribed to '{}'", session.getId(), topic);
+        if (filter != null && !filter.isEmpty()) {
+            sessionFilters.put(session, new HashMap<>(filter));
+            log.info("[EventBus] Session {} subscribed to '{}' with filter {}", session.getId(), topic, filter);
+        } else {
+            log.info("[EventBus] Session {} subscribed to '{}'", session.getId(), topic);
+        }
     }
 
     /**
@@ -58,6 +73,7 @@ public class EventBus {
      */
     public void removeSession(WebSocketSession session) {
         subscribers.values().forEach(set -> set.remove(session));
+        sessionFilters.remove(session);
         log.info("[EventBus] Session {} removed from all topics", session.getId());
     }
 
@@ -93,6 +109,15 @@ public class EventBus {
                 dead.add(session);
                 continue;
             }
+
+            // Apply filters if present
+            if (sessionFilters.containsKey(session)) {
+                Map<String, String> filter = sessionFilters.get(session);
+                if (!matchesFilter(payload, filter)) {
+                    continue;
+                }
+            }
+
             try {
                 synchronized (session) {
                     session.sendMessage(message);
@@ -108,6 +133,32 @@ public class EventBus {
             sessions.remove(s);
             log.debug("[EventBus] Removed dead session {}", s.getId());
         });
+    }
+
+    /**
+     * Dynamic filter matching. Checks if payload contains fields matching the filter.
+     */
+    private boolean matchesFilter(Object payload, Map<String, String> filter) {
+        if (filter == null || filter.isEmpty()) return true;
+        try {
+            // Convert payload to map for easier filtering
+            Map<String, Object> payloadMap;
+            if (payload instanceof Map) {
+                payloadMap = (Map<String, Object>) payload;
+            } else {
+                payloadMap = MAPPER.convertValue(payload, Map.class);
+            }
+
+            for (Map.Entry<String, String> f : filter.entrySet()) {
+                Object val = payloadMap.get(f.getKey());
+                if (val == null || !val.toString().equalsIgnoreCase(f.getValue())) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (Exception e) {
+            return true; // If we can't filter, we broadcast (safety first)
+        }
     }
 
     /**

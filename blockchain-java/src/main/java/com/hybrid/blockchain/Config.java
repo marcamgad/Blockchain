@@ -10,8 +10,8 @@ public final class Config {
     // ─── Core Chain Parameters ────────────────────────────────────────────────
     public static final int INITIAL_DIFFICULTY = 4;
     public static final int DIFFICULTY_ADJUSTMENT_INTERVAL = 10;
-    public static final long TARGET_BLOCK_TIME_MS = 60000; // 1 min target
-    public static final int MAX_TRANSACTIONS_PER_BLOCK = 2000;
+    public static long TARGET_BLOCK_TIME_MS = 60000; // 1 min target
+    public static int MAX_TRANSACTIONS_PER_BLOCK = 2000;
     public static final int MAX_BLOCK_SIZE = 2 * 1024 * 1024; // 2 MB
     /** Legacy constant kept for backward compatibility; prefer Tokenomics.INITIAL_REWARD. */
     public static final long MINER_REWARD = 50;

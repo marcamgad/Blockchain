@@ -6,6 +6,8 @@ import java.util.List;
 import java.util.ArrayList;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.Collections;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Hardware Abstraction Layer (HAL) for IoT peripherals.
@@ -13,6 +15,7 @@ import java.util.Collections;
  * Here it provides a deterministic mock interface for simulation.
  */
 public class HardwareManager {
+    private static final Logger log = LoggerFactory.getLogger(HardwareManager.class);
     private final Map<Long, Long> sensorValues = new ConcurrentHashMap<>();
     private final Map<Long, Long> actuatorStates = new ConcurrentHashMap<>();
     private final List<DeferredAction> deferredQueue = Collections.synchronizedList(new ArrayList<>());
@@ -36,19 +39,19 @@ public class HardwareManager {
             throw new Exception("Actuator ID " + id + " not found");
         }
         deferredQueue.add(new DeferredAction(blockHash, id, value));
-        System.out.println("[HAL] Queued deferred action for block " + blockHash + ": ID=" + id + " VAL=" + value);
+        log.info("[HAL] Queued deferred action for block {}: ID={} VAL={}", blockHash, id, value);
     }
 
     public void commitDeferredActions(String blockHash) {
-        System.out.println("[HAL] Attempting to commit for block: " + blockHash);
+        log.info("[HAL] Attempting to commit for block: {}", blockHash);
         synchronized (deferredQueue) {
             java.util.Iterator<DeferredAction> it = deferredQueue.iterator();
             while (it.hasNext()) {
                 DeferredAction action = it.next();
-                System.out.println("[HAL] Checking queued action for: " + action.getBlockHash());
+                log.debug("[HAL] Checking queued action for: {}", action.getBlockHash());
                 if (action.getBlockHash().equals(blockHash)) {
                     actuatorStates.put(action.getDeviceId(), action.getValue());
-                    System.out.println("[HAL] EXECUTED deferred action: " + action);
+                    log.info("[HAL] EXECUTED deferred action: {}", action);
                     it.remove();
                 }
             }
@@ -77,7 +80,7 @@ public class HardwareManager {
      */
     public byte[] signWithHSM(String keyAlias, byte[] data) throws Exception {
         // In production, this would use PKCS#11 or JAAS to talk to HSM
-        System.out.println("[HSM] Signing with key: " + keyAlias);
+        log.info("[HSM] Signing with key: {}", keyAlias);
         return Crypto.hash(data); // Mock signature
     }
 
@@ -86,7 +89,7 @@ public class HardwareManager {
      */
     public byte[] executeSecureEnclave(byte[] encryptedCode, byte[] encryptedData) throws Exception {
         // In production, this would use Intel SGX or ARM TrustZone
-        System.out.println("[TEE] Executing secure enclave computation");
+        log.info("[TEE] Executing secure enclave computation");
         return new byte[0]; // Mock result
     }
 }

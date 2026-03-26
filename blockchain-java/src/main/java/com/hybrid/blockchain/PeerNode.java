@@ -230,7 +230,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                     }
                 }
             } catch (Exception e) {
-                System.err.println("[P2P] Peer discovery error: " + e.getMessage());
+                log.error("[P2P] Peer discovery error: {}", e.getMessage());
             }
         });
 
@@ -506,7 +506,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                     performInboundHandshake(in, out, localNonce) : 
                     performOutboundHandshake(in, out, localNonce);
 
-                System.out.println("Secure session established with " + socket.getInetAddress() + " ID: " + remotePeerId);
+                log.info("Secure session established with {} ID: {}", socket.getInetAddress(), remotePeerId);
                 
                 peerManager.addPeer(remotePeerId, socket.getInetAddress().getHostAddress(), socket.getPort());
                 peerConnections.put(remotePeerId, out);
@@ -525,7 +525,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                 }
             } catch (Exception e) {
                 if (Config.isDebug()) {
-                    System.err.println("[P2P] Connection error from " + socket.getInetAddress() + ": " + e.getMessage());
+                    log.error("[P2P] Connection error from {}: {}", socket.getInetAddress(), e.getMessage());
                 }
             } finally {
                 if (remotePeerId != null) {
@@ -660,7 +660,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                 }
             }
         } catch (Exception e) {
-            System.err.println("[P2P] Error processing consensus message: " + e.getMessage());
+            log.error("[P2P] Error processing consensus message: {}", e.getMessage());
         }
     }
 
@@ -681,9 +681,9 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
             if (block != null) {
                 try {
                     blockchain.applyBlock(block);
-                    System.out.println("[CONSENSUS] Applied block " + seq + " hash: " + block.getHash());
+                    log.info("[CONSENSUS] Applied block {} hash: {}", seq, block.getHash());
                 } catch (Exception e) {
-                    System.err.println("[CONSENSUS] Failed to apply block " + seq + ": " + e.getMessage());
+                    log.error("[CONSENSUS] Failed to apply block {}: {}", seq, e.getMessage());
                     // Allow retry on error if needed, but AtomicBoolean prevents it currently.
                     // For now, failure to apply is fatal for this block sequence.
                 }
@@ -698,7 +698,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
             P2PMessage msg = P2PMessage.create(localAddress, privateKey, P2PMessage.Type.CONSENSUS, payload);
             gossipEngine.onMessageReceived(msg, localAddress); // Local "injection"
         } catch (Exception e) {
-            System.err.println("Error broadcasting PBFT message: " + e.getMessage());
+            log.error("Error broadcasting PBFT message: {}", e.getMessage());
         }
     }
 

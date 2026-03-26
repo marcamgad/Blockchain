@@ -136,7 +136,7 @@ public class TokenRegistry {
      * @param amount  the amount to transfer
      * @throws Exception if the token does not exist or the sender has insufficient balance
      */
-    public void transferToken(AccountState state, String tokenId, String from, String to, long amount) throws Exception {
+    public synchronized void transferToken(AccountState state, String tokenId, String from, String to, long amount) throws Exception {
         requireToken(tokenId);
         state.debitToken(from, tokenId, amount);
         state.creditToken(to, tokenId, amount);

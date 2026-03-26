@@ -44,7 +44,13 @@ public class EventBusWebSocketHandler extends TextWebSocketHandler {
                 String topic = payload.get("topic").asText();
 
                 if ("subscribe".equals(action)) {
-                    eventBus.subscribe(topic, session);
+                    java.util.Map<String, String> filter = new java.util.HashMap<>();
+                    if (payload.has("filter") && payload.get("filter").isObject()) {
+                        payload.get("filter").fields().forEachRemaining(entry -> {
+                            filter.put(entry.getKey(), entry.getValue().asText());
+                        });
+                    }
+                    eventBus.subscribe(topic, session, filter);
                 } else if ("unsubscribe".equals(action)) {
                     eventBus.unsubscribe(topic, session);
                 }

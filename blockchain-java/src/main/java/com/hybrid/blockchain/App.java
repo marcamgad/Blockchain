@@ -53,21 +53,23 @@ public class App {
             // 3b. Initialize Monitoring and Auditing
             com.hybrid.blockchain.monitoring.BlockchainMonitor monitor = 
                 new com.hybrid.blockchain.monitoring.BlockchainMonitor(Config.NODE_ID);
-            blockchain.setMonitor(monitor);
             com.hybrid.blockchain.audit.AuditLogger auditLogger = 
                 new com.hybrid.blockchain.audit.AuditLogger(Config.NODE_ID);
-            blockchain.setAuditLogger(auditLogger);
             
+            // 3c. Initialize Event Bus
+            com.hybrid.blockchain.api.EventBus eventBus = new com.hybrid.blockchain.api.EventBus();
+
+            // 3d. Wire everything into Blockchain
+            blockchain.setMonitor(monitor);
+            blockchain.setAuditLogger(auditLogger);
+            blockchain.setEventBus(eventBus);
+
             // 4. Initialize Networking (P2P)
             PeerNode peerNode = new PeerNode(Config.P2P_PORT, blockchain, consensus, privateKey);
             consensus.setMessenger(peerNode);
             blockchain.setPeerNode(peerNode);
 
-            // 5. Initialize API and Event Bus
-            com.hybrid.blockchain.api.EventBus eventBus = new com.hybrid.blockchain.api.EventBus();
-            blockchain.setEventBus(eventBus);
-
-            // 6. Bootstrap Blockchain
+            // 5. Bootstrap Blockchain
             blockchain.init();
 
             // 7. Inject dependencies into REST API static context
