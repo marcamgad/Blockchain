@@ -27,6 +27,7 @@ public class Blockchain {
     protected Consensus consensus;
     private final HardwareManager hardwareManager;
     private final RateLimiter transactionRateLimiter;
+    private boolean paused = false;
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
     private TokenRegistry tokenRegistry;
     private com.hybrid.blockchain.api.EventBus eventBus;
@@ -151,6 +152,10 @@ public class Blockchain {
 
     public long getTotalMinted() { return totalMinted; }
 
+    public boolean isPaused() { return paused; }
+    public void setPaused(boolean paused) { this.paused = paused; }
+
+
     // Validate a transaction according to type
     public void validateTransaction(Transaction tx) throws Exception {
         if (!Config.isDebug() && !tx.verify() && tx.getFrom() != null)
@@ -216,7 +221,7 @@ public class Blockchain {
                         throw new Exception("Invalid amount overflow", e);
                     }
                     if (contractBalance < contractTotal)
-                        throw new Exception("Insufficient funds for contract tx");
+                        throw new Exception("Insufficient funds for contract tx: balance=" + contractBalance + ", amount=" + tx.getAmount() + ", fee=" + tx.getFee());
                 }
                 break;
             case IOT_MANAGEMENT:
@@ -291,16 +296,21 @@ public class Blockchain {
                 if (tx.getData() == null || tx.getData().length == 0)
                     throw new Exception("TELEMETRY tx has no data payload");
                 {
-                    // Device must be ACTIVE in the lifecycle manager
                     com.hybrid.blockchain.lifecycle.DeviceLifecycleManager lcm = state.getLifecycleManager();
-                    if (!lcm.isDeviceOperational(tx.getFrom()))
-                        throw new Exception("TELEMETRY rejected: device not in ACTIVE state");
+                    boolean isOperational = lcm.isDeviceOperational(tx.getFrom());
+                    if (!isOperational) {
+                        // Fallback: Check if the address is an owner of any active device
+                        List<com.hybrid.blockchain.lifecycle.DeviceLifecycleManager.DeviceRecord> owned = lcm.getDevicesOwnedBy(tx.getFrom());
+                        isOperational = owned.stream().anyMatch(d -> d.getStatus() == com.hybrid.blockchain.lifecycle.DeviceLifecycleManager.DeviceStatus.ACTIVE);
+                    }
+                    if (!isOperational)
+                        throw new Exception("TELEMETRY rejected: device/owner not in ACTIVE state");
                     long baseFee = FeeMarket.getCurrentBaseFee(storage);
                     if (tx.getFee() < baseFee)
                         throw new Exception("Fee " + tx.getFee() + " below baseFee " + baseFee);
                     long telemBal = state.getBalance(tx.getFrom());
                     if (telemBal < tx.getFee())
-                        throw new Exception("Insufficient funds for telemetry fee");
+                        throw new Exception("Insufficient funds for telemetry fee: balance=" + telemBal + ", fee=" + tx.getFee());
                     long telemExpectedNonce = state.getNonce(tx.getFrom()) + 1;
                     if (tx.getNonce() != telemExpectedNonce)
                         throw new Exception("Invalid nonce: expected " + telemExpectedNonce + " got " + tx.getNonce());
@@ -369,20 +379,72 @@ public class Blockchain {
 
     // Apply block to chain, update UTXO and account state
     public void applyBlock(Block block) throws Exception {
-        validateBlock(block);
         lock.writeLock().lock();
         try {
             Block latest = getLatestBlock();
-            if (block.getIndex() != latest.getIndex() + 1)
-                throw new Exception("Invalid block height");
-            if (!block.getPrevHash().equals(latest.getHash()))
-                throw new Exception("Block does not chain to tip");
-            if (block.getTimestamp() > System.currentTimeMillis() + Config.MAX_TIMESTAMP_DRIFT)
-                throw new Exception("Block timestamp too far in future");
-            if (block.getTimestamp() < latest.getTimestamp())
-                throw new Exception("Block timestamp older than previous block");
-            if (!calculateTxRoot(block.getTransactions()).equals(block.getTxRoot()))
-                throw new Exception("Invalid tx root");
+            if (block.getIndex() == latest.getIndex() + 1) {
+                applyBlockInternal(block, latest);
+            } else if (block.getIndex() == latest.getIndex()) {
+                handleFork(block);
+            } else {
+                log.warn("[BLOCKCHAIN] Ignored block {} at height {} (current tip: {})", block.getHash(), block.getIndex(), latest.getIndex());
+            }
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    private void handleFork(Block block) throws Exception {
+        Block tip = getLatestBlock();
+        if (block.getHash().equals(tip.getHash())) return;
+
+        // Deterministic tie-breaking: Higher hash of validator ID strings wins
+        String newScore = Crypto.bytesToHex(Crypto.hash(block.getValidatorId().getBytes()));
+        String tipScore = Crypto.bytesToHex(Crypto.hash(tip.getValidatorId().getBytes()));
+
+        if (newScore.compareTo(tipScore) > 0) {
+            log.info("[FORK] Better block {} found at height {}. Reorganizing...", block.getHash(), block.getIndex());
+            revertTip();
+            applyBlockInternal(block, getLatestBlock());
+        } else {
+            log.debug("[FORK] Ignored competing block {} (lower tie-break score)", block.getHash());
+        }
+    }
+
+    private void revertTip() throws Exception {
+        if (chain.size() <= 1) return;
+        chain.remove(chain.size() - 1);
+        Block newTip = getLatestBlock();
+        
+        // Reload state from last snapshot (which is index of newTip)
+        Map<String, Object> snapshot = (Map<String, Object>) storage.get("snapshot:" + newTip.getIndex(), Map.class);
+        if (snapshot == null) {
+            throw new Exception("Critical: Cannot revert tip, no snapshot found for height " + newTip.getIndex());
+        }
+        
+        this.state = AccountState.fromMap((Map<String, Object>) snapshot.get("state"));
+        this.utxo = UTXOSet.fromMap((Map<String, Object>) snapshot.get("utxo"));
+        
+        // Restore global storage pointers
+        storage.saveState(this.state.toJSON());
+        storage.saveUTXO(this.utxo.toJSON());
+        
+        // Update storage tip
+        storage.put("chain:tip", newTip.getHash()); 
+    }
+
+    private void applyBlockInternal(Block block, Block latest) throws Exception {
+        validateBlock(block);
+        
+        if (!block.getPrevHash().equals(latest.getHash()))
+            throw new Exception("Hash mismatch: block " + block.getIndex() + " references " + block.getPrevHash() + " but tip is " + latest.getHash());
+        if (block.getTimestamp() > System.currentTimeMillis() + Config.MAX_TIMESTAMP_DRIFT)
+            throw new Exception("Block timestamp too far in future");
+        if (block.getTimestamp() < latest.getTimestamp())
+            throw new Exception("Block timestamp older than previous block");
+        if (!calculateTxRoot(block.getTransactions()).equals(block.getTxRoot()))
+            throw new Exception("Invalid tx root");
+        
         if (!consensus.isValidator(block.getValidatorId()))
             throw new Exception("Unknown validator");
 
@@ -483,11 +545,15 @@ public class Blockchain {
         storage.saveBlock(block.getHash(), block);
         storage.saveUTXO(utxo.toJSON());
         storage.saveState(state.toJSON());
+        
+        // Save snapshot for fork resolution (save at height index to allow revert from index+1)
+        storage.saveSnapshot((int)block.getIndex(), state.toJSON(), utxo.toJSON());
+        
         pruneBlock(block);
         
         // Record monitoring metrics
         if (monitor != null) {
-            monitor.recordMetric("blocks.created", 1);
+            monitor.recordMetric("blocks.validated", 1);
             monitor.recordMetric("blocks.size", block.serializeCanonical().length);
             monitor.recordMetric("transactions.validated", block.getTransactions().size());
         }
@@ -508,11 +574,10 @@ public class Blockchain {
         // Checkpoint every 1000 blocks
         if (block.getIndex() > 0 && block.getIndex() % 1000 == 0) {
             try {
-                Map<String, String> sigs = new HashMap<>();
                 Checkpoint cp = new Checkpoint(
                         (int) block.getIndex(), block.getHash(),
                         block.getStateRoot(), Crypto.bytesToHex(Crypto.hash(utxo.toJSON().toString().getBytes())),
-                        block.getTimestamp(), sigs);
+                        block.getTimestamp(), new HashMap<>());
                 // NOTE: Checkpoint is NOT saved here - it's only saved in PeerNode after quorum is reached
                 log.info("[CHECKPOINT] Broadcasting checkpoint request at height {}", block.getIndex());
                 if (peerNode != null) {
@@ -533,9 +598,6 @@ public class Blockchain {
             int newDiff = Difficulty.adjustDifficulty(chain, difficulty);
             difficulty = newDiff;
             storage.putMeta("difficulty", difficulty);
-        }
-        } finally {
-            lock.writeLock().unlock();
         }
     }
 
@@ -829,6 +891,8 @@ public class Blockchain {
                     byte[] toStore = rawData.length >= 1024 ? Crypto.hash(rawData) : rawData;
                     try {
                         storage.saveTelemetry(tx.getFrom(), (int) blockIndex, tx.getId(), toStore);
+                        // Update device reputation on successful telemetry
+                        targetState.getLifecycleManager().recordDeviceActivity(tx.getFrom(), true);
                     } catch (Exception e) {
                         log.warn("[TELEMETRY] Failed to save telemetry for {}: {}", tx.getFrom(), e.getMessage());
                     }

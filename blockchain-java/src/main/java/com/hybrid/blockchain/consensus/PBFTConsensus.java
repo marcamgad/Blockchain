@@ -7,6 +7,8 @@ import com.hybrid.blockchain.Validator;
 import java.util.*;
 import java.util.concurrent.*;
 import java.math.BigInteger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Practical Byzantine Fault Tolerance (PBFT) consensus implementation.
@@ -22,6 +24,8 @@ import java.math.BigInteger;
  * 3. COMMIT: Validators commit to block
  */
 public class PBFTConsensus implements Consensus {
+    private static final Logger log = LoggerFactory.getLogger(PBFTConsensus.class);
+
 
     public interface PBFTMessenger {
         void broadcastPrepare(long sequenceNumber, String blockHash, String validatorId, byte[] signature);
@@ -137,7 +141,7 @@ public class PBFTConsensus implements Consensus {
         this.messageLog = new ConcurrentHashMap<>();
         this.committedBlocks = ConcurrentHashMap.newKeySet();
 
-        System.out.println("[PBFT] Initialized as " + localValidatorId + " with " + validators.size() + " validators, f=" + f);
+        log.info("[PBFT] Initialized as {} with {} validators, f={}", localValidatorId, validators.size(), f);
         resetTimer();
     }
 
@@ -146,7 +150,7 @@ public class PBFTConsensus implements Consensus {
             currentTimerTask.cancel(false);
         }
         currentTimerTask = timer.schedule(() -> {
-            System.out.println("[PBFT] Consensus timeout! Triggering view change...");
+            log.warn("[PBFT] Consensus timeout! Triggering view change...");
             triggerViewChange();
         }, CONSENSUS_TIMEOUT_MS, TimeUnit.MILLISECONDS);
     }
@@ -168,8 +172,7 @@ public class PBFTConsensus implements Consensus {
         // Phase 1: PRE-PREPARE (verify leader proposed this block)
         String leader = selectLeader(viewNumber);
         if (!block.getValidatorId().equals(leader)) {
-            System.out.println(
-                    "[PBFT] Block not from current leader. Expected: " + leader + ", Got: " + block.getValidatorId());
+            log.warn("[PBFT] Block not from current leader. Expected: {}, Got: {}", leader, block.getValidatorId());
             return false;
         }
 
@@ -180,7 +183,7 @@ public class PBFTConsensus implements Consensus {
         }
 
         if (!Crypto.verify(Crypto.hash(block.serializeCanonical()), block.getSignature(), leaderPubKey)) {
-            System.out.println("[PBFT] Invalid leader signature");
+            log.warn("[PBFT] Invalid leader signature");
             return false;
         }
 
@@ -196,7 +199,7 @@ public class PBFTConsensus implements Consensus {
 
         if (prepareCount < requiredVotes) {
             // In production, this would wait for votes from network
-            System.out.println("[PBFT] Insufficient prepare votes: " + prepareCount + "/" + requiredVotes);
+            log.debug("[PBFT] Insufficient prepare votes: {}/{}", prepareCount, requiredVotes);
             return false;
         }
 
@@ -207,14 +210,14 @@ public class PBFTConsensus implements Consensus {
         int commitCount = commitVotes.size();
 
         if (commitCount < requiredVotes) {
-            System.out.println("[PBFT] Insufficient commit votes: " + commitCount + "/" + requiredVotes);
+            log.debug("[PBFT] Insufficient commit votes: {}/{}", commitCount, requiredVotes);
             return false;
         }
 
         // Block is committed
         committedBlocks.add(blockHash);
         lastCommittedSeq = Math.max(lastCommittedSeq, sequenceNumber);
-        System.out.println("[PBFT] Block " + blockHash + " committed with " + commitCount + " votes");
+        log.info("[PBFT] Block {} committed with {} votes", blockHash, commitCount);
         resetTimer();
 
         return true;
@@ -238,7 +241,7 @@ public class PBFTConsensus implements Consensus {
         viewChangeLog.computeIfAbsent(newView, k -> new ConcurrentHashMap<>())
                 .put(validatorId, msg);
 
-        System.out.println("[PBFT] Added VIEW_CHANGE for view " + newView + " from " + validatorId);
+        log.info("[PBFT] Added VIEW_CHANGE for view {} from {}", newView, validatorId);
 
         // Check for quorum
         if (viewChangeLog.get(newView).size() >= (2 * f + 1)) {
@@ -250,7 +253,7 @@ public class PBFTConsensus implements Consensus {
         if (this.viewNumber >= newView) return;
 
         String nextLeader = selectLeader(newView);
-        System.out.println("[PBFT] View Change Quorum reached for view " + newView + ". Next leader: " + nextLeader);
+        log.info("[PBFT] View Change Quorum reached for view {}. Next leader: {}", newView, nextLeader);
 
         // If I am the next leader, broadcast NEW_VIEW
         // This would require my own validatorId and private key, which usually come from the node
@@ -313,13 +316,13 @@ public class PBFTConsensus implements Consensus {
                 .computeIfAbsent(Phase.PREPARE, k -> new ConcurrentHashMap<>())
                 .compute(validatorId, (id, existing) -> {
                     if (existing != null && !existing.blockHash.equals(blockHash)) {
-                        System.out.println("[PBFT] SLASH: Double PREPARE from " + id + " for different hashes: " + existing.blockHash + " AND " + blockHash);
+                        log.error("[PBFT] SLASH: Double PREPARE from {} for different hashes: {} AND {}", id, existing.blockHash, blockHash);
                         slashedValidators.add(id);
                     }
                     return msg;
                 });
 
-        System.out.println("[PBFT] Added PREPARE vote from " + validatorId + " for block " + blockHash);
+        log.debug("[PBFT] Added PREPARE vote from {} for block {}", validatorId, blockHash);
     }
 
     /**
@@ -342,13 +345,13 @@ public class PBFTConsensus implements Consensus {
                 .computeIfAbsent(Phase.COMMIT, k -> new ConcurrentHashMap<>())
                 .compute(validatorId, (id, existing) -> {
                     if (existing != null && !existing.blockHash.equals(blockHash)) {
-                        System.out.println("[PBFT] SLASH: Double COMMIT from " + id + " for different hashes: " + existing.blockHash + " AND " + blockHash);
+                        log.error("[PBFT] SLASH: Double COMMIT from {} for different hashes: {} AND {}", id, existing.blockHash, blockHash);
                         slashedValidators.add(id);
                     }
                     return msg;
                 });
 
-        System.out.println("[PBFT] Added COMMIT vote from " + validatorId + " for block " + blockHash);
+        log.debug("[PBFT] Added COMMIT vote from {} for block {}", validatorId, blockHash);
     }
 
     /**
@@ -356,7 +359,7 @@ public class PBFTConsensus implements Consensus {
      */
     public void triggerViewChange() {
         long nextView = viewNumber + 1;
-        System.out.println("[PBFT] Initiating View Change to view " + nextView);
+        log.info("[PBFT] Initiating View Change to view {}", nextView);
         
         PBFTMessage vcMsg = new PBFTMessage(Phase.VIEW_CHANGE, nextView, lastCommittedSeq, localValidatorId);
         if (localPrivateKey != null) {

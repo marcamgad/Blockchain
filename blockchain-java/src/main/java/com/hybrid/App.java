@@ -110,10 +110,7 @@ public class App {
         peerNode.start();
         peerNode.startPeerSync();
 
-        // 14. Add graceful shutdown hook
-        addShutdownHook(new ScheduledExecutorService[]{}, pbft, peerNode, blockchain, storage);
-
-        // 15. Connect to seed
+        // 14. Connect to seed
         if (!Config.IS_SEED && Config.SEED_PEER != null) {
             String[] parts = Config.SEED_PEER.split(":");
             if (parts.length == 2) {
@@ -123,8 +120,11 @@ public class App {
             }
         }
 
-        // 16. Start block proposer loop
+        // 15. Start block proposer loop
         ScheduledExecutorService scheduler = startBlockProposer(blockchain, pbft, peerNode, nodeId, privKey);
+
+        // 16. Add graceful shutdown hook (now including the scheduler)
+        addShutdownHook(new ScheduledExecutorService[]{scheduler}, pbft, peerNode, blockchain, storage);
 
         // 17. Pass to IoTRestAPI
         IoTRestAPI.setNode(blockchain, peerNode, pbft);
@@ -212,6 +212,9 @@ public class App {
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
         scheduler.scheduleAtFixedRate(() -> {
             try {
+                if (blockchain.isPaused()) {
+                    return;
+                }
                 if (pbft.getCurrentLeader().equals(nodeId)) {
                     // Generate a new block
                     Block block = blockchain.createBlock(nodeId, Config.MAX_TRANSACTIONS_PER_BLOCK);

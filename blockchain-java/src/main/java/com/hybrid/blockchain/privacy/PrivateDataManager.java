@@ -1,4 +1,6 @@
 package com.hybrid.blockchain.privacy;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -8,6 +10,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * Integrated with blockchain state to manage multiple private channels
  */
 public class PrivateDataManager {
+    private static final Logger log = LoggerFactory.getLogger(PrivateDataManager.class);
 
     private final Map<String, PrivateDataCollection> collections;
 
@@ -38,8 +41,7 @@ public class PrivateDataManager {
         PrivateDataCollection collection = new PrivateDataCollection(collectionId, authorizedMembers);
         collections.put(collectionId, collection);
 
-        System.out.println("[PrivateDataMgr] Created collection: " + collectionId +
-                " with " + authorizedMembers.size() + " members");
+        log.info("[PrivateDataMgr] Created collection: {} with {} members", collectionId, authorizedMembers.size());
 
         return collection;
     }
@@ -76,7 +78,7 @@ public class PrivateDataManager {
         }
 
         collections.remove(collectionId);
-        System.out.println("[PrivateDataMgr] Deleted collection: " + collectionId);
+        log.info("[PrivateDataMgr] Deleted collection: {}", collectionId);
     }
 
     public Map<String, Object> getStats() {

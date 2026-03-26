@@ -1,4 +1,6 @@
 package com.hybrid.blockchain.identity;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -8,6 +10,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class SSIManager {
+    private static final Logger log = LoggerFactory.getLogger(SSIManager.class);
 
     private static final ObjectMapper mapper = new ObjectMapper();
 
@@ -55,7 +58,7 @@ public class SSIManager {
         didRegistry.put(did, didDoc);
         deviceToDID.put(deviceId, did);
 
-        System.out.println("[SSI] Registered DID: " + did + " for device: " + deviceId);
+        log.info("[SSI] Registered DID: {} for device: {}", did, deviceId);
         return did;
     }
 
@@ -96,7 +99,7 @@ public class SSIManager {
         }
 
         didDoc.setController(newOwner);
-        System.out.println("[SSI] Transferred ownership of " + did + " to " + newOwner);
+        log.info("[SSI] Transferred ownership of {} to {}", did, newOwner);
     }
 
     /**
@@ -193,7 +196,7 @@ public class SSIManager {
         DecentralizedIdentifier didDoc = resolveDID(did);
         revokedDIDs.add(did);
         deviceToDID.remove(didDoc.getDeviceId());
-        System.out.println("[SSI] Revoked DID: " + did + " Reason: " + reason);
+        log.info("[SSI] Revoked DID: {} Reason: {}", did, reason);
     }
 
     /**
@@ -246,7 +249,7 @@ public class SSIManager {
             }
 
         } catch (Exception e) {
-            System.err.println("[SSI] Failed to restore SSIManager state: " + e.getMessage());
+            log.error("[SSI] Failed to restore SSIManager state: {}", e.getMessage());
         }
 
         return manager;

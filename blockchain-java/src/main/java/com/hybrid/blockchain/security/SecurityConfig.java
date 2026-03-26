@@ -43,23 +43,22 @@ public class SecurityConfig {
 
             // Authorization rules
             .authorizeHttpRequests(auth -> auth
+                // Admin endpoints MUST be matched first
+                .requestMatchers("/api/v1/admin/**").authenticated()
 
                 // Public GET endpoints
                 .requestMatchers(HttpMethod.GET, "/api/**").permitAll()
                 .requestMatchers(HttpMethod.GET, "/actuator/**").permitAll()
                 .requestMatchers(HttpMethod.GET, "/actuator/prometheus").permitAll()
 
+                .requestMatchers(HttpMethod.POST, "/api/v1/account/create").permitAll()
                 // Write endpoints require authentication
                 .requestMatchers(HttpMethod.POST, "/api/**").authenticated()
                 .requestMatchers(HttpMethod.PUT, "/api/**").authenticated()
                 .requestMatchers(HttpMethod.DELETE, "/api/**").authenticated()
 
-                // Admin endpoints
-                .requestMatchers("/api/admin/**").authenticated()
-
                 // Everything else requires authentication
-                .anyRequest().authenticated()
-            )
+                .anyRequest().authenticated()            )
 
             // Add JWT filter
             .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)

@@ -3,6 +3,8 @@ package com.hybrid.blockchain.lifecycle;
 import com.hybrid.blockchain.Crypto;
 import com.hybrid.blockchain.identity.SSIManager;
 import com.hybrid.blockchain.identity.VerifiableCredential;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -17,6 +19,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * - Capability revocation on device revocation
  */
 public class DeviceLifecycleManager {
+    private static final Logger log = LoggerFactory.getLogger(DeviceLifecycleManager.class);
+
 
     public enum DeviceStatus {
         PROVISIONING, // Registered but not activated
@@ -40,6 +44,7 @@ public class DeviceLifecycleManager {
         private byte[] attestationSignature; // Manufacturer signature
         private long registrationBlock;
         private long lastActivityBlock;
+        private double reputationScore = com.hybrid.blockchain.reputation.ReputationEngine.INITIAL_SCORE;
         private List<FirmwareUpdate> firmwareHistory;
         private Map<String, String> metadata;
 
@@ -126,6 +131,14 @@ public class DeviceLifecycleManager {
             this.attestationSignature = sig;
         }
 
+        public double getReputationScore() {
+            return reputationScore;
+        }
+
+        public void setReputationScore(double score) {
+            this.reputationScore = score;
+        }
+
         public void setRegistrationBlock(long block) {
             this.registrationBlock = block;
         }
@@ -209,7 +222,7 @@ public class DeviceLifecycleManager {
      */
     public void registerManufacturer(String manufacturerId, byte[] publicKey) {
         trustedManufacturers.put(manufacturerId, publicKey);
-        System.out.println("[Lifecycle] Registered manufacturer: " + manufacturerId);
+        log.info("[Lifecycle] Registered manufacturer: {}", manufacturerId);
     }
 
     /**
@@ -247,7 +260,7 @@ public class DeviceLifecycleManager {
         // Store in registry
         deviceRegistry.put(deviceId, record);
 
-        System.out.println("[Lifecycle] Provisioned device: " + deviceId + " by " + manufacturer);
+        log.info("[Lifecycle] Provisioned device: {} by {}", deviceId, manufacturer);
 
         return record;
     }
@@ -274,7 +287,7 @@ public class DeviceLifecycleManager {
         record.setStatus(DeviceStatus.ACTIVE);
         record.setLastActivityBlock(currentBlockHeight);
 
-        System.out.println("[Lifecycle] Activated device: " + deviceId + " DID: " + did + " Owner: " + owner);
+        log.info("[Lifecycle] Activated device: {} DID: {} Owner: {}", deviceId, did, owner);
     }
 
     /**
@@ -299,7 +312,7 @@ public class DeviceLifecycleManager {
         record.addFirmwareUpdate(update);
         record.setLastActivityBlock(currentBlockHeight);
 
-        System.out.println("[Lifecycle] Updated firmware for device: " + deviceId + " to version: " + newVersion);
+        log.info("[Lifecycle] Updated firmware for device: {} to version: {}", deviceId, newVersion);
     }
 
     /**
@@ -323,7 +336,7 @@ public class DeviceLifecycleManager {
         record.addMetadata("suspensionReason", reason);
         record.addMetadata("suspendedAt", String.valueOf(currentBlockHeight));
 
-        System.out.println("[Lifecycle] Suspended device: " + deviceId + " Reason: " + reason);
+        log.info("[Lifecycle] Suspended device: {} Reason: {}", deviceId, reason);
     }
 
     /**
@@ -346,7 +359,7 @@ public class DeviceLifecycleManager {
         record.setLastActivityBlock(currentBlockHeight);
         record.addMetadata("resumedAt", String.valueOf(currentBlockHeight));
 
-        System.out.println("[Lifecycle] Resumed device: " + deviceId);
+        log.info("[Lifecycle] Resumed device: {}", deviceId);
     }
 
     /**
@@ -376,7 +389,7 @@ public class DeviceLifecycleManager {
             ssiManager.revokeDID(record.getDid(), reason);
         }
 
-        System.out.println("[Lifecycle] REVOKED device: " + deviceId + " Reason: " + reason);
+        log.info("[Lifecycle] REVOKED device: {} Reason: {}", deviceId, reason);
     }
 
     /**
@@ -399,7 +412,7 @@ public class DeviceLifecycleManager {
         record.setLastActivityBlock(currentBlockHeight);
         record.addMetadata("decommissionedAt", String.valueOf(currentBlockHeight));
 
-        System.out.println("[Lifecycle] Decommissioned device: " + deviceId);
+        log.info("[Lifecycle] Decommissioned device: {}", deviceId);
     }
 
     /**
@@ -445,6 +458,29 @@ public class DeviceLifecycleManager {
             return record.getStatus() == DeviceStatus.ACTIVE;
         } catch (Exception e) {
             return false;
+        }
+    }
+
+    /**
+     * Updates device reputation based on activity
+     */
+    public void recordDeviceActivity(String deviceId, boolean success) {
+        try {
+            DeviceRecord record = getDeviceRecord(deviceId);
+            double oldScore = record.getReputationScore();
+            double newScore = com.hybrid.blockchain.reputation.ReputationEngine.calculateNewScore(oldScore, success);
+            
+            // Apply inactivity penalty if applicable
+            if (currentBlockHeight > record.getLastActivityBlock()) {
+                long inactivity = currentBlockHeight - record.getLastActivityBlock();
+                newScore = com.hybrid.blockchain.reputation.ReputationEngine.applyInactivityPenalty(newScore, inactivity);
+            }
+            
+            record.setReputationScore(newScore);
+            record.setLastActivityBlock(currentBlockHeight);
+            log.debug("[REPUTATION] Device {}: {} -> {}", deviceId, oldScore, newScore);
+        } catch (Exception e) {
+            log.warn("[REPUTATION] Failed to record activity for {}: {}", deviceId, e.getMessage());
         }
     }
 
@@ -511,6 +547,9 @@ public class DeviceLifecycleManager {
                 record.setOwner((String) data.get("owner"));
                 record.setFirmwareVersion((String) data.get("firmwareVersion"));
                 record.setRegistrationBlock(((Number) data.get("registrationBlock")).longValue());
+                if (data.containsKey("reputationScore")) {
+                    record.setReputationScore(((Number) data.get("reputationScore")).doubleValue());
+                }
                 
                 manager.deviceRegistry.put(entry.getKey(), record);
             }
@@ -542,6 +581,7 @@ public class DeviceLifecycleManager {
             deviceData.put("model", record.getModel());
             deviceData.put("firmwareVersion", record.getFirmwareVersion());
             deviceData.put("registrationBlock", record.getRegistrationBlock());
+            deviceData.put("reputationScore", record.getReputationScore());
             devices.put(entry.getKey(), deviceData);
         }
 
