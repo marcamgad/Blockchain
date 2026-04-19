@@ -1,6 +1,5 @@
 package com.hybrid.blockchain;
 
-import com.hybrid.blockchain.testutil.TestKeyPair;
 import com.hybrid.blockchain.testutil.TestTransactionFactory;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;

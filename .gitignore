@@ -1,0 +1,83 @@
+# Environment variables and secrets
+.env
+.env.local
+.env.*.local
+blockchain-java/.env
+private_keys/
+envs/
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Build artifacts
+target/
+build/
+dist/
+*.class
+*.jar
+*.war
+*.zip
+
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+package-lock.json
+yarn.lock
+
+# Database and storage
+*.db
+*.sqlite
+*.ldb
+LevelDB/
+data/chain-db.bak/
+blockchain-java/data/
+blockchain-java/chain-data/
+
+# Testing
+test_results*.txt
+coverage/
+.nyc_output/
+
+# Docker
+docker-compose.override.yml
+
+# Temporary files
+*.tmp
+*.log
+*.pid
+temp/
+tmp/
+*.txt
+# Keys and certificates
+*.pem
+*.key
+*.crt
+keys.env
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Maven
+/*.log
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Development
+integration_test_*/
+test-data-*/
+vm-setup/

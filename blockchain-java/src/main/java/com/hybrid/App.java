@@ -4,7 +4,6 @@ package com.hybrid;
 import com.hybrid.blockchain.*;
 import com.hybrid.blockchain.api.IoTRestAPI;
 import com.hybrid.blockchain.consensus.PBFTConsensus;
-import com.hybrid.blockchain.security.SSLUtils;
 import com.hybrid.blockchain.security.CertificateAuthority;
 import org.springframework.boot.SpringApplication;
 import org.slf4j.Logger;
@@ -15,9 +14,6 @@ import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.cert.X509Certificate;
 import java.security.spec.ECGenParameterSpec;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
 
@@ -123,8 +119,25 @@ public class App {
         // 15. Start block proposer loop
         ScheduledExecutorService scheduler = startBlockProposer(blockchain, pbft, peerNode, nodeId, privKey);
 
+        // TASK 2 — Seed node broadcasts its peer list every 30 s
+        // so newly joined validators can discover each other.
+        ScheduledExecutorService seedScheduler = null;
+        if (Config.IS_SEED) {
+            seedScheduler = Executors.newSingleThreadScheduledExecutor();
+            final ScheduledExecutorService ss = seedScheduler;
+            ss.scheduleAtFixedRate(() -> {
+                try {
+                    peerNode.broadcastPeerList();
+                    log.debug("[SEED] Broadcast peer list ({} known peers)", peerNode.getPeers().size());
+                } catch (Exception e) {
+                    log.warn("[SEED] Peer-list broadcast failed: {}", e.getMessage());
+                }
+            }, 30_000L, 30_000L, TimeUnit.MILLISECONDS);
+            log.info("[SEED] Peer-list broadcast enabled (every 30 s)");
+        }
+
         // 16. Add graceful shutdown hook (now including the scheduler)
-        addShutdownHook(new ScheduledExecutorService[]{scheduler}, pbft, peerNode, blockchain, storage);
+        addShutdownHook(new ScheduledExecutorService[]{scheduler, seedScheduler}, pbft, peerNode, blockchain, storage);
 
         // 17. Pass to IoTRestAPI
         IoTRestAPI.setNode(blockchain, peerNode, pbft);

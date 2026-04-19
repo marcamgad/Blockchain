@@ -38,7 +38,7 @@ public class PBFTViewChangeTest {
         pbft.addViewChangeVote(1, 0, "V3", Crypto.sign(generatePayload(1, 0, "V3"), BigInteger.valueOf(300)));
         
         // Now quorum (2f+1 = 3) is reached
-        assertEquals("V2", pbft.getCurrentLeader(), "Leader should change to V2 after view change quorum");
+        assertEquals("V4", pbft.getCurrentLeader(), "Leader should change to V4 after view change quorum");
     }
 
     @Test

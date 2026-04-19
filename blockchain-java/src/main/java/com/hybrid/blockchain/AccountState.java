@@ -363,6 +363,10 @@ public class AccountState {
         lifecycleManager.setCurrentBlockHeight(height);
     }
 
+    public long getBlockHeight() {
+        return lifecycleManager.getCurrentBlockHeight();
+    }
+
     public PrivateDataManager getPrivateDataManager() { return privateDataManager; }
 
     /**

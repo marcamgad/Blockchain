@@ -435,7 +435,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
         }
     }
 
-    private void broadcastPeerList() {
+    public void broadcastPeerList() {  // public: also called by App.java (com.hybrid) seed broadcaster
         try {
             List<Map<String, Object>> list = new ArrayList<>();
             for (PeerManager.PeerInfo p : peerManager.getTopPeers(10)) {
@@ -639,16 +639,18 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                 String valId = (String) data.get("validatorId");
                 byte[] sig = HexUtils.decode((String) data.get("signature"));
                 String msgSubtype = (String) data.get("subtype");
-                long seq = ((Number) data.get("sequenceNumber")).longValue();
-                String hash = (String) data.get("blockHash");
                 long view = pbft.getViewNumber();
 
                 if ("PREPARE".equals(msgSubtype)) {
+                    long seq = ((Number) data.get("sequenceNumber")).longValue();
+                    String hash = (String) data.get("blockHash");
                     pbft.addPrepareVote(seq, hash, valId, sig);
                     if (pbft.hasQuorum(seq, PBFTConsensus.Phase.PREPARE)) {
                         sendCommit(pbft, seq, hash, view);
                     }
                 } else if ("COMMIT".equals(msgSubtype)) {
+                    long seq = ((Number) data.get("sequenceNumber")).longValue();
+                    String hash = (String) data.get("blockHash");
                     pbft.addCommitVote(seq, hash, valId, sig);
                     if (pbft.hasQuorum(seq, PBFTConsensus.Phase.COMMIT)) {
                         applyBlockAtSequence(pbft, seq);
@@ -680,12 +682,19 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
             Block block = pbft.removePendingBlock(seq);
             if (block != null) {
                 try {
+                    // Bug 1 fix: mark committed BEFORE applyBlock so that
+                    // Blockchain.verifyBlock() finds the block in committedBlocks
+                    pbft.markCommitted(block.getHash(), seq, block.getValidatorId());
                     blockchain.applyBlock(block);
                     log.info("[CONSENSUS] Applied block {} hash: {}", seq, block.getHash());
+                    // Bug 7 fix: prune old entries to prevent unbounded memory growth
+                    long cutoff = seq - 100;
+                    if (cutoff > 0) {
+                        appliedSequences.entrySet().removeIf(e -> e.getKey() < cutoff);
+                        sentCommits.entrySet().removeIf(e -> e.getKey() < cutoff);
+                    }
                 } catch (Exception e) {
                     log.error("[CONSENSUS] Failed to apply block {}: {}", seq, e.getMessage());
-                    // Allow retry on error if needed, but AtomicBoolean prevents it currently.
-                    // For now, failure to apply is fatal for this block sequence.
                 }
             }
         }

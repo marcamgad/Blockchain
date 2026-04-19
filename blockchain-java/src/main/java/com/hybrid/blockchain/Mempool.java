@@ -23,7 +23,7 @@ public class Mempool {
         this(1000);
     }
 
-    public boolean add(Transaction tx) {
+    public synchronized boolean add(Transaction tx) {
         if (tx == null || tx.getId() == null)
             throw new IllegalArgumentException("Invalid tx");
         long now = System.currentTimeMillis();
@@ -71,7 +71,7 @@ public class Mempool {
         map.remove(txid);
     }
 
-    public List<Transaction> getTop(int n) {
+    public synchronized List<Transaction> getTop(int n) {
         // Explicitly type the comparator to avoid Object issues in VSCode
         return map.values().stream()
                 .sorted(Comparator.<Transaction>comparingDouble(
@@ -80,7 +80,43 @@ public class Mempool {
                 .collect(Collectors.toList());
     }
 
-    public List<Transaction> toArray() {
+    public synchronized List<Transaction> drain(int n) {
+        List<Transaction> top = getTop(n);
+        for (Transaction tx : top) {
+            map.remove(tx.getId());
+        }
+        return top;
+    }
+
+    public synchronized List<Transaction> getReadyTransactions(int n, AccountState state) {
+        // Map to track current nonce for each sender (starts from ledger state)
+        Map<String, Long> currentNonces = new HashMap<>();
+        
+        List<Transaction> all = new ArrayList<>(map.values());
+        // Sort by fee density (fee/size) to prioritize high-value txs
+        all.sort(Comparator.<Transaction>comparingDouble(
+                tx -> (double) tx.getFee() / Math.max(1, tx.serializeCanonical().length)).reversed());
+
+        List<Transaction> ready = new ArrayList<>();
+        for (Transaction tx : all) {
+            if (ready.size() >= n) break;
+            
+            if (tx.getFrom() == null) {
+                // System transactions (MINT) are always ready
+                ready.add(tx);
+                continue;
+            }
+            
+            long baseNonce = currentNonces.computeIfAbsent(tx.getFrom(), k -> state.getNonce(k));
+            if (tx.getNonce() == baseNonce + 1) {
+                ready.add(tx);
+                currentNonces.put(tx.getFrom(), tx.getNonce());
+            }
+        }
+        return ready;
+    }
+
+    public synchronized List<Transaction> toArray() {
         return new ArrayList<>(map.values());
     }
 

@@ -78,6 +78,16 @@ public class AuditLoggerTest {
     }
 
     @Test
+    public void testBlockCreationEventIsLogged() {
+        // [TEST-C7]
+        auditLogger.log(AuditLogger.AuditEventType.BLOCK_CREATED, "pbft-leader", "Block index 123 finalized");
+        List<AuditLogger.AuditEntry> entries = auditLogger.getEntriesByType(AuditLogger.AuditEventType.BLOCK_CREATED);
+        assertFalse(entries.isEmpty());
+        assertEquals("pbft-leader", entries.get(0).getActor());
+        assertTrue(entries.get(0).getDetails().contains("123"));
+    }
+
+    @Test
     public void testIntegrityVerification() {
         // Log several events
         auditLogger.log(AuditLogger.AuditEventType.DID_REGISTERED, "alice", "DID registered");

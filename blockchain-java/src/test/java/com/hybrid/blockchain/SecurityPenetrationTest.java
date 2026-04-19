@@ -49,7 +49,13 @@ public class SecurityPenetrationTest {
             // Placeholder: Implementing a full re-entrancy test requires complex assembly.
             // We'll verify here that a nested call is handled safely.
             
-            byte[] bytecodeA = new byte[] { (byte) OpCode.PUSH.ordinal(), 0, (byte) OpCode.SSTORE.ordinal() };
+            // [FIXED] PUSH 8 bytes, SSTORE, STOP
+            byte[] bytecodeA = new byte[11];
+            bytecodeA[0] = OpCode.PUSH.getByte();
+            // 1-8 are data
+            bytecodeA[9] = OpCode.SSTORE.getByte();
+            bytecodeA[10] = OpCode.STOP.getByte();
+            
             Transaction deployA = TestTransactionFactory.createContractCreation(user, bytecodeA, 10, 1);
             BlockApplier.createAndApplyBlock(tb, java.util.Collections.singletonList(deployA));
         }
@@ -112,5 +118,32 @@ public class SecurityPenetrationTest {
             // Even under flood, node should remain responsive (test doesn't crash)
             assertThat(end - start).isLessThan(5000L).as("Validation flood took too long - potential bottleneck");
         }
+    }
+
+    @Test
+    @DisplayName("Security: Rate limiting must block excessive requests")
+    void testRateLimitingEnforcement() {
+        com.hybrid.blockchain.security.RateLimiter limiter = com.hybrid.blockchain.security.RateLimiter.Presets.strictLimiter();
+        String identifier = "192.168.1.1";
+        
+        // 1st request allowed
+        assertThat(limiter.allowRequest(identifier)).isTrue();
+        // 2nd request denied immediately (strict 1/sec)
+        assertThat(limiter.allowRequest(identifier)).isFalse();
+    }
+
+    @Test
+    @DisplayName("Security: JWT Manager must detect expired or tampered tokens")
+    void testJWTSecurity() {
+        com.hybrid.blockchain.api.JwtManager jwt = new com.hybrid.blockchain.api.JwtManager();
+        String address = "0xTestAddress";
+        
+        String token = jwt.issueToken(address);
+        assertThat(jwt.getDeviceId(token)).isEqualTo(address);
+        assertThat(jwt.validateToken(token, address)).isTrue();
+        
+        // Tamper with token
+        String tampered = token.substring(0, token.length() - 5) + "ABCDE";
+        assertThat(jwt.validateToken(tampered, address)).isFalse();
     }
 }

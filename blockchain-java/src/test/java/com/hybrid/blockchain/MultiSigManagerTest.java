@@ -4,7 +4,6 @@ import com.hybrid.blockchain.security.MultiSigManager;
 import com.hybrid.blockchain.security.MultiSigManager.MultiSigWallet;
 import com.hybrid.blockchain.security.MultiSigManager.Proposal;
 import com.hybrid.blockchain.security.MultiSigManager.ProposalType;
-import com.hybrid.blockchain.testutil.TestKeyPair;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;

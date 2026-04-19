@@ -49,12 +49,13 @@ public class IoTEndToEndTest {
         node1.getState().addCapability(contractAddr, new Capability(Capability.Type.WRITE_ACTUATOR, 100L));
         node2.getState().addCapability(contractAddr, new Capability(Capability.Type.WRITE_ACTUATOR, 100L));
 
-        // PUSH 1 (Value), PUSH 100 (DeviceID), PUSH 2 (WRITE_ACTUATOR), SYSCALL
-        java.nio.ByteBuffer code = java.nio.ByteBuffer.allocate(31);
+        // PUSH 1 (Value), PUSH 100 (DeviceID), PUSH 2 (WRITE_ACTUATOR), SYSCALL, STOP
+        java.nio.ByteBuffer code = java.nio.ByteBuffer.allocate(32);
         code.put(OpCode.PUSH.getByte()).putLong(1L);
         code.put(OpCode.PUSH.getByte()).putLong(100L);
         code.put(OpCode.PUSH.getByte()).putLong(2L);
         code.put(OpCode.SYSCALL.getByte());
+        code.put(OpCode.STOP.getByte());
 
         java.math.BigInteger alicePriv = java.math.BigInteger.valueOf(456);
         byte[] alicePub = Crypto.derivePublicKey(alicePriv);

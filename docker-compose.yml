@@ -1,0 +1,226 @@
+# HybridChain 20-node test cluster (Minimalist/Offline Version)
+# Removed in-container healthchecks to bypass WSL/Docker DNS issues.
+# All nodes are verified from the host via scripts/run-tests.sh.
+
+version: "3.9"
+
+networks:
+  hybridchain:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.1.0/24
+
+x-node-defaults: &node-defaults
+  image: hybridchain:latest
+  networks:
+    - hybridchain
+  restart: unless-stopped
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+
+  node1:
+    <<: *node-defaults
+    container_name: hybridchain-node1
+    hostname: node1
+    env_file: envs/node1.env
+    ports: ["8001:8000", "6001:6001"]
+    volumes: ["node1-data:/app/data", "node1-logs:/app/logs"]
+
+  node2:
+    <<: *node-defaults
+    container_name: hybridchain-node2
+    hostname: node2
+    env_file: envs/node2.env
+    ports: ["8002:8000", "6002:6001"]
+    volumes: ["node2-data:/app/data", "node2-logs:/app/logs"]
+    depends_on: ["node1"]
+
+  node3:
+    <<: *node-defaults
+    container_name: hybridchain-node3
+    hostname: node3
+    env_file: envs/node3.env
+    ports: ["8003:8000", "6003:6001"]
+    volumes: ["node3-data:/app/data", "node3-logs:/app/logs"]
+    depends_on: ["node1"]
+
+  node4:
+    <<: *node-defaults
+    container_name: hybridchain-node4
+    hostname: node4
+    env_file: envs/node4.env
+    ports: ["8004:8000", "6004:6001"]
+    volumes: ["node4-data:/app/data", "node4-logs:/app/logs"]
+    depends_on: ["node1"]
+
+  node5:
+    <<: *node-defaults
+    container_name: hybridchain-node5
+    hostname: node5
+    env_file: envs/node5.env
+    ports: ["8005:8000", "6005:6001"]
+    volumes: ["node5-data:/app/data", "node5-logs:/app/logs"]
+    depends_on: ["node2"]
+
+  node6:
+    <<: *node-defaults
+    container_name: hybridchain-node6
+    hostname: node6
+    env_file: envs/node6.env
+    ports: ["8006:8000", "6006:6001"]
+    volumes: ["node6-data:/app/data", "node6-logs:/app/logs"]
+    depends_on: ["node2"]
+
+  node7:
+    <<: *node-defaults
+    container_name: hybridchain-node7
+    hostname: node7
+    env_file: envs/node7.env
+    ports: ["8007:8000", "6007:6001"]
+    volumes: ["node7-data:/app/data", "node7-logs:/app/logs"]
+    depends_on: ["node3"]
+
+  node8:
+    <<: *node-defaults
+    container_name: hybridchain-node8
+    hostname: node8
+    env_file: envs/node8.env
+    ports: ["8008:8000", "6008:6001"]
+    volumes: ["node8-data:/app/data", "node8-logs:/app/logs"]
+    depends_on: ["node3"]
+
+  node9:
+    <<: *node-defaults
+    container_name: hybridchain-node9
+    hostname: node9
+    env_file: envs/node9.env
+    ports: ["8009:8000", "6009:6001"]
+    volumes: ["node9-data:/app/data", "node9-logs:/app/logs"]
+    depends_on: ["node4"]
+
+  node10:
+    <<: *node-defaults
+    container_name: hybridchain-node10
+    hostname: node10
+    env_file: envs/node10.env
+    ports: ["8010:8000", "6010:6001"]
+    volumes: ["node10-data:/app/data", "node10-logs:/app/logs"]
+    depends_on: ["node4"]
+
+  node11:
+    <<: *node-defaults
+    container_name: hybridchain-node11
+    hostname: node11
+    env_file: envs/node11.env
+    ports: ["8011:8000", "6011:6001", "5683:5683/udp"]
+    volumes: ["node11-data:/app/data", "node11-logs:/app/logs"]
+    depends_on: ["node5"]
+
+  node12:
+    <<: *node-defaults
+    container_name: hybridchain-node12
+    hostname: node12
+    env_file: envs/node12.env
+    ports: ["8012:8000", "6012:6001"]
+    volumes: ["node12-data:/app/data", "node12-logs:/app/logs"]
+    depends_on: ["node5"]
+
+  node13:
+    <<: *node-defaults
+    container_name: hybridchain-node13
+    hostname: node13
+    env_file: envs/node13.env
+    ports: ["8013:8000", "6013:6001"]
+    volumes: ["node13-data:/app/data", "node13-logs:/app/logs"]
+    depends_on: ["node6"]
+
+  node14:
+    <<: *node-defaults
+    container_name: hybridchain-node14
+    hostname: node14
+    env_file: envs/node14.env
+    ports: ["8014:8000", "6014:6001"]
+    volumes: ["node14-data:/app/data", "node14-logs:/app/logs"]
+    depends_on: ["node6"]
+
+  node15:
+    <<: *node-defaults
+    container_name: hybridchain-node15
+    hostname: node15
+    env_file: envs/node15.env
+    ports: ["8015:8000", "6015:6001"]
+    volumes: ["node15-data:/app/data", "node15-logs:/app/logs"]
+    depends_on: ["node7"]
+
+  node16:
+    <<: *node-defaults
+    container_name: hybridchain-node16
+    hostname: node16
+    env_file: envs/node16.env
+    ports: ["8016:8000", "6016:6001"]
+    volumes: ["node16-data:/app/data", "node16-logs:/app/logs"]
+    depends_on: ["node8"]
+
+  node17:
+    <<: *node-defaults
+    container_name: hybridchain-node17
+    hostname: node17
+    env_file: envs/node17.env
+    ports: ["8017:8000", "6017:6001"]
+    volumes: ["node17-data:/app/data", "node17-logs:/app/logs"]
+    depends_on: ["node8"]
+
+  node18:
+    <<: *node-defaults
+    container_name: hybridchain-node18
+    hostname: node18
+    env_file: envs/node18.env
+    ports: ["8018:8000", "6018:6001"]
+    volumes: ["node18-data:/app/data", "node18-logs:/app/logs"]
+    depends_on: ["node9"]
+
+  node19:
+    <<: *node-defaults
+    container_name: hybridchain-node19
+    hostname: node19
+    env_file: envs/node19.env
+    ports: ["8019:8000", "6019:6001"]
+    volumes: ["node19-data:/app/data", "node19-logs:/app/logs"]
+    depends_on: ["node9"]
+
+  node20:
+    <<: *node-defaults
+    container_name: hybridchain-node20
+    hostname: node20
+    env_file: envs/node20.env
+    ports: ["8020:8000", "6020:6001"]
+    volumes: ["node20-data:/app/data", "node20-logs:/app/logs"]
+    depends_on: ["node10"]
+
+volumes:
+  node1-data:  node1-logs:
+  node2-data:  node2-logs:
+  node3-data:  node3-logs:
+  node4-data:  node4-logs:
+  node5-data:  node5-logs:
+  node6-data:  node6-logs:
+  node7-data:  node7-logs:
+  node8-data:  node8-logs:
+  node9-data:  node9-logs:
+  node10-data: node10-logs:
+  node11-data: node11-logs:
+  node12-data: node12-logs:
+  node13-data: node13-logs:
+  node14-data: node14-logs:
+  node15-data: node15-logs:
+  node16-data: node16-logs:
+  node17-data: node17-logs:
+  node18-data: node18-logs:
+  node19-data: node19-logs:
+  node20-data: node20-logs:

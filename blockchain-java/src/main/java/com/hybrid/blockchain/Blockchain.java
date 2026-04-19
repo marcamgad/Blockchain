@@ -58,6 +58,7 @@ public class Blockchain {
     public com.hybrid.blockchain.monitoring.BlockchainMonitor getMonitor() { return monitor; }
     public void setAuditLogger(com.hybrid.blockchain.audit.AuditLogger auditLogger) { this.auditLogger = auditLogger; }
     public com.hybrid.blockchain.audit.AuditLogger getAuditLogger() { return auditLogger; }
+    public void setConsensus(Consensus consensus) { this.consensus = consensus; }
 
     public void init() throws Exception {
         lock.writeLock().lock();
@@ -154,10 +155,14 @@ public class Blockchain {
 
     public boolean isPaused() { return paused; }
     public void setPaused(boolean paused) { this.paused = paused; }
+    private boolean skipRateLimit = false;
+    public void setSkipRateLimit(boolean skipRateLimit) { this.skipRateLimit = skipRateLimit; }
+    public UTXOSet getUtxoSet() { return this.utxo; }
 
 
     // Validate a transaction according to type
-    public void validateTransaction(Transaction tx) throws Exception {
+    public void validateTransaction(Transaction tx) throws Exception { validateTransaction(tx, false); }
+    public void validateTransaction(Transaction tx, boolean skipNonce) throws Exception {
         if (!Config.isDebug() && !tx.verify() && tx.getFrom() != null)
             throw new Exception("Invalid signature");
         if (tx.getNetworkId() != Config.NETWORK_ID)
@@ -193,9 +198,10 @@ public class Blockchain {
                 if (tx.getFrom() == null)
                     break; // coinbase reward tx
                 long balance = state.getBalance(tx.getFrom());
-                long expectedNonce = state.getNonce(tx.getFrom()) + 1;
-                if (tx.getNonce() != expectedNonce)
-                    throw new Exception("Invalid nonce: expected " + expectedNonce + " got " + tx.getNonce());
+                    if (!skipNonce) {
+                        long expectedNonce = state.getNonce(tx.getFrom()) + 1;
+                        if (tx.getNonce() != expectedNonce) throw new IllegalArgumentException("Invalid nonce: expected " + expectedNonce + " got " + tx.getNonce());
+                    }
                 long accountTotal;
                 try {
                     accountTotal = Math.addExact(tx.getAmount(), tx.getFee());
@@ -206,14 +212,27 @@ public class Blockchain {
                     throw new Exception("Insufficient funds");
                 break;
 
-            case CONTRACT:
-                if (!Config.ENABLE_SMART_CONTRACTS)
-                    throw new Exception("Contracts disabled");
-                if (tx.getFrom() != null) {
+                case CONTRACT:
+                    if (!Config.ENABLE_SMART_CONTRACTS)
+                        throw new Exception("Contracts disabled");
+                    
+                    // [SECURITY] Audit check for contract creation
+                    if (tx.getTo() == null && tx.getData() != null && tx.getData().length > 0) {
+                        if (!Config.BYPASS_CONTRACT_AUDIT) {
+                            com.hybrid.blockchain.ai.SmartContractAuditor.AuditResult audit = 
+                                com.hybrid.blockchain.ai.SmartContractAuditor.audit(tx.getData());
+                            if (audit.isRejected()) {
+                                throw new Exception("Contract rejected by AI Audit: " + String.join(", ", audit.getFindings()));
+                            }
+                        }
+                    }
+
+                    if (tx.getFrom() != null) {
                     long contractBalance = state.getBalance(tx.getFrom());
-                    long expectedContractNonce = state.getNonce(tx.getFrom()) + 1;
-                    if (tx.getNonce() != expectedContractNonce)
-                        throw new Exception("Invalid nonce: expected " + expectedContractNonce + " got " + tx.getNonce());
+                    if (!skipNonce) {
+                        long expectedContractNonce = state.getNonce(tx.getFrom()) + 1;
+                        if (tx.getNonce() != expectedContractNonce) throw new IllegalArgumentException("Invalid nonce: expected " + expectedContractNonce + " got " + tx.getNonce());
+                    }
                     long contractTotal;
                     try {
                         contractTotal = Math.addExact(tx.getAmount(), tx.getFee());
@@ -225,11 +244,14 @@ public class Blockchain {
                 }
                 break;
             case IOT_MANAGEMENT:
+            case FEDERATED_UPDATE:
+            case FEDERATED_COMMIT:
                 if (tx.getFrom() != null) {
                     long iotBalance = state.getBalance(tx.getFrom());
-                    long expectedIotNonce = state.getNonce(tx.getFrom()) + 1;
-                    if (tx.getNonce() != expectedIotNonce)
-                        throw new Exception("Invalid nonce: expected " + expectedIotNonce + " got " + tx.getNonce());
+                    if (!skipNonce) {
+                        long expectedIotNonce = state.getNonce(tx.getFrom()) + 1;
+                        if (tx.getNonce() != expectedIotNonce) throw new IllegalArgumentException("Invalid nonce: expected " + expectedIotNonce + " got " + tx.getNonce());
+                    }
                     if (iotBalance < tx.getFee())
                         throw new Exception("Insufficient funds for iot tx fee");
                 }
@@ -250,9 +272,10 @@ public class Blockchain {
                 if (tx.getFrom() == null)
                     throw new Exception("BURN must have a from address");
                 long burnBalance = state.getBalance(tx.getFrom());
-                long expectedBurnNonce = state.getNonce(tx.getFrom()) + 1;
-                if (tx.getNonce() != expectedBurnNonce)
-                    throw new Exception("Invalid nonce: expected " + expectedBurnNonce + " got " + tx.getNonce());
+                    if (!skipNonce) {
+                        long expectedBurnNonce = state.getNonce(tx.getFrom()) + 1;
+                        if (tx.getNonce() != expectedBurnNonce) throw new IllegalArgumentException("Invalid nonce: expected " + expectedBurnNonce + " got " + tx.getNonce());
+                    }
                 long burnTotal;
                 try {
                     burnTotal = Math.addExact(tx.getAmount(), tx.getFee());
@@ -284,9 +307,10 @@ public class Blockchain {
                     long nativeBal = state.getBalance(tx.getFrom());
                     if (nativeBal < tx.getFee())
                         throw new Exception("Insufficient native balance for fee");
-                    long ttExpected = state.getNonce(tx.getFrom()) + 1;
-                    if (tx.getNonce() != ttExpected)
-                        throw new Exception("Invalid nonce: expected " + ttExpected + " got " + tx.getNonce());
+                    if (!skipNonce) {
+                        long ttExpected = state.getNonce(tx.getFrom()) + 1;
+                        if (tx.getNonce() != ttExpected) throw new IllegalArgumentException("Invalid nonce: expected " + ttExpected + " got " + tx.getNonce());
+                    }
                 }
                 break;
 
@@ -311,9 +335,10 @@ public class Blockchain {
                     long telemBal = state.getBalance(tx.getFrom());
                     if (telemBal < tx.getFee())
                         throw new Exception("Insufficient funds for telemetry fee: balance=" + telemBal + ", fee=" + tx.getFee());
-                    long telemExpectedNonce = state.getNonce(tx.getFrom()) + 1;
-                    if (tx.getNonce() != telemExpectedNonce)
-                        throw new Exception("Invalid nonce: expected " + telemExpectedNonce + " got " + tx.getNonce());
+                    if (!skipNonce) {
+                        long telemExpectedNonce = state.getNonce(tx.getFrom()) + 1;
+                        if (tx.getNonce() != telemExpectedNonce) throw new IllegalArgumentException("Invalid nonce: expected " + telemExpectedNonce + " got " + tx.getNonce());
+                    }
                 }
                 break;
 
@@ -328,9 +353,10 @@ public class Blockchain {
                     String tokenId = (String) metadata.get("tokenId");
                     if (tokenId == null || tokenId.trim().isEmpty())
                         throw new Exception("TOKEN_REGISTER missing tokenId");
-                    long trExpected = state.getNonce(tx.getFrom()) + 1;
-                    if (tx.getNonce() != trExpected)
-                        throw new Exception("Invalid nonce: expected " + trExpected + " got " + tx.getNonce());
+                    if (!skipNonce) {
+                        long trExpected = state.getNonce(tx.getFrom()) + 1;
+                        if (tx.getNonce() != trExpected) throw new IllegalArgumentException("Invalid nonce: expected " + trExpected + " got " + tx.getNonce());
+                    }
                 }
                 break;
 
@@ -350,9 +376,10 @@ public class Blockchain {
                         throw new Exception("Only token owner can mint: " + info.owner);
                     if (info.maxSupply > 0 && info.totalMinted + tx.getAmount() > info.maxSupply)
                         throw new Exception("Minting would exceed max supply for " + tokenId);
-                    long tmExpected = state.getNonce(tx.getFrom()) + 1;
-                    if (tx.getNonce() != tmExpected)
-                        throw new Exception("Invalid nonce: expected " + tmExpected + " got " + tx.getNonce());
+                    if (!skipNonce) {
+                        long tmExpected = state.getNonce(tx.getFrom()) + 1;
+                        if (tx.getNonce() != tmExpected) throw new IllegalArgumentException("Invalid nonce: expected " + tmExpected + " got " + tx.getNonce());
+                    }
                 }
                 break;
 
@@ -366,9 +393,10 @@ public class Blockchain {
                     long tokenBal = state.getTokenBalance(tx.getFrom(), tokenId);
                     if (tokenBal < tx.getAmount())
                         throw new Exception("Insufficient " + tokenId + " balance for burn");
-                    long tbExpected = state.getNonce(tx.getFrom()) + 1;
-                    if (tx.getNonce() != tbExpected)
-                        throw new Exception("Invalid nonce: expected " + tbExpected + " got " + tx.getNonce());
+                    if (!skipNonce) {
+                        long tbExpected = state.getNonce(tx.getFrom()) + 1;
+                        if (tx.getNonce() != tbExpected) throw new IllegalArgumentException("Invalid nonce: expected " + tbExpected + " got " + tx.getNonce());
+                    }
                 }
                 break;
 
@@ -455,8 +483,25 @@ public class Blockchain {
         if (!consensus.verifyBlock(block, validator))
             throw new Exception("Invalid validator signature");
 
-        for (Transaction tx : block.getTransactions()) {
-            validateTransaction(tx);
+        java.util.List<Transaction> sortedTxs = new java.util.ArrayList<>(block.getTransactions());
+        sortedTxs.sort(java.util.Comparator
+                .comparingInt((Transaction tx) -> tx.getType() == Transaction.Type.MINT ? 0 : 1)
+                .thenComparing(tx -> tx.getFrom() == null ? "" : tx.getFrom())
+                .thenComparingLong(Transaction::getNonce));
+
+        java.util.Map<String, Long> expectedNonces = new java.util.LinkedHashMap<>();
+        for (Transaction tx : sortedTxs) {
+            if (tx.getFrom() != null) {
+                long base = expectedNonces.computeIfAbsent(tx.getFrom(),
+                        addr -> state.getNonce(addr) + 1);
+                if (tx.getNonce() != base) {
+                    throw new IllegalArgumentException("Invalid nonce for " + tx.getFrom() + ": expected " + base + " got " + tx.getNonce());
+                }
+                expectedNonces.put(tx.getFrom(), base + 1);
+            }
+        }
+        for (Transaction tx : sortedTxs) {
+            validateTransaction(tx, true);
         }
 
         state.setBlockHeight(block.getIndex());
@@ -464,8 +509,7 @@ public class Blockchain {
         long totalFees = 0;
         int txCountForFeeMkt = 0;
         // Apply transactions and create receipts
-        for (Transaction tx : block.getTransactions()) {
-            totalFees += tx.getFee();
+        for (Transaction tx : sortedTxs) {
             txCountForFeeMkt++;
             String receiptStatus = TransactionReceipt.STATUS_SUCCESS;
             String receiptError = null;
@@ -483,6 +527,7 @@ public class Blockchain {
                 receiptStatus = TransactionReceipt.STATUS_FAILED;
                 receiptError = ex.getMessage();
             }
+            totalFees += tx.getFee();
             // Build and save receipt
             TransactionReceipt receipt = new TransactionReceipt(
                     tx.getId(), block.getHash(), (int) block.getIndex(),
@@ -617,7 +662,7 @@ public class Blockchain {
             if (tx.getFrom() != null) {
                 long currentNonce = state.getNonce(tx.getFrom());
                 if (tx.getNonce() <= currentNonce) {
-                    throw new Exception("Invalid nonce: " + tx.getNonce() + " <= current ledger nonce " + currentNonce);
+                    throw new IllegalArgumentException("Invalid nonce: " + tx.getNonce() + " <= current ledger nonce " + currentNonce);
                 }
             }
             // Balance check: must account for pending transactions in mempool
@@ -712,7 +757,7 @@ public class Blockchain {
         try {
             Block prev = getLatestBlock();
             int nextIndex = prev.getIndex() + 1;
-            List<Transaction> candidateTxs = mempool.getTop(maxTx);
+            List<Transaction> candidateTxs = mempool.getReadyTransactions(maxTx, state);
             List<Transaction> txsToInclude = new ArrayList<>();
             
             // Miner reward simulation for post-state root calculation
@@ -763,10 +808,15 @@ public class Blockchain {
             }
             
             long totalFees = txsToInclude.stream().mapToLong(Transaction::getFee).sum();
-            clonedState.credit(minerAddress, totalFees);
+            long rwd = Tokenomics.getCurrentReward(nextIndex, totalMinted);
+            long totalCredit = totalFees + rwd;
+            if (totalCredit > 0) {
+                clonedState.credit(minerAddress, totalCredit);
+                log.debug("[Mining] Crediting miner {} with total: {} (fee: {}, rwd: {})", minerAddress, totalCredit, totalFees, rwd);
+            }
 
             String postStateRoot = clonedState.calculateStateRoot();
-                Block newBlock = new Block(nextIndex, timestamp, txsToInclude,
+                Block newBlock = new Block((int)nextIndex, timestamp, txsToInclude,
                     prev.getHash(), difficulty, postStateRoot);
             newBlock.setValidatorId(Config.NODE_ID);
             newBlock.setHash(newBlock.calculateHash());
@@ -886,16 +936,52 @@ public class Blockchain {
                 {
                     targetState.debit(tx.getFrom(), tx.getFee());
                     targetState.incrementNonce(tx.getFrom());
+                    
+                    // Run AI Anomaly Detection
+                    int multiplier = com.hybrid.blockchain.ai.TelemetryAnomalyDetector.getInstance().checkTransaction(tx);
+                    boolean isAnomaly = multiplier > 1;
+                    if (isAnomaly) {
+                        try {
+                            targetState.debit(tx.getFrom(), Math.multiplyExact(tx.getFee(), (long)multiplier - 1));
+                        } catch (ArithmeticException e) {
+                            log.error("[TELEMETRY] Penalty fee overflow for {}", tx.getFrom());
+                        }
+                    }
+
                     // Store telemetry data; hash large payloads (>= 1024 bytes)
                     byte[] rawData = tx.getData();
                     byte[] toStore = rawData.length >= 1024 ? Crypto.hash(rawData) : rawData;
                     try {
                         storage.saveTelemetry(tx.getFrom(), (int) blockIndex, tx.getId(), toStore);
-                        // Update device reputation on successful telemetry
-                        targetState.getLifecycleManager().recordDeviceActivity(tx.getFrom(), true);
+                        // Update device reputation on telemetry result
+                        targetState.getLifecycleManager().recordDeviceActivity(tx.getFrom(), !isAnomaly);
                     } catch (Exception e) {
                         log.warn("[TELEMETRY] Failed to save telemetry for {}: {}", tx.getFrom(), e.getMessage());
                     }
+                }
+                return 0;
+            case FEDERATED_UPDATE:
+                {
+                    targetState.debit(tx.getFrom(), tx.getFee());
+                    targetState.incrementNonce(tx.getFrom());
+                    
+                    try {
+                        double[] weights = new ObjectMapper().readValue(tx.getData(), double[].class);
+                        com.hybrid.blockchain.ai.FederatedLearningManager.getInstance().submitUpdate(tx.getFrom(), weights);
+                    } catch (Exception e) {
+                        log.warn("[FedLearn] Failed to parse update from {}: {}", tx.getFrom(), e.getMessage());
+                    }
+                }
+                return 0;
+
+            case FEDERATED_COMMIT:
+                {
+                    targetState.debit(tx.getFrom(), tx.getFee());
+                    targetState.incrementNonce(tx.getFrom());
+                    
+                    // Only perform aggregation if tx data matches current model hash (simple consensus check)
+                    String modelHash = new String(tx.getData(), java.nio.charset.StandardCharsets.UTF_8).trim();
+                    storage.putMeta("federated:latest:hash", modelHash);
                 }
                 return 0;
 
