@@ -27,6 +27,7 @@ public final class Config {
     public static final boolean ENABLE_SMART_CONTRACTS = true;
     public static final long CONTRACT_EXECUTION_LIMIT = 10_000;
     public static final int MAX_CONTRACT_SIZE = 32 * 1024;
+    public static boolean BYPASS_CONTRACT_AUDIT = false;
 
     // ─── Fee Market (EIP-1559 style) ─────────────────────────────────────────
     /** Starting base fee in smallest token units. */
@@ -48,7 +49,7 @@ public final class Config {
 
     // ─── Node Identity ────────────────────────────────────────────────────────
     public static final String NODE_NAME = getEnv("NODE_NAME", "HybridJavaNode");
-    public static final String NODE_ID = getEnv("NODE_ID", "node-" + System.currentTimeMillis());
+    public static String NODE_ID = getEnv("NODE_ID", "node-" + System.currentTimeMillis());
     public static final boolean IS_SEED = getBooleanEnv("IS_SEED", false);
     public static final String SEED_PEER = getEnv("SEED_PEER", null);
     public static final String STORAGE_PATH = getEnv("STORAGE_PATH", "./data");

@@ -159,6 +159,12 @@
             <artifactId>micrometer-registry-prometheus</artifactId>
             <version>1.12.0</version>
         </dependency>
+        
+        <dependency>
+            <groupId>org.codehaus.janino</groupId>
+            <artifactId>janino</artifactId>
+            <version>3.1.10</version>
+        </dependency>
 
         <dependency>
             <groupId>org.mockito</groupId>
@@ -291,7 +297,7 @@
                 <configuration>
                     <archive>
                         <manifest>
-                            <mainClass>com.hybrid.blockchain.App</mainClass>
+                            <mainClass>com.hybrid.App</mainClass>
                         </manifest>
                     </archive>
                     <descriptorRefs>
@@ -315,7 +321,7 @@
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <version>3.2.1</version>
                 <configuration>
-                    <mainClass>com.hybrid.blockchain.api.IoTRestAPI</mainClass>
+                    <mainClass>com.hybrid.App</mainClass>
                 </configuration>
                 <executions>
                     <execution>

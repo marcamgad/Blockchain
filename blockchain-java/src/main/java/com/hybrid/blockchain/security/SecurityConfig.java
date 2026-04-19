@@ -46,10 +46,15 @@ public class SecurityConfig {
                 // Admin endpoints MUST be matched first
                 .requestMatchers("/api/v1/admin/**").authenticated()
 
-                // Public GET endpoints
-                .requestMatchers(HttpMethod.GET, "/api/**").permitAll()
+                // Public health and metrics endpoints
+                .requestMatchers(HttpMethod.GET, "/api/v1/health").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/ready").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/v1/metrics").permitAll()
                 .requestMatchers(HttpMethod.GET, "/actuator/**").permitAll()
                 .requestMatchers(HttpMethod.GET, "/actuator/prometheus").permitAll()
+
+                // Public GET endpoints (general)
+                .requestMatchers(HttpMethod.GET, "/api/**").permitAll()
 
                 .requestMatchers(HttpMethod.POST, "/api/v1/account/create").permitAll()
                 // Write endpoints require authentication

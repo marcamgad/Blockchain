@@ -3,7 +3,6 @@ package com.hybrid.blockchain;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import java.math.BigInteger;
 import java.security.*;
-import java.security.spec.ECGenParameterSpec;
 import java.util.Random;
 
 /**
@@ -41,9 +40,6 @@ public class TestKeyPair {
         return address;
     }
 
-    /**
-     * Create a random but verifiable key pair.
-     */
     public static TestKeyPair random() {
         return new TestKeyPair(new SecureRandom().nextInt());
     }

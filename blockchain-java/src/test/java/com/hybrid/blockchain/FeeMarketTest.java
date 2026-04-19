@@ -56,4 +56,44 @@ public class FeeMarketTest {
             assertThat(FeeMarket.getCurrentBaseFee(storage)).isEqualTo(555);
         }
     }
+
+    @Test
+    @DisplayName("AI Feature: Polynomial Fee Prediction + Scarcity")
+    void testFeePredictionPolynomial() {
+        FeeMarket.resetHistory();
+        
+        // Add minimal points to test polynomial regression degree 2
+        FeeMarket.recordFeeDataPoint(100, 10);
+        FeeMarket.recordFeeDataPoint(200, 20);
+        FeeMarket.recordFeeDataPoint(300, 40); // Exponention increase
+        
+        // Predict for 400 with 10 active validators (no scarcity premium)
+        long predictedFee = FeeMarket.predictOptimalFee(400, 1000, null, 10);
+        
+        // It should capture the upward curve.
+        assertThat(predictedFee).isGreaterThan(40);
+
+        // Test scarcity premium (> 15 validators -> 1.25x premium)
+        long scarceFee = FeeMarket.predictOptimalFee(400, 1000, null, 20);
+        assertThat(scarceFee).isEqualTo(Math.max(1L, Math.round(predictedFee * 1.25)));
+    }
+
+    @Test
+    @DisplayName("Severe: Fee Market must maintain stability under extreme 100x congestion")
+    void testExtremeCongestionScaling() {
+        FeeMarket.resetHistory();
+        long currentFee = 100;
+        
+        // Simulate massive staircase increase
+        for (int i = 0; i < 50; i++) {
+            currentFee = FeeMarket.calculateNextBaseFee(currentFee, 2000, 1000); // Constant 100% overflow
+        }
+        
+        // EIP-1559 increases 1.125x each block. 1.125^50 = 361x increase.
+        assertThat(currentFee).isGreaterThan(10000);
+        
+        // Check if prediction is still reasonable (non-overflowing)
+        long pred = FeeMarket.predictOptimalFee(2000, 100, null, 10);
+        assertThat(pred).isLessThan(10000000); // Just a sanity check against overflow
+    }
 }

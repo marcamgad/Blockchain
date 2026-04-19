@@ -16,8 +16,8 @@ x-node-common: &node-common
     test: ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/health || exit 1"]
     interval: 10s
     timeout: 5s
-    retries: 5
-    start_period: 30s
+    retries: 10
+    start_period: 60s
 
 x-node-env: &node-env
   API_PORT: 8000
@@ -29,6 +29,7 @@ x-node-env: &node-env
   STORAGE_PATH: /app/data
   STORAGE_AES_KEY: ${STORAGE_AES_KEY}
   VALIDATOR_PUBKEYS: ${VALIDATOR_PUBKEYS}
+  NODE_ROLE: VALIDATOR
 
 services:
   node-seed:
@@ -579,6 +580,10 @@ services:
       blockchain-net:
         ipv4_address: 172.28.0.34
 
+
+
+
+
 volumes:
   node-seed-data:
   validator-1-data:
@@ -600,3 +605,4 @@ volumes:
   node-13-data:
   node-14-data:
   node-15-data:
+

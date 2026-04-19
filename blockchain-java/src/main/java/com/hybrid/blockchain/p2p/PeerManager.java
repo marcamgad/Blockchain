@@ -62,8 +62,16 @@ public class PeerManager {
         peers.putIfAbsent(id, new PeerInfo(id, address, port));
     }
 
+    /**
+     * @deprecated BUG FIX: Do NOT use this method — it hardcoded "127.0.0.1" which is
+     * always wrong in multi-node deployments. Call
+     * {@link #addPeer(String, String, int)} directly with the real socket address
+     * obtained from {@code socket.getInetAddress().getHostAddress()}.
+     */
+    @Deprecated(forRemoval = true)
     public void onPeerConnected(String id) {
-        addPeer(id, "127.0.0.1", 6001);
+        throw new UnsupportedOperationException(
+            "Bug fixed: call addPeer(id, realIp, realPort) with actual socket address");
     }
 
     public void removePeer(String id) {

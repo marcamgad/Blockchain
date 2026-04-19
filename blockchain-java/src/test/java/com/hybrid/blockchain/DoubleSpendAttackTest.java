@@ -1,7 +1,6 @@
 package com.hybrid.blockchain;
 
 import com.hybrid.blockchain.consensus.PBFTConsensus;
-import com.hybrid.blockchain.testutil.TestKeyPair;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;

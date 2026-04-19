@@ -10,6 +10,7 @@ import java.util.Stack;
  * Zero access to host OS, reflection, or non-deterministic APIs.
  */
 public class Interpreter {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(Interpreter.class);
     private final byte[] bytecode;
     private final Stack<Long> stack;
     private byte[] memory = new byte[16384]; // 16KB sandbox memory
@@ -117,6 +118,14 @@ public class Interpreter {
                         stack.push(0L); // Target has no code
                         break;
                     }
+
+                    // [FIX-B4] Reentrancy prevention
+                    if (context.callStack.contains(targetAddr)) {
+                        stack.push(0L); // Reentrancy detected — fail the call
+                        log.warn("[VM] Reentrancy blocked: contract {} attempted to call itself", targetAddr);
+                        break;
+                    }
+                    context.callStack.add(targetAddr);
                     
                     // Prepare input data
                     byte[] callInput = new byte[(int)Math.min(inLen, memory.length - inOffset)];
@@ -153,6 +162,9 @@ public class Interpreter {
                         // Copy address registry
                         childContext.addressRegistry.putAll(context.addressRegistry);
                         
+                        // [FIX-B4] Propagate call stack for reentrancy prevention
+                        childContext.callStack.addAll(context.callStack);
+                        
                         // Execute child interpreter
                         Interpreter childInterp = new Interpreter(targetAccount.getCode(), childGasLimit, childContext);
                         childInterp.execute();
@@ -171,6 +183,8 @@ public class Interpreter {
                     } catch (Exception e) {
                         // Execution failed; revert state is handled by exception propagation
                         stack.push(0L); // 0 = failure
+                    } finally {
+                        context.callStack.remove(targetAddr); // [FIX-B4]
                     }
                     break;
 
@@ -267,9 +281,9 @@ public class Interpreter {
                     break;
 
                 case SSTORE:
-                    // SSTORE(key, value): Pop value (on top), then key. Store value at key.
-                    long ssKey = stack.pop(); // key is below (pushed first/leftmost)
-                    long ssVal = stack.pop(); // value is on top (pushed second/rightmost)
+                    // SSTORE(key, value): Pop value (on top), then key (below).
+                    long ssVal = stack.pop(); // value is on top
+                    long ssKey = stack.pop(); // key is below
                     context.state.putStorage(context.contractAddress, ssKey, ssVal);
                     break;
 
@@ -392,6 +406,7 @@ public class Interpreter {
         public String currentBlockHash;
         public java.util.List<ContractEvent> events = new java.util.ArrayList<>();
         public java.util.Map<Long, String> addressRegistry = new java.util.HashMap<>();
+        public java.util.Set<String> callStack = new java.util.HashSet<>(); // [FIX A5]
 
         public BlockchainContext() {}
 

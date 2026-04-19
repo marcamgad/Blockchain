@@ -12,20 +12,37 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Practical Byzantine Fault Tolerance (PBFT) consensus implementation.
- * 
- * Provides:
- * - Byzantine fault tolerance (tolerates f = (n-1)/3 faulty nodes)
- * - Deterministic finality (no probabilistic confirmation)
- * - Fast consensus for private validator sets
- * 
- * Three-phase protocol:
- * 1. PRE-PREPARE: Leader proposes block
- * 2. PREPARE: Validators vote on proposal
- * 3. COMMIT: Validators commit to block
+ *
+ * <p>Three-phase protocol: PRE-PREPARE → PREPARE → COMMIT</p>
+ *
+ * <p><b>Bug 1 fix:</b> {@link #validateBlock} now only checks the block's leader
+ * identity and cryptographic signature. It does NOT count votes — that check was
+ * always reading an empty map and would have permanently blocked finality.
+ * Block application only happens in {@code PeerNode.applyBlockAtSequence()} after
+ * real quorum via {@link #addPrepareVote}/{@link #addCommitVote} network messages,
+ * followed by an explicit {@link #markCommitted} call.</p>
+ *
+ * <p><b>Feature 2 — Reputation-weighted leader selection:</b> each validator's
+ * reputation score drifts based on consensus outcomes:
+ * <ul>
+ *   <li>+{@value #REP_BLOCK_PROPOSED} on successful block proposal (markCommitted)</li>
+ *   <li>{@value #REP_MISSED_SLOT} on view-change timeout (current leader penalised)</li>
+ *   <li>{@value #REP_INVALID_BLOCK} when slashed for double-signing</li>
+ * </ul>
+ * Leader selection uses a deterministic LCG hash of the view number to pick from a
+ * weighted distribution, ensuring every honest node independently computes the same
+ * leader.</p>
  */
 public class PBFTConsensus implements Consensus {
     private static final Logger log = LoggerFactory.getLogger(PBFTConsensus.class);
 
+    // ── reputation deltas ────────────────────────────────────────────────────
+    public static final double REP_BLOCK_PROPOSED = +0.02;
+    public static final double REP_MISSED_SLOT    = -0.10;
+    public static final double REP_INVALID_BLOCK  = -0.50;
+    private static final double REP_MIN           =  0.01; // floor to stay in rotation
+
+    // ── messenger interface ──────────────────────────────────────────────────
 
     public interface PBFTMessenger {
         void broadcastPrepare(long sequenceNumber, String blockHash, String validatorId, byte[] signature);
@@ -35,56 +52,38 @@ public class PBFTConsensus implements Consensus {
     }
 
     private PBFTMessenger messenger;
+    public void setMessenger(PBFTMessenger messenger) { this.messenger = messenger; }
 
-    public void setMessenger(PBFTMessenger messenger) {
-        this.messenger = messenger;
-    }
+    // ── phase enum ───────────────────────────────────────────────────────────
 
-    public enum Phase {
-        PRE_PREPARE,
-        PREPARE,
-        COMMIT,
-        COMMITTED,
-        VIEW_CHANGE,
-        NEW_VIEW
-    }
+    public enum Phase { PRE_PREPARE, PREPARE, COMMIT, COMMITTED, VIEW_CHANGE, NEW_VIEW }
 
-    /**
-     * PBFT message structure
-     */
+    // ── PBFT message ─────────────────────────────────────────────────────────
+
     public static class PBFTMessage {
-        public Phase phase;
-        public long viewNumber;
-        public long sequenceNumber;
+        public Phase  phase;
+        public long   viewNumber;
+        public long   sequenceNumber;
         public String blockHash;
         public String validatorId;
         public byte[] signature;
 
         public PBFTMessage(Phase phase, long viewNumber, long sequenceNumber, String blockHash, String validatorId) {
-            this.phase = phase;
-            this.viewNumber = viewNumber;
+            this.phase          = phase;
+            this.viewNumber     = viewNumber;
             this.sequenceNumber = sequenceNumber;
-            this.blockHash = blockHash;
-            this.validatorId = validatorId;
+            this.blockHash      = blockHash;
+            this.validatorId    = validatorId;
         }
 
-        // Overload for View Change
-        public PBFTMessage(Phase phase, long newView, long lastSeq, String validatorId) {
-            this.phase = phase;
-            this.viewNumber = newView;
-            this.sequenceNumber = lastSeq;
-            this.validatorId = validatorId;
-            this.blockHash = "VIEW_CHANGE_PROOF";
-        }
+
 
         public void sign(BigInteger privateKey) {
-            byte[] message = serializeForSigning();
-            this.signature = Crypto.sign(message, privateKey);
+            this.signature = Crypto.sign(serializeForSigning(), privateKey);
         }
 
         public boolean verify(byte[] publicKey) {
-            byte[] message = serializeForSigning();
-            return Crypto.verify(message, signature, publicKey);
+            return Crypto.verify(serializeForSigning(), signature, publicKey);
         }
 
         private byte[] serializeForSigning() {
@@ -93,172 +92,120 @@ public class PBFTConsensus implements Consensus {
         }
     }
 
-    // Validator set (address -> public key)
-    private final Map<String, byte[]> validators;
+    // ── state ────────────────────────────────────────────────────────────────
 
-    // Maximum faulty nodes: f = (n-1)/3
-    private final int f;
+    /** Validator set: address → compressed public key. */
+    private final Map<String, byte[]>  validators;
+    /** Reputation scores: address → score (≥ REP_MIN). */
+    private final Map<String, Double>  validatorReputation = new ConcurrentHashMap<>();
 
-    // Current view number
-    private long viewNumber;
+    private final int    f;            // max faulty nodes
+    private       long   viewNumber;
 
-    // Message log: sequenceNumber -> phase -> validatorId -> message
+    /** sequenceNumber → phase → validatorId → message */
     private final Map<Long, Map<Phase, Map<String, PBFTMessage>>> messageLog;
 
-    // Blocks pending consensus: sequenceNumber -> block
-    private final Map<Long, Block> pendingBlocks = new ConcurrentHashMap<>();
+    /** Blocks awaiting quorum: seq → block. */
+    private final Map<Long, Block>     pendingBlocks  = new ConcurrentHashMap<>();
 
-    // View Change log: viewNumber -> validatorId -> VIEW_CHANGE message
+    /** View-change votes: newView → validatorId → message. */
     private final Map<Long, Map<String, PBFTMessage>> viewChangeLog = new ConcurrentHashMap<>();
 
-    // Committed blocks
-    private final Set<String> committedBlocks;
+    /** Blocks that have reached quorum and been applied to the chain. */
+    private final Set<String>          committedBlocks;
 
-    // Last committed sequence number
-    private long lastCommittedSeq = 0;
+    private long                       lastCommittedSeq = 0;
+    private final Set<String>          slashedValidators = ConcurrentHashMap.newKeySet();
 
-    // Slashed validators (double-signers)
-    private final Set<String> slashedValidators = ConcurrentHashMap.newKeySet();
+    private final String               localValidatorId;
+    private final BigInteger           localPrivateKey;
 
-    // Consensus timer
     private final ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor();
-    private ScheduledFuture<?> currentTimerTask;
-    private static final long CONSENSUS_TIMEOUT_MS = 15000; // 15 seconds for IoT stability
+    private ScheduledFuture<?>             currentTimerTask;
+    private long                       timeoutMs = 15_000;
 
-    private final String localValidatorId;
-    private final BigInteger localPrivateKey;
+    // ── constructor ──────────────────────────────────────────────────────────
 
     public PBFTConsensus(Map<String, byte[]> validators, String localValidatorId, BigInteger localPrivateKey) {
-        if (validators.size() < 4) {
+        if (validators.size() < 4)
             throw new IllegalArgumentException("PBFT requires at least 4 validators (3f+1 where f=1)");
-        }
 
-        this.validators = new ConcurrentHashMap<>(validators);
-        this.f = (validators.size() - 1) / 3;
-        this.viewNumber = 0;
-        this.localValidatorId = localValidatorId;
-        this.localPrivateKey = localPrivateKey;
-        this.messageLog = new ConcurrentHashMap<>();
-        this.committedBlocks = ConcurrentHashMap.newKeySet();
+        this.validators        = new ConcurrentHashMap<>(validators);
+        this.f                 = (validators.size() - 1) / 3;
+        this.viewNumber        = 0;
+        this.localValidatorId  = localValidatorId;
+        this.localPrivateKey   = localPrivateKey;
+        this.messageLog        = new ConcurrentHashMap<>();
+        this.committedBlocks   = ConcurrentHashMap.newKeySet();
 
-        log.info("[PBFT] Initialized as {} with {} validators, f={}", localValidatorId, validators.size(), f);
+        initReputation();
+        log.info("[PBFT] Initialized as {} with {} validators (f={})", localValidatorId, validators.size(), f);
         resetTimer();
     }
 
-    private void resetTimer() {
-        if (currentTimerTask != null) {
-            currentTimerTask.cancel(false);
-        }
-        currentTimerTask = timer.schedule(() -> {
-            log.warn("[PBFT] Consensus timeout! Triggering view change...");
-            triggerViewChange();
-        }, CONSENSUS_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+    public void setTimeout(long ms) {
+        this.timeoutMs = ms;
+        resetTimer();
     }
 
+    private void initReputation() {
+        for (String id : validators.keySet()) {
+            validatorReputation.put(id, 1.0);
+        }
+    }
+
+    // ── timer ────────────────────────────────────────────────────────────────
+
+    private void resetTimer() {
+        if (currentTimerTask != null) currentTimerTask.cancel(false);
+        currentTimerTask = timer.schedule(() -> {
+            log.warn("[PBFT] Consensus timeout — triggering view change");
+            triggerViewChange();
+        }, timeoutMs, TimeUnit.MILLISECONDS);
+    }
+
+    // ── Consensus interface implementation ───────────────────────────────────
+
+    /**
+     * BUG 1 FIX — validateBlock() now ONLY checks:
+     * <ol>
+     *   <li>Block already committed (fast path).</li>
+     *   <li>Block is from the current view's leader.</li>
+     *   <li>Leader's signature on the block is valid.</li>
+     * </ol>
+     * Vote counting has been removed entirely; it was reading an always-empty map.
+     * Actual quorum logic is enforced by {@code PeerNode.applyBlockAtSequence()}
+     * which calls {@link #markCommitted} only after real network votes.
+     */
     @Override
     public boolean validateBlock(Block block, List<Block> chain) {
         String blockHash = block.getHash();
-        long sequenceNumber = block.getIndex();
 
-        // Check if already committed
-        if (committedBlocks.contains(blockHash)) {
-            return true;
-        }
+        // Fast path: already passed through the full PBFT commit path
+        if (committedBlocks.contains(blockHash)) return true;
 
-        // Get message log for this sequence number
-        Map<Phase, Map<String, PBFTMessage>> seqLog = messageLog.computeIfAbsent(
-                sequenceNumber, k -> new ConcurrentHashMap<>());
-
-        // Phase 1: PRE-PREPARE (verify leader proposed this block)
+        // Verify leader identity
         String leader = selectLeader(viewNumber);
         if (!block.getValidatorId().equals(leader)) {
-            log.warn("[PBFT] Block not from current leader. Expected: {}, Got: {}", leader, block.getValidatorId());
+            log.warn("[PBFT] Block not from current leader. Expected: {}, Got: {}",
+                    leader, block.getValidatorId());
             return false;
         }
 
-        // Verify block signature
+        // Verify leader signature
         byte[] leaderPubKey = validators.get(leader);
         if (leaderPubKey == null || block.getSignature() == null) {
+            log.warn("[PBFT] Missing pubkey or signature for leader {}", leader);
             return false;
         }
 
         if (!Crypto.verify(Crypto.hash(block.serializeCanonical()), block.getSignature(), leaderPubKey)) {
-            log.warn("[PBFT] Invalid leader signature");
+            log.warn("[PBFT] Invalid leader signature on block {}", blockHash);
             return false;
         }
 
-        // Phase 2: PREPARE - collect prepare votes
-        Map<String, PBFTMessage> prepareVotes = seqLog.computeIfAbsent(
-                Phase.PREPARE, k -> new ConcurrentHashMap<>());
-
-        // Simulate collecting prepare votes (in real implementation, this would be
-        // network communication)
-        // For now, assume we have enough votes if block is valid
-        int prepareCount = prepareVotes.size();
-        int requiredVotes = 2 * f + 1;
-
-        if (prepareCount < requiredVotes) {
-            // In production, this would wait for votes from network
-            log.debug("[PBFT] Insufficient prepare votes: {}/{}", prepareCount, requiredVotes);
-            return false;
-        }
-
-        // Phase 3: COMMIT - collect commit votes
-        Map<String, PBFTMessage> commitVotes = seqLog.computeIfAbsent(
-                Phase.COMMIT, k -> new ConcurrentHashMap<>());
-
-        int commitCount = commitVotes.size();
-
-        if (commitCount < requiredVotes) {
-            log.debug("[PBFT] Insufficient commit votes: {}/{}", commitCount, requiredVotes);
-            return false;
-        }
-
-        // Block is committed
-        committedBlocks.add(blockHash);
-        lastCommittedSeq = Math.max(lastCommittedSeq, sequenceNumber);
-        log.info("[PBFT] Block {} committed with {} votes", blockHash, commitCount);
-        resetTimer();
-
+        // Structurally valid PRE-PREPARE — quorum enforcement is in PeerNode
         return true;
-    }
-
-    /**
-     * Add a VIEW_CHANGE vote from a validator
-     */
-    public void addViewChangeVote(long newView, long lastSeq, String validatorId, byte[] signature) {
-        if (!validators.containsKey(validatorId)) {
-            throw new SecurityException("Unknown validator: " + validatorId);
-        }
-
-        PBFTMessage msg = new PBFTMessage(Phase.VIEW_CHANGE, newView, lastSeq, validatorId);
-        msg.signature = signature;
-
-        if (!msg.verify(validators.get(validatorId))) {
-            throw new SecurityException("Invalid VIEW_CHANGE signature from " + validatorId);
-        }
-
-        viewChangeLog.computeIfAbsent(newView, k -> new ConcurrentHashMap<>())
-                .put(validatorId, msg);
-
-        log.info("[PBFT] Added VIEW_CHANGE for view {} from {}", newView, validatorId);
-
-        // Check for quorum
-        if (viewChangeLog.get(newView).size() >= (2 * f + 1)) {
-            processViewChange(newView);
-        }
-    }
-
-    private void processViewChange(long newView) {
-        if (this.viewNumber >= newView) return;
-
-        String nextLeader = selectLeader(newView);
-        log.info("[PBFT] View Change Quorum reached for view {}. Next leader: {}", newView, nextLeader);
-
-        // If I am the next leader, broadcast NEW_VIEW
-        // This would require my own validatorId and private key, which usually come from the node
-        // For now, we update our view
-        this.viewNumber = newView;
     }
 
     @Override
@@ -266,190 +213,263 @@ public class PBFTConsensus implements Consensus {
         return validators.containsKey(validatorId);
     }
 
+    /**
+     * Returns true iff this block has gone through the full PBFT commit path.
+     * Called by {@code Blockchain.applyBlockInternal()} — requires
+     * {@link #markCommitted} to have been called BEFORE {@code applyBlock()}.
+     */
     @Override
-    public boolean verifyBlock(Block block, Validator validator) throws Exception {
-        // For PBFT, we check if the block has reached quorum (committed phase)
+    public boolean verifyBlock(Block block, Validator validator) {
         return committedBlocks.contains(block.getHash());
     }
 
     @Override
     public Block selectLeader(List<String> authorizedNodes, long round) {
-        return null; // Not typically used this way in PBFT
+        return null; // Not used in PBFT
     }
 
     @Override
     public List<Validator> getValidators() {
         List<Validator> list = new ArrayList<>();
-        for (Map.Entry<String, byte[]> entry : validators.entrySet()) {
-            list.add(new Validator(entry.getKey(), entry.getValue()));
-        }
+        for (Map.Entry<String, byte[]> e : validators.entrySet())
+            list.add(new Validator(e.getKey(), e.getValue()));
         return list;
     }
 
+    // ── FEATURE 2: Reputation-weighted leader selection ──────────────────────
+
     /**
-     * Select leader for current view (round-robin)
+     * Selects the leader for the given view using a reputation-weighted
+     * deterministic selection. The view number is hashed with an LCG to produce
+     * a stable, uniform target value, then mapped to the cumulative weight
+     * distribution. All honest nodes with identical reputation maps will compute
+     * the same leader.
      */
     public String selectLeader(long view) {
-        List<String> validatorList = new ArrayList<>(validators.keySet());
-        Collections.sort(validatorList); // Deterministic ordering
-        int leaderIndex = (int) (view % validatorList.size());
-        return validatorList.get(leaderIndex);
-    }
+        List<String> sorted = new ArrayList<>(validators.keySet());
+        Collections.sort(sorted); // deterministic ordering
 
-    /**
-     * Add a prepare vote for a block
-     */
-    public void addPrepareVote(long sequenceNumber, String blockHash, String validatorId, byte[] signature) {
-        if (!validators.containsKey(validatorId)) {
-            throw new SecurityException("Unknown validator: " + validatorId);
-        }
+        if (sorted.isEmpty()) return null;
+        if (sorted.size() == 1) return sorted.get(0);
 
-        PBFTMessage msg = new PBFTMessage(Phase.PREPARE, viewNumber, sequenceNumber, blockHash, validatorId);
-        msg.signature = signature;
-
-        // Verify signature
-        if (!msg.verify(validators.get(validatorId))) {
-            throw new SecurityException("Invalid signature from validator: " + validatorId);
-        }
-
-        messageLog.computeIfAbsent(sequenceNumber, k -> new ConcurrentHashMap<>())
-                .computeIfAbsent(Phase.PREPARE, k -> new ConcurrentHashMap<>())
-                .compute(validatorId, (id, existing) -> {
-                    if (existing != null && !existing.blockHash.equals(blockHash)) {
-                        log.error("[PBFT] SLASH: Double PREPARE from {} for different hashes: {} AND {}", id, existing.blockHash, blockHash);
-                        slashedValidators.add(id);
-                    }
-                    return msg;
-                });
-
-        log.debug("[PBFT] Added PREPARE vote from {} for block {}", validatorId, blockHash);
-    }
-
-    /**
-     * Add a commit vote for a block
-     */
-    public void addCommitVote(long sequenceNumber, String blockHash, String validatorId, byte[] signature) {
-        if (!validators.containsKey(validatorId)) {
-            throw new SecurityException("Unknown validator: " + validatorId);
-        }
-
-        PBFTMessage msg = new PBFTMessage(Phase.COMMIT, viewNumber, sequenceNumber, blockHash, validatorId);
-        msg.signature = signature;
-
-        // Verify signature
-        if (!msg.verify(validators.get(validatorId))) {
-            throw new SecurityException("Invalid signature from validator: " + validatorId);
-        }
-
-        messageLog.computeIfAbsent(sequenceNumber, k -> new ConcurrentHashMap<>())
-                .computeIfAbsent(Phase.COMMIT, k -> new ConcurrentHashMap<>())
-                .compute(validatorId, (id, existing) -> {
-                    if (existing != null && !existing.blockHash.equals(blockHash)) {
-                        log.error("[PBFT] SLASH: Double COMMIT from {} for different hashes: {} AND {}", id, existing.blockHash, blockHash);
-                        slashedValidators.add(id);
-                    }
-                    return msg;
-                });
-
-        log.debug("[PBFT] Added COMMIT vote from {} for block {}", validatorId, blockHash);
-    }
-
-    /**
-     * Trigger view change (when leader is faulty)
-     */
-    public void triggerViewChange() {
-        long nextView = viewNumber + 1;
-        log.info("[PBFT] Initiating View Change to view {}", nextView);
-        
-        PBFTMessage vcMsg = new PBFTMessage(Phase.VIEW_CHANGE, nextView, lastCommittedSeq, localValidatorId);
-        if (localPrivateKey != null) {
-            vcMsg.sign(localPrivateKey);
-            if (messenger != null) {
-                messenger.broadcastViewChange(nextView, lastCommittedSeq, localValidatorId, vcMsg.signature);
+        // Compute cumulative reputation weights
+        double total = 0;
+        double[] weights = new double[sorted.size()];
+        for (int i = 0; i < sorted.size(); i++) {
+            String valId = sorted.get(i);
+            // [FEATURE B1] Exclude highly threatening validators
+            if (com.hybrid.blockchain.ai.PredictiveThreatScorer.getInstance().predictThreatScore(valId) > 0.7) {
+                weights[i] = 0.0;
+            } else {
+                weights[i] = Math.max(REP_MIN, validatorReputation.getOrDefault(valId, 1.0));
             }
+            total += weights[i];
         }
-        
-        // Add our own vote
-        viewChangeLog.computeIfAbsent(nextView, k -> new ConcurrentHashMap<>())
-                .put(localValidatorId, vcMsg);
+
+        // LCG hash of view for deterministic, uniform-ish target in [0, total)
+        long h = view * 6364136223846793005L + 1442695040888963407L;
+        double target = ((h & Long.MAX_VALUE) / (double) Long.MAX_VALUE) * total;
+
+        double cumulative = 0;
+        for (int i = 0; i < sorted.size(); i++) {
+            cumulative += weights[i];
+            if (cumulative >= target) return sorted.get(i);
+        }
+        return sorted.get((int)(Math.abs(view) % sorted.size()));
     }
 
-    /**
-     * Get current leader
-     */
-    public String getCurrentLeader() {
-        return selectLeader(viewNumber);
-    }
+    // ── FEATURE 2: Reputation management ────────────────────────────────────
 
     /**
-     * Get validator count
+     * Adjusts a validator's reputation by {@code delta}, clamped to ≥ {@value #REP_MIN}.
+     * This must only be called at CONSENSUS BOUNDARIES (block commit, view change)
+     * to ensure all nodes update reputation identically.
      */
-    public int getValidatorCount() {
-        return validators.size();
+    public void updateReputation(String validatorId, double delta) {
+        if (!validators.containsKey(validatorId)) return;
+        validatorReputation.merge(validatorId, delta,
+                (old, d) -> Math.max(REP_MIN, old + d));
+        // [FEATURE B1] Record activity for AI threat model
+        com.hybrid.blockchain.ai.PredictiveThreatScorer.getInstance().recordActivity(validatorId, delta, viewNumber);
+        log.debug("[PBFT] Reputation {} → {}", validatorId,
+                String.format("%.4f", validatorReputation.get(validatorId)));
     }
 
-    /**
-     * Get maximum faulty nodes
-     */
-    public int getMaxFaultyNodes() {
-        return f;
+    /** Read-only view of all validator reputation scores. */
+    public Map<String, Double> getReputationMap() {
+        return Collections.unmodifiableMap(new LinkedHashMap<>(validatorReputation));
     }
 
-    /**
-     * Check if we have quorum for a phase
-     */
+    // ── Vote collection ──────────────────────────────────────────────────────
+
+    /** Adds a PREPARE vote from a validator. */
+    public void addPrepareVote(long seq, String blockHash, String validatorId, byte[] signature) {
+        ensureKnownValidator(validatorId);
+
+        // [FEATURE B1] Warn on high threat score
+        if (com.hybrid.blockchain.ai.PredictiveThreatScorer.getInstance().predictThreatScore(validatorId) > 0.5) {
+            log.warn("[AI-THREAT] High threat score validator {} sent PREPARE vote for seq {}", validatorId, seq);
+        }
+
+        PBFTMessage msg = new PBFTMessage(Phase.PREPARE, viewNumber, seq, blockHash, validatorId);
+        msg.signature = signature;
+        if (!msg.verify(validators.get(validatorId)))
+            throw new SecurityException("Invalid PREPARE signature from " + validatorId);
+
+        messageLog.computeIfAbsent(seq, k -> new ConcurrentHashMap<>())
+                  .computeIfAbsent(Phase.PREPARE, k -> new ConcurrentHashMap<>())
+                  .compute(validatorId, (id, existing) -> {
+                      if (existing != null && !existing.blockHash.equals(blockHash)) {
+                          log.error("[PBFT] SLASH: double-PREPARE from {} ({} vs {})",
+                                  id, existing.blockHash, blockHash);
+                          slashedValidators.add(id);
+                          updateReputation(id, REP_INVALID_BLOCK);
+                      }
+                      return msg;
+                  });
+        log.debug("[PBFT] PREPARE from {} seq={}", validatorId, seq);
+    }
+
+    /** Adds a COMMIT vote from a validator. */
+    public void addCommitVote(long seq, String blockHash, String validatorId, byte[] signature) {
+        ensureKnownValidator(validatorId);
+
+        // [FEATURE B1] Warn on high threat score
+        if (com.hybrid.blockchain.ai.PredictiveThreatScorer.getInstance().predictThreatScore(validatorId) > 0.5) {
+            log.warn("[AI-THREAT] High threat score validator {} sent COMMIT vote for seq {}", validatorId, seq);
+        }
+
+        PBFTMessage msg = new PBFTMessage(Phase.COMMIT, viewNumber, seq, blockHash, validatorId);
+        msg.signature = signature;
+        if (!msg.verify(validators.get(validatorId)))
+            throw new SecurityException("Invalid COMMIT signature from " + validatorId);
+
+        messageLog.computeIfAbsent(seq, k -> new ConcurrentHashMap<>())
+                  .computeIfAbsent(Phase.COMMIT, k -> new ConcurrentHashMap<>())
+                  .compute(validatorId, (id, existing) -> {
+                      if (existing != null && !existing.blockHash.equals(blockHash)) {
+                          log.error("[PBFT] SLASH: double-COMMIT from {} ({} vs {})",
+                                  id, existing.blockHash, blockHash);
+                          slashedValidators.add(id);
+                          updateReputation(id, REP_INVALID_BLOCK);
+                      }
+                      return msg;
+                  });
+        log.debug("[PBFT] COMMIT from {} seq={}", validatorId, seq);
+    }
+
+    /** Checks whether phase has reached 2f+1 votes. */
     public boolean hasQuorum(long sequenceNumber, Phase phase) {
         Map<Phase, Map<String, PBFTMessage>> seqLog = messageLog.get(sequenceNumber);
-        if (seqLog == null) {
-            return false;
-        }
-
+        if (seqLog == null) return false;
         Map<String, PBFTMessage> votes = seqLog.get(phase);
-        if (votes == null) {
-            return false;
-        }
-
+        if (votes == null) return false;
         return votes.size() >= (2 * f + 1);
     }
 
+    // ── Bug 1: markCommitted ─────────────────────────────────────────────────
+
     /**
-     * Get statistics
+     * Called by {@code PeerNode.applyBlockAtSequence()} BEFORE applying the block
+     * to the chain, so that {@link #verifyBlock} returns {@code true} when
+     * {@code Blockchain.applyBlockInternal()} calls it.
+     *
+     * <p>Also credits the block proposer (+{@value #REP_BLOCK_PROPOSED} reputation).</p>
+     *
+     * @param blockHash  the committed block's hash
+     * @param seq        its sequence (index) number
+     * @param proposerId the validator that proposed the block
      */
-    // Get slashed validators
-    public Set<String> getSlashedValidators() {
-        return Collections.unmodifiableSet(slashedValidators);
+    public void markCommitted(String blockHash, long seq, String proposerId) {
+        committedBlocks.add(blockHash);
+        lastCommittedSeq = Math.max(lastCommittedSeq, seq);
+        updateReputation(proposerId, REP_BLOCK_PROPOSED);
+        log.info("[PBFT] Block {} committed at seq {} (proposer={})", blockHash, seq, proposerId);
+        resetTimer();
     }
 
-    // Clear slashed status (e.g. after punishment)
-    public void clearSlashedValidator(String id) {
-        slashedValidators.remove(id);
+    // ── View change ──────────────────────────────────────────────────────────
+
+    public void addViewChangeVote(long newView, long lastSeq, String validatorId, byte[] signature) {
+        ensureKnownValidator(validatorId);
+
+        PBFTMessage msg = new PBFTMessage(Phase.VIEW_CHANGE, newView, lastSeq, "VIEW_CHANGE_PROOF", validatorId); // [FIX A4]
+        msg.signature = signature;
+        if (!msg.verify(validators.get(validatorId)))
+            throw new SecurityException("Invalid VIEW_CHANGE signature from " + validatorId);
+
+        viewChangeLog.computeIfAbsent(newView, k -> new ConcurrentHashMap<>())
+                     .put(validatorId, msg);
+        log.info("[PBFT] VIEW_CHANGE for view {} from {}", newView, validatorId);
+
+        if (viewChangeLog.get(newView).size() >= (2 * f + 1))
+            processViewChange(newView);
     }
 
-    public void setPendingBlock(long seq, Block b) { pendingBlocks.put(seq, b); }
-    public Block getPendingBlock(long seq) { return pendingBlocks.get(seq); }
-    public Block removePendingBlock(long seq) { return pendingBlocks.remove(seq); }
-    public long getViewNumber() { return viewNumber; }
-    public PBFTMessenger getMessenger() { return messenger; }
+    private void processViewChange(long newView) {
+        if (viewNumber >= newView) return;
+        String nextLeader = selectLeader(newView);
+        log.info("[PBFT] View {} quorum reached. Next leader: {}", newView, nextLeader);
+        this.viewNumber = newView;
+    }
+
+    public void triggerViewChange() {
+        long nextView = viewNumber + 1;
+        // Penalise the leader that caused the timeout (Bug 2 protocol requirement)
+        String faultyLeader = selectLeader(viewNumber);
+        updateReputation(faultyLeader, REP_MISSED_SLOT);
+        log.info("[PBFT] Triggering view change {} → {}. Penalised leader: {}", viewNumber, nextView, faultyLeader);
+
+        PBFTMessage vcMsg = new PBFTMessage(Phase.VIEW_CHANGE, nextView, lastCommittedSeq, "VIEW_CHANGE_PROOF", localValidatorId); // [FIX A4]
+        if (localPrivateKey != null) {
+            vcMsg.sign(localPrivateKey);
+            if (messenger != null)
+                messenger.broadcastViewChange(nextView, lastCommittedSeq, localValidatorId, vcMsg.signature);
+        }
+        viewChangeLog.computeIfAbsent(nextView, k -> new ConcurrentHashMap<>())
+                     .put(localValidatorId, vcMsg);
+    }
+
+    // ── Accessors ────────────────────────────────────────────────────────────
+
+    public String getCurrentLeader()   { return selectLeader(viewNumber); }
+    public int    getValidatorCount()  { return validators.size(); }
+    public int    getMaxFaultyNodes()  { return f; }
+    public long   getViewNumber()      { return viewNumber; }
+    public PBFTMessenger getMessenger(){ return messenger; }
+
+    public Set<String> getSlashedValidators()      { return Collections.unmodifiableSet(slashedValidators); }
+    public void        clearSlashedValidator(String id) { slashedValidators.remove(id); }
+
+    public void setPendingBlock(long seq, Block b)  { pendingBlocks.put(seq, b); }
+    public Block getPendingBlock(long seq)           { return pendingBlocks.get(seq); }
+    public Block removePendingBlock(long seq)        { return pendingBlocks.remove(seq); }
 
     // Test compatibility stubs
     public boolean onPrepare(String hash, String valId, byte[] sig) { return false; }
-    public boolean onCommit(String hash, String valId, byte[] sig) { return false; }
+    public boolean onCommit(String hash, String valId, byte[] sig)  { return false; }
 
     public Map<String, Object> getStats() {
         Map<String, Object> stats = new HashMap<>();
-        stats.put("validators", validators.size());
-        stats.put("maxFaultyNodes", f);
-        stats.put("viewNumber", viewNumber);
-        stats.put("currentLeader", getCurrentLeader());
-        stats.put("committedBlocks", committedBlocks.size());
+        stats.put("validators",       validators.size());
+        stats.put("maxFaultyNodes",   f);
+        stats.put("viewNumber",       viewNumber);
+        stats.put("currentLeader",    getCurrentLeader());
+        stats.put("committedBlocks",  committedBlocks.size());
+        stats.put("reputation",       new HashMap<>(validatorReputation));
         return stats;
     }
 
     @Override
     public void shutdown() {
-        if (currentTimerTask != null) {
-            currentTimerTask.cancel(true);
-        }
+        if (currentTimerTask != null) currentTimerTask.cancel(true);
         timer.shutdownNow();
+    }
+
+    // ── helpers ──────────────────────────────────────────────────────────────
+
+    private void ensureKnownValidator(String id) {
+        if (!validators.containsKey(id))
+            throw new SecurityException("Unknown validator: " + id);
     }
 }

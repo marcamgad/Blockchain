@@ -4,6 +4,7 @@ import com.hybrid.blockchain.Block;
 import com.hybrid.blockchain.Blockchain;
 import com.hybrid.blockchain.Config;
 import com.hybrid.blockchain.Crypto;
+import com.hybrid.blockchain.FeeMarket;
 import com.hybrid.blockchain.HexUtils;
 import com.hybrid.blockchain.Mempool;
 import com.hybrid.blockchain.PeerNode;
@@ -13,6 +14,7 @@ import com.hybrid.blockchain.Validator;
 import com.hybrid.blockchain.consensus.PBFTConsensus;
 import com.hybrid.blockchain.security.RateLimiter;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.annotation.ComponentScan;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.http.ResponseEntity;
 import org.springframework.context.annotation.Bean;
@@ -32,6 +34,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 @SpringBootApplication
+@ComponentScan(basePackages = "com.hybrid")
 @RestController
 @RequestMapping("/api/v1")
 public class IoTRestAPI {
@@ -796,6 +799,159 @@ public ResponseEntity<?> adminMetrics() {
         blockchainLock.readLock().unlock();
     }
 }
+
+    // ============================================
+    // Phase 8: AI Features
+    // ============================================
+    @GetMapping("/ai/threat-scores")
+    public ResponseEntity<?> getPredictiveThreatScores() {
+        return ResponseEntity.ok(com.hybrid.blockchain.ai.PredictiveThreatScorer.getInstance().getAllScores());
+    }
+
+    // ============================================
+    // AI/ML Endpoints (Task 3)
+    // ============================================
+
+    /**
+     * GET /api/v1/chain/tip
+     * Returns the hash of the current chain tip (used by docker-test.sh).
+     */
+    @GetMapping("/chain/tip")
+    public ResponseEntity<?> getChainTip() {
+        blockchainLock.readLock().lock();
+        try {
+            return ResponseEntity.ok(Map.of(
+                    "hash",   blockchain.getLatestBlock().getHash(),
+                    "height", blockchain.getHeight()));
+        } finally {
+            blockchainLock.readLock().unlock();
+        }
+    }
+
+    /**
+     * GET /api/v1/ai/anomalies/{deviceId}
+     * Returns the Z-score anomaly detection statistics for a device.
+     */
+    @GetMapping("/ai/anomalies/{deviceId}")
+    public ResponseEntity<?> getAnomalyStats(@PathVariable("deviceId") String deviceId) {
+        com.hybrid.blockchain.ai.TelemetryAnomalyDetector.AnomalyStats stats =
+                com.hybrid.blockchain.ai.TelemetryAnomalyDetector.getInstance().getStats(deviceId);
+        if (stats == null) {
+            return ResponseEntity.status(404).body(Map.of("error", "No telemetry data for device " + deviceId));
+        }
+        return ResponseEntity.ok(Map.of(
+                "deviceId",             stats.deviceId,
+                "totalChecked",         stats.totalChecked,
+                "anomaliesDetected",    stats.anomaliesDetected,
+                "lastValue",            stats.lastValue,
+                "lastZScore",           stats.lastZScore,
+                "lastDetectedAt",       stats.lastDetectedTimestamp,
+                "windowSize",           com.hybrid.blockchain.ai.TelemetryAnomalyDetector.getInstance().getWindowSize(deviceId)));
+    }
+
+    /**
+     * GET /api/v1/ai/anomalies
+     * Returns anomaly stats for all known devices.
+     */
+    @GetMapping("/ai/anomalies")
+    public ResponseEntity<?> getAllAnomalyStats() {
+        var all = com.hybrid.blockchain.ai.TelemetryAnomalyDetector.getInstance().getAllStats();
+        return ResponseEntity.ok(all.entrySet().stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        Map.Entry::getKey,
+                        e -> Map.of(
+                                "totalChecked",      e.getValue().totalChecked,
+                                "anomaliesDetected", e.getValue().anomaliesDetected,
+                                "lastZScore",        e.getValue().lastZScore))));
+    }
+
+    /**
+     * GET /api/v1/consensus/reputation
+     * Returns the reputation scores for all known validators.
+     */
+    @GetMapping("/consensus/reputation")
+    public ResponseEntity<?> getValidatorReputation() {
+        if (sharedPbft == null) {
+            return ResponseEntity.status(503).body(Map.of("error", "PBFT not initialized"));
+        }
+        return ResponseEntity.ok(Map.of(
+                "reputations",    sharedPbft.getReputationMap(),
+                "currentLeader",  sharedPbft.getCurrentLeader(),
+                "viewNumber",     sharedPbft.getViewNumber()));
+    }
+
+    /**
+     * POST /api/v1/ai/federated/submit
+     * Body: {"nodeId":"...", "weights":[1.0, 2.0, ...]}
+     * Submits a local model weight update from a node.
+     */
+    @PostMapping("/ai/federated/submit")
+    public ResponseEntity<?> submitFederatedUpdate(@RequestBody Map<String, Object> payload) {
+        try {
+            String nodeId = (String) payload.get("nodeId");
+            if (nodeId == null || nodeId.isBlank())
+                return ResponseEntity.status(400).body(Map.of("error", "nodeId is required"));
+
+            @SuppressWarnings("unchecked")
+            java.util.List<Number> rawWeights = (java.util.List<Number>) payload.get("weights");
+            if (rawWeights == null || rawWeights.isEmpty())
+                return ResponseEntity.status(400).body(Map.of("error", "weights array is required"));
+
+            double[] weights = new double[rawWeights.size()];
+            for (int i = 0; i < weights.length; i++) weights[i] = rawWeights.get(i).doubleValue();
+
+            com.hybrid.blockchain.ai.FederatedLearningManager.getInstance().submitUpdate(nodeId, weights);
+
+            return ResponseEntity.ok(Map.of(
+                    "status",         "accepted",
+                    "nodeId",         nodeId,
+                    "weightCount",    weights.length,
+                    "pendingUpdates", com.hybrid.blockchain.ai.FederatedLearningManager.getInstance().getPendingUpdateCount()));
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * GET /api/v1/ai/federated/model
+     * Returns the latest aggregated model and its SHA-256 hash.
+     */
+    @GetMapping("/ai/federated/model")
+    public ResponseEntity<?> getFederatedModel() {
+        com.hybrid.blockchain.ai.FederatedLearningManager mgr =
+                com.hybrid.blockchain.ai.FederatedLearningManager.getInstance();
+        double[] model = mgr.getCurrentModel();
+        return ResponseEntity.ok(Map.of(
+                "round",                 mgr.getRoundNumber(),
+                "modelHash",             mgr.getCurrentModelHash(),
+                "weightCount",           model.length,
+                "pendingUpdates",        mgr.getPendingUpdateCount(),
+                "lastAggregatedAt",      mgr.getLastAggregatedTimestamp(),
+                "model",                 model.length <= 256 ? model : "[truncated — too large to inline]"));
+    }
+
+    /**
+     * GET /api/v1/ai/fee-prediction?txCount=N&blockTimeMs=M
+     * Predicts the optimal fee for a transaction using OLS regression.
+     */
+    @GetMapping("/ai/fee-prediction")
+    public ResponseEntity<?> predictFee(
+            @RequestParam(value = "txCount",    defaultValue = "10")  long txCount,
+            @RequestParam(value = "blockTimeMs", defaultValue = "0")  long blockTimeMs) {
+        blockchainLock.readLock().lock();
+        try {
+            int validatorCount = (sharedPbft != null) ? sharedPbft.getValidatorCount() : 0;
+            long predicted = FeeMarket.predictOptimalFee(txCount, blockTimeMs, blockchain.getStorage(), validatorCount);
+            long current   = FeeMarket.getCurrentBaseFee(blockchain.getStorage());
+            return ResponseEntity.ok(Map.of(
+                    "predictedFee",  predicted,
+                    "currentBaseFee",current,
+                    "inputTxCount",  txCount,
+                    "inputBlockTimeMs", blockTimeMs));
+        } finally {
+            blockchainLock.readLock().unlock();
+        }
+    }
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<?> handleException(Exception e) {

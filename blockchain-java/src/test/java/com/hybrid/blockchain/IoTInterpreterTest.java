@@ -37,8 +37,8 @@ public class IoTInterpreterTest {
     @DisplayName("Invariant: Storage persistence writes and reads correctly")
     public void testStoragePersistence() throws Exception {
         ByteBuffer code = ByteBuffer.allocate(31);
-        code.put(OpCode.PUSH.getByte()).putLong(100L); // value
         code.put(OpCode.PUSH.getByte()).putLong(1L);   // key
+        code.put(OpCode.PUSH.getByte()).putLong(100L); // value
         code.put(OpCode.SSTORE.getByte());
         code.put(OpCode.PUSH.getByte()).putLong(1L);   // key
         code.put(OpCode.SLOAD.getByte());

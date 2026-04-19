@@ -1,6 +1,7 @@
 package com.hybrid.blockchain.testutil;
 
 import com.hybrid.blockchain.Transaction;
+import com.hybrid.blockchain.TestKeyPair;
 
 /**
  * Standardized factory for creating deterministically verifiable transactions during tests.

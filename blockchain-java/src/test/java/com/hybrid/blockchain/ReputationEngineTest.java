@@ -1,11 +1,11 @@
 package com.hybrid.blockchain;
 
 import com.hybrid.blockchain.consensus.PBFTConsensus;
-import com.hybrid.blockchain.testutil.TestKeyPair;
 import com.hybrid.blockchain.lifecycle.DeviceLifecycleManager;
 import com.hybrid.blockchain.lifecycle.DeviceLifecycleManager.DeviceRecord;
 import com.hybrid.blockchain.lifecycle.DeviceLifecycleManager.DeviceStatus;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
@@ -114,5 +114,42 @@ public class ReputationEngineTest {
         // Verify score decreased due to penalty overcoming the 0.01 increment
         updated = blockchain.getState().getLifecycleManager().getDeviceRecord(deviceId);
         assertThat(updated.getReputationScore()).isLessThan(scoreAfterActivity);
+        // Verify score decreased due to penalty overcoming the 0.01 increment
+        updated = blockchain.getState().getLifecycleManager().getDeviceRecord(deviceId);
+        assertThat(updated.getReputationScore()).isLessThan(scoreAfterActivity);
+    }
+
+    @Test
+    @DisplayName("Severe: Multiple anomalies must drive reputation to zero")
+    void testSevereReputationPenalty() throws Exception {
+        TestKeyPair deviceKey = new TestKeyPair(2);
+        String deviceId = deviceKey.getAddress();
+        
+        // Register device
+        DeviceRecord record = new DeviceRecord(deviceId, "TestMaker", "ModelX");
+        record.setStatus(DeviceStatus.ACTIVE);
+        record.setReputationScore(0.5);
+        registryPut(deviceId, record);
+        blockchain.getState().credit(deviceId, 1000000);
+
+        // Send many anomalous telemetry transactions
+        // Each anomaly detected by TelemetryAnomalyDetector should (logic in Blockchain.java) trigger a reputation deduction
+        for (int i = 0; i < 10; i++) {
+            // "999.9" is a clear anomaly compared to previous 20.0s (if we warm up)
+            // But we can also test the ReputationEngine.deduct() directly if we want to isolate.
+            // Let's test the engine's deduction logic via LifecycleManager.
+            blockchain.getState().getLifecycleManager().reportAnomaly(deviceId);
+        }
+        
+        DeviceRecord updated = blockchain.getState().getLifecycleManager().getDeviceRecord(deviceId);
+        assertThat(updated.getReputationScore()).isLessThan(0.1);
+    }
+
+    private void registryPut(String deviceId, DeviceRecord record) throws Exception {
+        java.lang.reflect.Field registryField = DeviceLifecycleManager.class.getDeclaredField("deviceRegistry");
+        registryField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        java.util.Map<String, DeviceRecord> registry = (java.util.Map<String, DeviceRecord>) registryField.get(blockchain.getState().getLifecycleManager());
+        registry.put(deviceId, record);
     }
 }

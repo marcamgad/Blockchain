@@ -13,7 +13,11 @@ public final class Transaction {
 
     public enum Type {
         ACCOUNT, UTXO, CONTRACT, IOT_MANAGEMENT, MINT, BURN, TOKEN_TRANSFER, TELEMETRY,
-        TOKEN_REGISTER, TOKEN_MINT, TOKEN_BURN
+        TOKEN_REGISTER, TOKEN_MINT, TOKEN_BURN,
+        /** Federated-learning local weight update submitted by a node. */
+        FEDERATED_UPDATE,
+        /** Aggregated model committed on-chain by the PBFT leader. */
+        FEDERATED_COMMIT
     }
 
     private static final byte[] DOMAIN_PREFIX = "TX\0".getBytes(StandardCharsets.UTF_8);
@@ -25,8 +29,8 @@ public final class Transaction {
     private final long fee;
     private final long nonce;
     private final long timestamp;
-    private final int networkId;
-    private final byte[] data;
+    private int networkId;
+    private byte[] data;
     private final long validUntilBlock;
 
     private final List<UTXOInput> inputs;
@@ -284,6 +288,10 @@ public final class Transaction {
 
     public byte[] getData() {
         return data;
+    }
+
+    public void setData(byte[] data) {
+        this.data = data;
     }
 
     public byte[] getSignature() {

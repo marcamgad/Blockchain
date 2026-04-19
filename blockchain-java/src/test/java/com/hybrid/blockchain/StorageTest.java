@@ -117,9 +117,37 @@ public class StorageTest {
         assertThat(lastHeight).isEqualTo(10);
         
         // Manual verification of snapshot key
-        @SuppressWarnings("unchecked")
         Map<String, Object> snapshot = storage.get("snapshot:10", Map.class);
         assertThat(snapshot.get("state")).isEqualTo(state);
         assertThat(snapshot.get("utxo")).isEqualTo(utxo);
+    }
+
+    @Test
+    @DisplayName("Severe: Storage must handle concurrent read/write and remain consistent")
+    void testConcurrentStorageAccess() throws Exception {
+        int threadCount = 10;
+        int iterations = 100;
+        java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(threadCount);
+        java.util.concurrent.atomic.AtomicInteger errors = new java.util.concurrent.atomic.AtomicInteger();
+        
+        for (int i = 0; i < threadCount; i++) {
+            final int tid = i;
+            executor.submit(() -> {
+                try {
+                    for (int j = 0; j < iterations; j++) {
+                        String key = "thread-" + tid + "-iter-" + j;
+                        storage.put(key, "data-" + tid);
+                        String val = storage.get(key, String.class);
+                        if (!("data-" + tid).equals(val)) errors.incrementAndGet();
+                    }
+                } catch (Exception e) {
+                    errors.incrementAndGet();
+                }
+            });
+        }
+        
+        executor.shutdown();
+        executor.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS);
+        assertThat(errors.get()).isEqualTo(0).as("Concurrent storage operations must not fail");
     }
 }

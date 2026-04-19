@@ -24,6 +24,7 @@ public class PoAConsensus implements Consensus {
     }
 
     public boolean isValidator(String validatorId) {
+        if (slashedValidators.contains(validatorId)) return false;
         return validators.stream().anyMatch(v -> v.getId().equals(validatorId));
     }
 

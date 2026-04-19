@@ -1,7 +1,6 @@
 package com.hybrid.blockchain;
 
 import com.hybrid.blockchain.consensus.PBFTConsensus;
-import com.hybrid.blockchain.testutil.TestKeyPair;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -52,9 +51,10 @@ public class SSTORECorrectionTest {
         // SSTORE
         // Bytecode: 60 AA 60 11 55
         java.nio.ByteBuffer codeBuffer = java.nio.ByteBuffer.allocate(25);
-        codeBuffer.put(com.hybrid.blockchain.OpCode.PUSH.getByte()).putLong(170L); // VALUE (0xAA)
         codeBuffer.put(com.hybrid.blockchain.OpCode.PUSH.getByte()).putLong(17L);  // KEY (0x11)
+        codeBuffer.put(com.hybrid.blockchain.OpCode.PUSH.getByte()).putLong(170L); // VALUE (0xAA)
         codeBuffer.put(com.hybrid.blockchain.OpCode.SSTORE.getByte());
+        codeBuffer.put(com.hybrid.blockchain.OpCode.STOP.getByte());
         byte[] bytecode = java.util.Arrays.copyOf(codeBuffer.array(), codeBuffer.position());
         
         TestKeyPair sender = new TestKeyPair(1);

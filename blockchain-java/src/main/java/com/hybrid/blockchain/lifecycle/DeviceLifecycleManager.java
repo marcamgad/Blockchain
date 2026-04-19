@@ -266,6 +266,17 @@ public class DeviceLifecycleManager {
     }
 
     /**
+     * Simplified registration for internal/test use (no attestation required)
+     */
+    public void registerDevice(String deviceId, String manufacturer, String model) {
+        DeviceRecord record = new DeviceRecord(deviceId, manufacturer, model);
+        record.setStatus(DeviceStatus.ACTIVE);
+        record.setRegistrationBlock(currentBlockHeight);
+        record.setLastActivityBlock(currentBlockHeight);
+        deviceRegistry.put(deviceId, record);
+    }
+
+    /**
      * Activate device (assign to owner and create DID)
      */
     public void activateDevice(String deviceId, String owner, byte[] devicePublicKey) {
@@ -485,6 +496,13 @@ public class DeviceLifecycleManager {
     }
 
     /**
+     * Report an anomaly detected by AI to trigger reputation penalty.
+     */
+    public void reportAnomaly(String deviceId) {
+        recordDeviceActivity(deviceId, false);
+    }
+
+    /**
      * Get all devices owned by an address
      */
     public List<DeviceRecord> getDevicesOwnedBy(String owner) {
@@ -497,11 +515,20 @@ public class DeviceLifecycleManager {
         return devices;
     }
 
+    public int getDeviceReputation(String deviceId) {
+        DeviceRecord record = deviceRegistry.get(deviceId);
+        return record != null ? (int) record.getReputationScore() : 0;
+    }
+
     /**
      * Set current blockchain height (called by blockchain)
      */
     public void setCurrentBlockHeight(long height) {
         this.currentBlockHeight = height;
+    }
+
+    public long getCurrentBlockHeight() {
+        return currentBlockHeight;
     }
 
     /**
