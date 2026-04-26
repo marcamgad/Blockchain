@@ -8,6 +8,7 @@ public interface Consensus {
     boolean isValidator(String validatorId);
     boolean verifyBlock(Block block, Validator validator) throws Exception;
     List<Validator> getValidators();
+    void addValidator(String id, byte[] publicKey);
     java.util.Set<String> getSlashedValidators();
     void clearSlashedValidator(String validatorId);
 }

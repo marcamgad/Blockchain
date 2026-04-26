@@ -29,13 +29,31 @@ public final class Config {
     public static final int MAX_CONTRACT_SIZE = 32 * 1024;
     public static boolean BYPASS_CONTRACT_AUDIT = false;
 
+    // ─── Fee Market Prediction ────────────────────────────────────────────────
+    // FIX 3: Gate FeeMarket.recordFeeDataPoint() so tests can reset history cleanly.
+    /** When true, fee data points are recorded after each block for fee prediction. */
+    public static final boolean FEE_HISTORY_ENABLED = getBooleanEnv("FEE_HISTORY_ENABLED", true);
+
+    // ─── Quantum Security ─────────────────────────────────────────────────────
+    // FIX 2: When true, any transaction missing a Dilithium signature is rejected.
+    /** Require hybrid ECDSA+Dilithium signatures on every transaction. Default false for backward compat. */
+    public static final boolean REQUIRE_QUANTUM_SIG = getBooleanEnv("REQUIRE_QUANTUM_SIG", false);
+
     // ─── Fee Market (EIP-1559 style) ─────────────────────────────────────────
     /** Starting base fee in smallest token units. */
-    public static final long BASE_FEE_INITIAL = 1L;
+    public static final long BASE_FEE_INITIAL = 0L;
     /** Denominator for max base-fee change per block (12.5% = 1/8). */
     public static final long BASE_FEE_MAX_CHANGE_DENOMINATOR = 8L;
     /** Target transaction count per block (half of maximum). */
     public static final int TARGET_GAS_PER_BLOCK = MAX_TRANSACTIONS_PER_BLOCK / 2;
+
+    // ─── Convenience aliases used by tests ───────────────────────────────────
+    /** Maximum gas (transactions) allowed in a block — alias for MAX_TRANSACTIONS_PER_BLOCK. */
+    public static final int MAX_BLOCK_GAS = MAX_TRANSACTIONS_PER_BLOCK;
+    /** Target gas (transactions) per block — alias for TARGET_GAS_PER_BLOCK. */
+    public static final int TARGET_BLOCK_GAS = TARGET_GAS_PER_BLOCK;
+    /** Maximum allowed timestamp drift in ms — alias for MAX_TIMESTAMP_DRIFT. */
+    public static final long MAX_TIMESTAMP_DRIFT_MS = 300000; // alias
 
     // ─── Network & P2P ───────────────────────────────────────────────────────
     public static final int P2P_PORT = getIntEnv("P2P_PORT", 6001);
@@ -53,7 +71,6 @@ public final class Config {
     public static final boolean IS_SEED = getBooleanEnv("IS_SEED", false);
     public static final String SEED_PEER = getEnv("SEED_PEER", null);
     public static final String STORAGE_PATH = getEnv("STORAGE_PATH", "./data");
-    private static final boolean DEBUG = getBooleanEnv("DEBUG", false);
     public static final boolean PRINT_STATS = true;
 
     // ─── Node Roles ───────────────────────────────────────────────────────────
@@ -84,7 +101,8 @@ public final class Config {
         if (keyEnv != null && !keyEnv.isEmpty()) {
             STORAGE_AES_KEY = HexUtils.decode(keyEnv.trim());
         } else {
-            if (DEBUG) {
+            // Check debug mode dynamically for initialization
+            if (getBooleanEnv("DEBUG", false)) {
                 STORAGE_AES_KEY = HexUtils.decode("00112233445566778899aabbccddeeff");
             } else {
                 throw new RuntimeException("STORAGE_AES_KEY must be set in production mode!");
@@ -137,7 +155,7 @@ public final class Config {
         if (keyHex == null) keyHex = System.getenv("NODE_PRIVATE_KEY");
 
         if (keyHex == null || keyHex.isEmpty()) {
-            if (DEBUG) return new java.math.BigInteger("1"); // Fallback for testing
+            if (isDebug()) return new java.math.BigInteger("1"); // Fallback for testing
             throw new RuntimeException("NODE_PRIVATE_KEY environment variable MUST be set for secure P2P.");
         }
         return new java.math.BigInteger(keyHex, 16);
@@ -149,7 +167,7 @@ public final class Config {
      * @return true if DEBUG=true/1/yes
      */
     public static boolean isDebug() {
-        return DEBUG;
+        return getBooleanEnv("DEBUG", false);
     }
 
     private Config() {}

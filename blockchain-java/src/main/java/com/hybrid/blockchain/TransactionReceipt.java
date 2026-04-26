@@ -7,23 +7,11 @@ import java.util.List;
 
 /**
  * Immutable receipt produced for every transaction after it is finalized in a block.
- * The receipt captures execution outcome, gas used, any error message, and all events
- * emitted by smart contract execution via the {@code LOG} opcode.
- *
- * <p>Status values:
- * <ul>
- *   <li>{@code SUCCESS} — transaction executed without error</li>
- *   <li>{@code FAILED}  — transaction threw an unexpected exception</li>
- *   <li>{@code REVERTED}— contract execution used the {@code REVERT} opcode</li>
- * </ul>
  */
 public class TransactionReceipt {
 
-    /** Transaction was successfully executed. */
     public static final String STATUS_SUCCESS = "SUCCESS";
-    /** Transaction failed with an unexpected exception. */
     public static final String STATUS_FAILED = "FAILED";
-    /** Contract explicitly reverted all state changes. */
     public static final String STATUS_REVERTED = "REVERTED";
 
     private final String txid;
@@ -34,19 +22,9 @@ public class TransactionReceipt {
     private final String errorMessage;
     private final List<ContractEvent> events;
     private final long timestamp;
+    private final String contractAddress;
+    private final byte[] returnData;
 
-    /**
-     * Constructs a TransactionReceipt.
-     *
-     * @param txid         the transaction ID
-     * @param blockHash    the hash of the block containing this transaction
-     * @param blockHeight  the height of the block containing this transaction
-     * @param status       one of SUCCESS, FAILED, or REVERTED
-     * @param gasUsed      gas consumed during execution
-     * @param errorMessage error description (null on success)
-     * @param events       contract events emitted during execution
-     * @param timestamp    the block timestamp in milliseconds
-     */
     @JsonCreator
     public TransactionReceipt(
             @JsonProperty("txid") String txid,
@@ -56,7 +34,9 @@ public class TransactionReceipt {
             @JsonProperty("gasUsed") long gasUsed,
             @JsonProperty("errorMessage") String errorMessage,
             @JsonProperty("events") List<ContractEvent> events,
-            @JsonProperty("timestamp") long timestamp) {
+            @JsonProperty("timestamp") long timestamp,
+            @JsonProperty("contractAddress") String contractAddress,
+            @JsonProperty("returnData") byte[] returnData) {
         this.txid = txid;
         this.blockHash = blockHash;
         this.blockHeight = blockHeight;
@@ -65,29 +45,44 @@ public class TransactionReceipt {
         this.errorMessage = errorMessage;
         this.events = events != null ? new ArrayList<>(events) : new ArrayList<>();
         this.timestamp = timestamp;
+        this.contractAddress = contractAddress;
+        this.returnData = returnData != null ? returnData : new byte[0];
     }
 
-    /** @return the transaction ID */
+    /**
+     * Compact constructor used in tests and lightweight contexts.
+     *
+     * @param txid            transaction ID
+     * @param status          result status (SUCCESS / FAILED / REVERTED)
+     * @param gasUsed         gas consumed
+     * @param contractAddress address of deployed contract (may be null)
+     * @param events          initial event list (may be null)
+     */
+    public TransactionReceipt(String txid, String status, long gasUsed,
+                              String contractAddress, List<ContractEvent> events) {
+        this(txid, null, 0, status, gasUsed, null,
+             events, System.currentTimeMillis(), contractAddress, null);
+    }
+
     public String getTxid() { return txid; }
-
-    /** @return the block hash */
     public String getBlockHash() { return blockHash; }
-
-    /** @return the block height */
     public int getBlockHeight() { return blockHeight; }
-
-    /** @return execution status: SUCCESS, FAILED, or REVERTED */
     public String getStatus() { return status; }
-
-    /** @return gas units consumed */
     public long getGasUsed() { return gasUsed; }
-
-    /** @return error message, or null if status is SUCCESS */
     public String getErrorMessage() { return errorMessage; }
-
-    /** @return immutable list of contract events emitted */
+    public String getError() { return errorMessage; } // Alias used in some tests
     public List<ContractEvent> getEvents() { return events; }
-
-    /** @return block timestamp in milliseconds */
     public long getTimestamp() { return timestamp; }
+    public String getContractAddress() { return contractAddress; }
+    public byte[] getReturnData() { return returnData; }
+
+    /**
+     * Adds a contract event to this receipt (used in tests that build receipts incrementally).
+     *
+     * @param topic the event topic / name
+     * @param data  the event data payload
+     */
+    public void addEvent(String topic, String data) {
+        events.add(new ContractEvent(this.contractAddress != null ? this.contractAddress : "test-contract", topic.hashCode(), data != null ? data.getBytes() : new byte[0], this.timestamp));
+    }
 }

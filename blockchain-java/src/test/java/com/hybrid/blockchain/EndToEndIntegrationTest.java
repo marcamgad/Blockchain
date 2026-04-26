@@ -45,7 +45,7 @@ public class EndToEndIntegrationTest {
                 .isTrue();
             
             String did = chain.getAccountState().getLifecycleManager().getDeviceRecord(deviceId).getDid();
-            assertThat(did).startsWith("did:iot:");
+            assertThat(did).startsWith("did:hybrid:");
             
             // 3. Device sends Telemetry (Signed data transaction)
             byte[] telemData = "{\"consumption\": 42.5}".getBytes();

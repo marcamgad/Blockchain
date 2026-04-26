@@ -5,7 +5,7 @@ package com.hybrid.blockchain;
  * When caught in {@code Blockchain.applyTransactionToState()}, all state changes
  * made by this contract call are discarded and the transaction receipt is set to REVERTED.
  */
-public class RevertException extends Exception {
+public class RevertException extends RuntimeException {
 
     private byte[] data;
 
@@ -19,6 +19,10 @@ public class RevertException extends Exception {
     }
 
     public byte[] getData() {
+        return data;
+    }
+
+    public byte[] getReturnData() {
         return data;
     }
 }

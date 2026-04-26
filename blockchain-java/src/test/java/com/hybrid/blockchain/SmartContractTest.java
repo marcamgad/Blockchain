@@ -1,5 +1,6 @@
 package com.hybrid.blockchain;
 
+import com.hybrid.blockchain.testutil.TestTransactionFactory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -287,12 +288,13 @@ public class SmartContractTest {
             ops.put(OpCode.PUSH.getByte()).putLong(0L);    // inLen
             ops.put(OpCode.PUSH.getByte()).putLong(0L);    // inOff
             ops.put(OpCode.PUSH.getByte()).putLong(500L);  // value
-            ops.put(OpCode.PUSH.getByte()).putLong(java.nio.ByteBuffer.wrap(Crypto.hash(addrB.getBytes())).getLong()); // target
+            ops.put(OpCode.PUSH.getByte()).putLong(java.nio.ByteBuffer.wrap(Crypto.hash(addrB.getBytes(java.nio.charset.StandardCharsets.UTF_8))).getLong()); // target
             ops.put(OpCode.PUSH.getByte()).putLong(5000L); // gas (on top)
             ops.put(OpCode.CALL.getByte());
             ops.put(OpCode.STOP.getByte());
             byte[] bytecode = java.util.Arrays.copyOf(ops.array(), ops.position());
 
+            chain.recalculateStateRoot();
             Transaction deployTx = TestTransactionFactory.createContractCreation(user, bytecode, 100, 1);
             BlockApplier.createAndApplyBlock(tb, List.of(deployTx));
             String addrA = Crypto.deriveAddress(Crypto.hash((user.getAddress() + 1).getBytes()));

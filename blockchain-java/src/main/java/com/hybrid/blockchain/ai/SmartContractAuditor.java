@@ -1,21 +1,30 @@
 package com.hybrid.blockchain.ai;
 
+// FIX 8: Reduce false positives in reentrancy detection.
+// Previous: any CALL opcode immediately triggered MEDIUM regardless of what follows.
+// Fixed:
+//   - Track callDetected + lastCallPc; only add reentrancy finding if SSTORE
+//     appears AFTER a CALL in linear bytecode order (conservative approximation).
+//   - DELEGATECALL → always HIGH (can corrupt own storage via external callee).
+
 import com.hybrid.blockchain.OpCode;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 
 /**
  * Static analyzer for Smart Contract bytecode.
  *
- * <p><b>Algorithm:</b> Single-pass static opcode analysis.
+ * <p><b>Algorithm:</b> Single-pass O(N) opcode scan with post-scan pattern checks.
  * <p><b>Time Complexity:</b> O(N) where N is bytecode length.
- * <p><b>IoT Rationale:</b> Prevents deployment of clearly malicious or buggy 
- * contracts (reentrancy, infinite loops) before they consume node resources.</p>
+ * <p><b>IoT Rationale:</b> Prevents deployment of clearly malicious or buggy
+ * contracts (reentrancy, infinite loops, missing terminator) before they consume
+ * node resources.
  *
- * <p>Checks for known vulnerabilities like reentrancy and infinite loops.</p>
+ * <p>Reentrancy detection: only flagged when a SSTORE opcode appears linearly
+ * after a CALL opcode in the bytecode — a conservative but sound approximation
+ * of the checks-effects-interactions violation pattern.
  */
 public class SmartContractAuditor {
 
@@ -27,6 +36,12 @@ public class SmartContractAuditor {
         private Severity maxSeverity = Severity.NONE;
         private final List<String> findings = new ArrayList<>();
 
+        /**
+         * Records a finding at the given severity level.
+         *
+         * @param severity finding severity
+         * @param message  human-readable finding description
+         */
         public void addFinding(Severity severity, String message) {
             findings.add("[" + severity.name() + "] " + message);
             if (severity.ordinal() > maxSeverity.ordinal()) {
@@ -34,23 +49,49 @@ public class SmartContractAuditor {
             }
         }
 
+        /**
+         * Returns the maximum severity across all recorded findings.
+         *
+         * @return max severity
+         */
         public Severity getMaxSeverity() {
             return maxSeverity;
         }
 
+        /**
+         * Returns all recorded finding messages.
+         *
+         * @return unmodifiable list of finding strings
+         */
         public List<String> getFindings() {
             return findings;
         }
-        
+
+        /**
+         * Returns true if the contract should be rejected (HIGH or CRITICAL severity).
+         *
+         * @return true when rejection is warranted
+         */
         public boolean isRejected() {
             return maxSeverity == Severity.HIGH || maxSeverity == Severity.CRITICAL;
         }
     }
 
     /**
-     * Statically analyzes bytecode. O(N) complexity where N is bytecode length.
-     * @param bytecode The smart contract bytecode
-     * @return AuditResult containing findings and maximum severity
+     * Statically analyzes bytecode for known vulnerabilities.
+     *
+     * <p>Checks performed:
+     * <ul>
+     *   <li>Missing terminating opcode (STOP/RETURN/REVERT) — HIGH</li>
+     *   <li>Reentrancy: SSTORE after CALL in linear order — MEDIUM</li>
+     *   <li>DELEGATECALL presence — HIGH (arbitrary storage corruption risk)</li>
+     *   <li>Unbounded backward jump — HIGH (potential infinite loop)</li>
+     *   <li>Unknown opcode — CRITICAL</li>
+     *   <li>Unbounded MSTORE — MEDIUM (advisory)</li>
+     * </ul>
+     *
+     * @param bytecode the smart contract bytecode to audit
+     * @return {@link AuditResult} with all findings and aggregate severity
      */
     public static AuditResult audit(byte[] bytecode) {
         AuditResult result = new AuditResult();
@@ -60,20 +101,24 @@ public class SmartContractAuditor {
         }
 
         boolean hasStopReturnRevert = false;
-        boolean hasCall = false;
-        boolean hasMStore = false;
-        
-        int pc = 0;
-        long lastPushedValue = -1;
+        boolean hasMStore           = false;
+
+        // FIX 8: Track external CALL positions and SSTORE positions separately.
+        // Reentrancy is only flagged when at least one SSTORE PC > lastCallPc.
+        boolean callDetected = false;
+        int     lastCallPc   = -1;
+        Set<Integer> sstorePcs = new LinkedHashSet<>();
+
+        int    pc              = 0;
+        long   lastPushedValue = -1;
 
         while (pc < bytecode.length) {
-            byte b = bytecode[pc];
-            OpCode op = OpCode.fromByte(b);
-            int currentPc = pc;
-            pc++; // advance program counter for opcode
-            
+            byte   b         = bytecode[pc];
+            OpCode op        = OpCode.fromByte(b);
+            int    currentPc = pc;
+            pc++;   // advance past opcode
+
             if (op == null) {
-                // Unknown opcode -> Critical risk
                 result.addFinding(Severity.CRITICAL, "Unknown OpCode at PC " + currentPc);
                 continue;
             }
@@ -84,6 +129,7 @@ public class SmartContractAuditor {
                 case REVERT:
                     hasStopReturnRevert = true;
                     break;
+
                 case PUSH:
                     if (pc + 8 <= bytecode.length) {
                         ByteBuffer buffer = ByteBuffer.wrap(bytecode, pc, 8).order(ByteOrder.BIG_ENDIAN);
@@ -91,43 +137,77 @@ public class SmartContractAuditor {
                         pc += 8;
                     } else {
                         result.addFinding(Severity.CRITICAL, "Malformed PUSH at PC " + currentPc);
-                        pc = bytecode.length; // Abort
+                        pc = bytecode.length; // abort scan
                     }
                     break;
+
                 case JUMP:
                 case JUMPI:
-                    // If bounding backward without condition or with condition, could be an infinite loop.
-                    // Statically we approximate: if JUMP targets a PC <= currentPc, and it was a direct PUSH beforehand.
                     if (lastPushedValue >= 0 && lastPushedValue <= currentPc) {
-                        result.addFinding(Severity.HIGH, "Potential unbounded backward loop (JUMP to " + lastPushedValue + ") at PC " + currentPc);
+                        result.addFinding(Severity.HIGH,
+                                "Potential unbounded backward loop (JUMP to " + lastPushedValue + ") at PC " + currentPc);
                     }
                     break;
+
                 case MSTORE:
                     hasMStore = true;
-                    // For the sake of the static analysis, any MSTORE could be an unbounded array risk if in a loop.
                     break;
+
+                case SSTORE:
+                    // FIX 8: record SSTORE pc for post-scan reentrancy check
+                    sstorePcs.add(currentPc);
+                    break;
+
                 case CALL:
-                    hasCall = true;
-                    // External calls are a Reentrancy footprint.
-                    result.addFinding(Severity.MEDIUM, "Reentrancy footprint: External CALL opcode detected at PC " + currentPc);
+                    // FIX 8: do NOT immediately add finding — defer to post-scan pattern check
+                    callDetected = true;
+                    lastCallPc   = currentPc;
                     break;
+
+                case DELEGATECALL:
+                    // FIX 8: DELEGATECALL allows the callee to write to the CALLER's storage
+                    // slots, breaking storage isolation. Always HIGH severity.
+                    result.addFinding(Severity.HIGH,
+                            "DELEGATECALL detected at PC " + currentPc +
+                            " — callee can corrupt calling contract storage unexpectedly");
+                    break;
+
                 default:
                     break;
             }
-            
-            // Reset last pushed value if opcode is not PUSH, so JUMP only looks at immediately preceding PUSH
+
+            // Only PUSH leaves lastPushedValue; all other opcodes reset it
             if (op != OpCode.PUSH) {
                 lastPushedValue = -1;
             }
         }
 
+        // ── Post-scan pattern checks ──────────────────────────────────────────
+
         if (!hasStopReturnRevert) {
             result.addFinding(Severity.HIGH, "Missing terminating opcode (STOP/RETURN/REVERT).");
         }
 
+        // FIX 8: Reentrancy only if at least one SSTORE appears after the last CALL
+        // in linear bytecode order. A CALL followed only by STOP is benign.
+        if (callDetected) {
+            boolean sstoreAfterCall = false;
+            for (int sp : sstorePcs) {
+                if (sp > lastCallPc) {
+                    sstoreAfterCall = true;
+                    break;
+                }
+            }
+            if (sstoreAfterCall) {
+                result.addFinding(Severity.MEDIUM,
+                        "Reentrancy footprint: SSTORE at PC > CALL at PC " + lastCallPc +
+                        " — state write after external call (checks-effects-interactions violation)");
+            }
+        }
+
         if (hasMStore) {
-            // Unbounded MSTORE arrays
-            result.addFinding(Severity.MEDIUM, "Unbounded MSTORE risk detected. Explicit bounds checks recommended.");
+            result.addFinding(Severity.MEDIUM,
+                    "Unbounded MSTORE risk detected. Explicit bounds checks recommended.");
         }
 
         return result;

@@ -41,7 +41,7 @@ public class IoTLifecycleTest {
         lifecycle.activateDevice(deviceId, owner.getAddress(), device.getPublicKey());
         assertThat(record.getStatus()).isEqualTo(DeviceLifecycleManager.DeviceStatus.ACTIVE);
         assertThat(record.getOwner()).isEqualTo(owner.getAddress());
-        assertThat(record.getDid()).startsWith("did:iot:");
+        assertThat(record.getDid()).startsWith("did:hybrid:");
         
         // 4. Suspend Device
         lifecycle.suspendDevice(deviceId, owner.getAddress(), "MAINTENANCE");

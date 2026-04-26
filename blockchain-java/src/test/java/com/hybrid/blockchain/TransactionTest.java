@@ -37,7 +37,9 @@ public class TransactionTest {
                 tx.getNetworkId(), tx.getData(), tx.getValidUntilBlock(), 
                 tx.getInputs(), tx.getOutputs(), 
                 tx.getPubKey(),
-                tx.getSignature() // Original signature
+                tx.getSignature(), // Original signature
+                tx.getDilithiumPublicKey(),
+                tx.getDilithiumSignature()
         );
         
         assertThat(tamperedTx.verify()).as("Tampered amount must invalidate signature").isFalse();

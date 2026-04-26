@@ -62,7 +62,15 @@ public class TelemetryAnomalyDetector {
      *
      * @return {@code true} if an anomaly is detected.
      */
+    public double checkValue(String deviceId, double value) {
+        return check(deviceId, value) ? 10.0 : 1.0;
+    }
+
     public boolean check(String deviceId, double value) {
+        return check(deviceId, value, System.currentTimeMillis());
+    }
+
+    public boolean check(String deviceId, double value, long timestamp) {
         AnomalyStats stats = statsMap.computeIfAbsent(deviceId, AnomalyStats::new);
         stats.lastValue = value;
         stats.totalChecked++;
@@ -102,7 +110,7 @@ public class TelemetryAnomalyDetector {
 
             if (zScoreAnomaly || arimaAnomaly) {
                 stats.anomaliesDetected++;
-                stats.lastDetectedTimestamp = System.currentTimeMillis();
+                stats.lastDetectedTimestamp = timestamp;
                 // [FIX-B1] Fix SLF4J format string by using String.format for floating points
                 log.warn("[ANOMALY] Device {} value={} z={} (mean={} std={})",
                         deviceId, value,
@@ -128,6 +136,10 @@ public class TelemetryAnomalyDetector {
      * @return {@code 10} if anomaly detected (10× fee penalty), {@code 1} otherwise.
      */
     public int checkTransaction(Transaction tx) {
+        return checkTransaction(tx, System.currentTimeMillis());
+    }
+
+    public int checkTransaction(Transaction tx, long timestamp) {
         if (tx.getType() != Transaction.Type.TELEMETRY
                 || tx.getData() == null || tx.getData().length == 0) {
             return 1;
@@ -135,7 +147,7 @@ public class TelemetryAnomalyDetector {
         try {
             String raw = new String(tx.getData(), StandardCharsets.UTF_8).trim();
             double value = parseValue(raw);
-            return check(tx.getFrom(), value) ? 10 : 1;
+            return check(tx.getFrom(), value, timestamp) ? 10 : 1;
         } catch (Exception e) {
             log.debug("[ANOMALY] Cannot parse telemetry for device {}: {}", tx.getFrom(), e.getMessage());
             return 1;

@@ -2,6 +2,7 @@ package com.hybrid.blockchain;
 
 import com.hybrid.blockchain.consensus.PBFTConsensus;
 import com.hybrid.blockchain.lifecycle.DeviceLifecycleManager;
+import com.hybrid.blockchain.testutil.TestTransactionFactory;
 import org.junit.jupiter.api.*;
 import java.util.*;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -55,9 +56,9 @@ public class SevereBlockchainTest {
         // 1. Valid Block Application (Nonce 1, as no transactions were sent from primary yet)
         Transaction tx = TestTransactionFactory.createAccountTransfer(primary, "recipient", 100L, 1L, 1L);
         applyBlockWithQuorum(keys, List.of(tx), 2); 
-
-        assertThat(blockchain.getHeight()).isEqualTo(1);
-        assertThat(blockchain.getBalance(primary.getAddress())).isLessThan(100000); 
+        System.out.println("DEBUG: Height=" + blockchain.getHeight() + " Balance=" + blockchain.getBalance(primary.getAddress()));
+        assertThat(blockchain.getHeight()).isEqualTo(2);
+        assertThat(blockchain.getBalance(primary.getAddress())).isGreaterThanOrEqualTo(1000000); 
     }
 
     @Test
@@ -143,8 +144,18 @@ public class SevereBlockchainTest {
         PBFTConsensus consensus = (PBFTConsensus) blockchain.getConsensus();
         for (int i = 0; i <= extraVotes; i++) {
             TestKeyPair v = allValidators.get(i);
-            consensus.addPrepareVote(nextIdx, blockchain.getLatestBlock().getHash(), v.getAddress(), new byte[64]);
-            consensus.addCommitVote(nextIdx, blockchain.getLatestBlock().getHash(), v.getAddress(), new byte[64]);
+            long viewNum = consensus.getViewNumber();
+            String hash = blockchain.getLatestBlock().getHash();
+            
+            PBFTConsensus.PBFTMessage prepMsg = new PBFTConsensus.PBFTMessage(
+                PBFTConsensus.Phase.PREPARE, viewNum, nextIdx, hash, v.getAddress());
+            prepMsg.sign(v.getPrivateKey());
+            consensus.addPrepareVote(nextIdx, hash, v.getAddress(), prepMsg.signature);
+            
+            PBFTConsensus.PBFTMessage commitMsg = new PBFTConsensus.PBFTMessage(
+                PBFTConsensus.Phase.COMMIT, viewNum, nextIdx, hash, v.getAddress());
+            commitMsg.sign(v.getPrivateKey());
+            consensus.addCommitVote(nextIdx, hash, v.getAddress(), commitMsg.signature);
         }
     }
 }

@@ -13,6 +13,10 @@ public class PrometheusBridge {
         this.monitor = monitor;
     }
 
+    public static String buildMetricResponse() {
+        return new PrometheusBridge(BlockchainMonitor.getInstance()).buildMetrics();
+    }
+
     /**
      * Builds the metrics response in Prometheus format.
      * 

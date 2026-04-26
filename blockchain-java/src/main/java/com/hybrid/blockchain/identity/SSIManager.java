@@ -27,14 +27,15 @@ public class SSIManager {
     private Set<String> revokedDIDs;
 
     public void restore(SSIManager other) {
+        SSIManager copy = SSIManager.fromMap(other.toJSON());
         this.didRegistry.clear();
-        this.didRegistry.putAll(other.didRegistry);
+        this.didRegistry.putAll(copy.didRegistry);
         this.credentialStore.clear();
-        this.credentialStore.putAll(other.credentialStore);
+        this.credentialStore.putAll(copy.credentialStore);
         this.deviceToDID.clear();
-        this.deviceToDID.putAll(other.deviceToDID);
+        this.deviceToDID.putAll(copy.deviceToDID);
         this.revokedDIDs.clear();
-        this.revokedDIDs.addAll(other.revokedDIDs);
+        this.revokedDIDs.addAll(copy.revokedDIDs);
     }
 
     public SSIManager() {
@@ -45,14 +46,22 @@ public class SSIManager {
     }
 
     /**
-     * Register a new DID for an IoT device
+     * Registers a new Decentralized Identifier (DID) with the provided metadata.
+     * Overload for test/legacy use.
      */
     public String registerDID(String deviceId, byte[] publicKey, String owner) {
+        return registerDID(deviceId, publicKey, owner, System.currentTimeMillis());
+    }
+
+    /**
+     * Register a new DID for an IoT device
+     */
+    public String registerDID(String deviceId, byte[] publicKey, String owner, long timestamp) {
         if (deviceToDID.containsKey(deviceId)) {
             throw new IllegalStateException("Device " + deviceId + " already has a DID");
         }
 
-        DecentralizedIdentifier didDoc = new DecentralizedIdentifier(deviceId, publicKey, owner);
+        DecentralizedIdentifier didDoc = new DecentralizedIdentifier(deviceId, publicKey, owner, timestamp);
         String did = didDoc.getDid();
 
         didRegistry.put(did, didDoc);
@@ -66,6 +75,7 @@ public class SSIManager {
      * Resolve a DID to its DID Document
      */
     public DecentralizedIdentifier resolveDID(String did) {
+        if (did == null) return null;
         if (revokedDIDs.contains(did)) {
             throw new SecurityException("DID has been revoked: " + did);
         }

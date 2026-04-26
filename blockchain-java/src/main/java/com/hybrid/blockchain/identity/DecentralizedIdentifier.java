@@ -7,7 +7,7 @@ import java.util.*;
 
 /**
  * W3C DID (Decentralized Identifier) implementation for IoT devices.
- * Format: did:iot:<deviceId>
+ * Format: did:hybrid:<deviceId>
  * 
  * Compliant with W3C DID Core specification.
  */
@@ -46,11 +46,11 @@ public class DecentralizedIdentifier {
         this.services = new ArrayList<>();
     }
 
-    public DecentralizedIdentifier(String deviceId, byte[] publicKey, String owner) {
+    public DecentralizedIdentifier(String deviceId, byte[] publicKey, String owner, long timestamp) {
         this();
-        this.did = "did:iot:" + deviceId;
+        this.did = "did:hybrid:" + deviceId;
         this.controller = owner;
-        this.created = System.currentTimeMillis();
+        this.created = timestamp;
         this.updated = this.created;
 
         // Add primary verification method
@@ -170,6 +170,11 @@ public class DecentralizedIdentifier {
         return updated;
     }
 
+    public byte[] getPublicKey() {
+        if (verificationMethods.isEmpty()) return null;
+        return Crypto.hexToBytes(verificationMethods.get(0).getPublicKeyHex());
+    }
+
     // Setters
     public void setController(String controller) {
         this.controller = controller;
@@ -208,8 +213,8 @@ public class DecentralizedIdentifier {
      * Extract device ID from DID
      */
     public String getDeviceId() {
-        if (did != null && did.startsWith("did:iot:")) {
-            return did.substring(8);
+        if (did != null && did.startsWith("did:hybrid:")) {
+            return did.substring(11);
         }
         return null;
     }

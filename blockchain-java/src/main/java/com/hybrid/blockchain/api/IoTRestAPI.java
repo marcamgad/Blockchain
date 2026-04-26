@@ -941,8 +941,8 @@ public ResponseEntity<?> adminMetrics() {
         blockchainLock.readLock().lock();
         try {
             int validatorCount = (sharedPbft != null) ? sharedPbft.getValidatorCount() : 0;
-            long predicted = FeeMarket.predictOptimalFee(txCount, blockTimeMs, blockchain.getStorage(), validatorCount);
-            long current   = FeeMarket.getCurrentBaseFee(blockchain.getStorage());
+            long predicted = blockchain.getFeeMarket().predictOptimalFee(txCount, blockTimeMs, blockchain.getStorage(), validatorCount);
+            long current   = blockchain.getFeeMarket().getCurrentBaseFee(blockchain.getStorage());
             return ResponseEntity.ok(Map.of(
                     "predictedFee",  predicted,
                     "currentBaseFee",current,

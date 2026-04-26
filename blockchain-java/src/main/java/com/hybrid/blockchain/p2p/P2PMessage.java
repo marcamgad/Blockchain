@@ -22,7 +22,8 @@ public class P2PMessage {
         PONG,
         REQUEST_BLOCKS,
         BLOCKS_RESPONSE,
-        CHECKPOINT
+        CHECKPOINT,
+        GOSSIP
     }
 
     private final String messageId;
