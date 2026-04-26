@@ -124,6 +124,10 @@ public class StorageCompleteTest {
         Block b = new Block(1, System.currentTimeMillis(), List.of(), "prev", 1, "state");
         String hash = b.getHash();
         storage.saveBlock(b);
+
+        // Ensure all DB handles are flushed/closed before scanning files on Windows.
+        storage.close();
+        storage = null;
         
         // Find the block file in LevelDB structure (usually .ldb or .log files)
         // Since we can't easily parse binary LevelDB, we check for the LACK of plaintext hash

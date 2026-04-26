@@ -98,8 +98,9 @@ public class BlockchainCoreTest {
     @DisplayName("Severe: Simple fork resolution (same height) must work correctly")
     void testSimpleForkResolution() throws Exception {
         java.nio.file.Path tempDir = java.nio.file.Files.createTempDirectory("fork-test");
+        Storage storage = null;
         try {
-            Storage storage = new Storage(tempDir.toString(), HexUtils.decode("00112233445566778899001122334455"));
+            storage = new Storage(tempDir.toString(), HexUtils.decode("00112233445566778899001122334455"));
             Mempool mempool = new Mempool();
             
             TestKeyPair v1 = new TestKeyPair(1);
@@ -171,6 +172,9 @@ public class BlockchainCoreTest {
             assertThat(chain.getHeight()).isEqualTo(2);
             assertThat(chain.getLatestBlock().getHash()).isEqualTo(winner.getHash());
         } finally {
+            if (storage != null) {
+                storage.close();
+            }
             org.apache.commons.io.FileUtils.deleteDirectory(tempDir.toFile());
         }
     }

@@ -4,8 +4,6 @@ import com.hybrid.blockchain.*;
 import com.hybrid.blockchain.testutil.*;
 import org.junit.jupiter.api.*;
 import static org.assertj.core.api.Assertions.*;
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
@@ -44,11 +42,15 @@ public class ConcurrencyStressCompleteTest {
         CountDownLatch stop = new CountDownLatch(1);
         AtomicLong errorCount = new AtomicLong();
         
+        // Use a sender that is NOT the validator to avoid receiving block rewards/fees
+        TestKeyPair sender = new TestKeyPair(999);
+        blockchain.getAccountState().credit(sender.getAddress(), 1000L);
+        
         // Reader threads
         for (int i = 0; i < readers; i++) {
             executor.submit(() -> {
                 while (stop.getCount() > 0) {
-                    long b = blockchain.getBalance(alice.getAddress());
+                    long b = blockchain.getBalance(sender.getAddress());
                     if (b > 1000L) errorCount.incrementAndGet();
                 }
             });
@@ -58,7 +60,7 @@ public class ConcurrencyStressCompleteTest {
         executor.submit(() -> {
             try {
                 for (int i = 0; i < 10; i++) {
-                    Transaction tx = TestTransactionFactory.createAccountTransfer(alice, "b", 1, 1, i + 1);
+                    Transaction tx = TestTransactionFactory.createAccountTransfer(sender, "b", 1, 1, i + 1);
                     BlockApplier.createAndApplyBlock(tb, List.of(tx));
                 }
             } catch (Exception e) {
@@ -146,17 +148,17 @@ public class ConcurrencyStressCompleteTest {
             service.submit(() -> {
                 try {
                     // Each thread tries to mint 200 (Total 1000 / Max 500)
-                    Transaction tx = new Transaction.Builder()
-                        .type(Transaction.Type.TOKEN_MINT)
-                        .from(owner.getAddress())
-                        .to("rec")
-                        .amount(200)
-                        .data(tokenId.getBytes())
-                        .nonce(nonce)
-                        .sign(owner.getPrivateKey(), owner.getPublicKey());
-                    // We attempt to apply concurrently
-                    // In real PBFT this is serialized by leader, but we can test simulation safety
-                    synchronized(this) { // BlockApplier is not thread-safe for the same tb instance usually
+                    synchronized(this) { 
+                         long dynNonce = blockchain.getAccountState().getNonce(owner.getAddress()) + 1;
+                         Transaction tx = new Transaction.Builder()
+                             .type(Transaction.Type.TOKEN_MINT)
+                             .from(owner.getAddress())
+                             .to("rec")
+                             .amount(200)
+                             .data(tokenId.getBytes())
+                             .nonce(dynNonce)
+                             .sign(owner.getPrivateKey(), owner.getPublicKey());
+                         
                          BlockApplier.createAndApplyBlock(tb, List.of(tx));
                     }
                 } catch (Exception e) {

@@ -83,7 +83,6 @@ public class ForkResolutionTest {
         Block blockHigh = new Block(2, System.currentTimeMillis() + 1000, new ArrayList<>(), precursor.getHash(), blockchain.getDifficulty(), "");
         blockHigh.setValidatorId("ValidatorA");
         blockHigh.setSignature(new byte[64]);
-        blockHigh.setHash("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF");
 
         // 2. Apply Block Low first (transitions from precursor)
         AccountState simStateLow = baseState.cloneState();
@@ -106,6 +105,12 @@ public class ForkResolutionTest {
         simStateHigh.setBlockHeight(blockHigh.getIndex());
         // Empty block High, no transactions, no fees
         blockHigh.setStateRoot(simStateHigh.calculateStateRoot());
+
+        // Ensure blockHigh naturally has a lexically larger hash than blockLow
+        while (blockHigh.getHash().compareTo(blockLow.getHash()) <= 0) {
+            blockHigh.nonce++;
+            blockHigh.setHash(blockHigh.calculateHash());
+        }
         
         blockchain.applyBlock(blockHigh);
 
@@ -130,7 +135,6 @@ public class ForkResolutionTest {
         Block blockLow = new Block(2, System.currentTimeMillis() + 1000, new ArrayList<>(), precursor.getHash(), blockchain.getDifficulty(), "");
         blockLow.setValidatorId("ValidatorB");
         blockLow.setSignature(new byte[64]);
-        blockLow.setHash("0000000000000000000000000000000000000000000000000000000000000000");
 
         // Simulate root for index 2
         AccountState simState = blockchain.getState().cloneState();
@@ -138,6 +142,11 @@ public class ForkResolutionTest {
         String expectedRoot = simState.calculateStateRoot();
         blockHigh.setStateRoot(expectedRoot);
         blockLow.setStateRoot(expectedRoot);
+
+        while (blockHigh.getHash().compareTo(blockLow.getHash()) <= 0) {
+            blockHigh.nonce++;
+            blockHigh.setHash(blockHigh.calculateHash());
+        }
 
         // Apply Winner first
         blockchain.applyBlock(blockHigh);

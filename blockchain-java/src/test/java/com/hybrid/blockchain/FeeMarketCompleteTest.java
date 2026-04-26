@@ -73,8 +73,8 @@ public class FeeMarketCompleteTest {
     @DisplayName("F1.8 — predictOptimalFee: initial default")
     void testPredictionDefault() {
         long pred = new FeeMarket().predictOptimalFee(100, 1000, tb.getStorage(), 4);
-        // Should be BASE_FEE_INITIAL when no history
-        assertThat(pred).isEqualTo(Config.BASE_FEE_INITIAL);
+        // Should be at least 1L due to floor rule when no history
+        assertThat(pred).isEqualTo(Math.max(1L, Config.BASE_FEE_INITIAL));
     }
 
     @Test
@@ -120,6 +120,6 @@ public class FeeMarketCompleteTest {
     void testResetHistory() {
         new FeeMarket().recordFeeDataPoint(1000, 500, tb.getStorage());
         new FeeMarket().resetHistory(tb.getStorage());
-        assertThat(new FeeMarket().predictOptimalFee(1, 1, tb.getStorage(), 4)).isEqualTo(Config.BASE_FEE_INITIAL);
+        assertThat(new FeeMarket().predictOptimalFee(1, 1, tb.getStorage(), 4)).isEqualTo(Math.max(1L, Config.BASE_FEE_INITIAL));
     }
 }

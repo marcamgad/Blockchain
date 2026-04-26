@@ -67,9 +67,20 @@ public class FederatedLearningCompleteTest {
     }
 
     @Test
-    @DisplayName("FL1.11 — Differential privacy test stub")
-    @Disabled("Requires Fix 10 — Differential Privacy implementation")
+    @DisplayName("FL1.11 — Differential privacy")
     void testDifferentialPrivacy() {
-        // After aggregation with DP enabled, results should be slightly noised
+        manager.setDifferentialPrivacyEnabled(true);
+        manager.setEpsilon(1.0);
+        
+        // Use large values so that 0.1/1.0 noise is detectable but not overwhelming
+        double[] input = {100.0, 100.0};
+        manager.submitUpdate("n1", input);
+        manager.submitUpdate("n2", input);
+        
+        double[] avg = manager.aggregate();
+        
+        // With DP enabled, the average of two [100, 100] inputs should NOT be exactly [100, 100]
+        assertThat(avg[0]).isNotEqualTo(100.0);
+        assertThat(avg[1]).isNotEqualTo(100.0);
     }
 }

@@ -263,6 +263,15 @@ public class Mempool {
         }
     }
 
+    public boolean contains(String txid) {
+        readLock.lock();
+        try {
+            return map.containsKey(txid);
+        } finally {
+            readLock.unlock();
+        }
+    }
+
     public int getSize() {
         return size();
     }

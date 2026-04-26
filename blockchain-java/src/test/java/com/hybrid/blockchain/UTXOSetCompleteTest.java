@@ -41,8 +41,10 @@ public class UTXOSetCompleteTest {
         utxoSet.addOutput("tx", 0, new UTXOSet.UTXOOutput("a", 10));
         utxoSet.spendOutput("tx", 0);
         
-        boolean secondSpend = utxoSet.spendOutput("tx", 0);
-        assertThat(secondSpend).as("Should return false when spending already-spent output").isFalse();
+        assertThatThrownBy(() -> utxoSet.spendOutput("tx", 0))
+                .as("Should throw when spending already-spent output")
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("UTXO not found");
     }
 
     @Test
@@ -90,6 +92,7 @@ public class UTXOSetCompleteTest {
                     .addInput(seedTx, 0)
                     .addOutput("bob", 500L)
                     .fee(500L)
+                    .nonce(1)
                     .sign(alice.getPrivateKey(), alice.getPublicKey())
                     .build();
                     
@@ -98,6 +101,7 @@ public class UTXOSetCompleteTest {
                     .addInput(seedTx, 0)
                     .addOutput("charlie", 500L)
                     .fee(500L)
+                    .nonce(1)
                     .sign(alice.getPrivateKey(), alice.getPublicKey())
                     .build();
             
@@ -110,7 +114,7 @@ public class UTXOSetCompleteTest {
             
             assertThat(r1.getStatus()).as("First spend should succeed").isEqualTo(TransactionReceipt.STATUS_SUCCESS);
             assertThat(r2.getStatus()).as("Second spend should fail").isEqualTo(TransactionReceipt.STATUS_FAILED);
-            assertThat(r2.getError()).as("Error should indicate UTXO unavailable").contains("UTXO input not available");
+            assertThat(r2.getError()).as("Error should indicate UTXO unavailable").contains("UTXO not found");
         }
     }
 }

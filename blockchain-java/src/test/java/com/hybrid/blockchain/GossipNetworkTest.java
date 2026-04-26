@@ -3,13 +3,13 @@ package com.hybrid.blockchain;
 import com.hybrid.blockchain.consensus.PBFTConsensus;
 import com.hybrid.blockchain.p2p.P2PMessage;
 import com.hybrid.blockchain.p2p.PeerManager;
+import com.hybrid.blockchain.testutil.*;
 import org.junit.jupiter.api.*;
-import java.nio.charset.StandardCharsets;
-import static org.junit.jupiter.api.Assertions.*;
-
-import java.util.*;
-import java.util.concurrent.*;
 import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.awaitility.Awaitility.await;
 
 public class GossipNetworkTest {
 
@@ -29,7 +29,7 @@ public class GossipNetworkTest {
         nodeKeys = new ArrayList<>();
         runDataRoot = new File("/tmp/gossip-test-" + UUID.randomUUID());
         runDataRoot.mkdirs();
-        
+
         // PBFT requires 4 validators
         Map<String, byte[]> validators = new HashMap<>();
         List<String> valIds = new ArrayList<>();
@@ -50,14 +50,18 @@ public class GossipNetworkTest {
 
             // Use 16-byte key as required by Storage
             byte[] aesKey = "0123456789abcdef".getBytes(StandardCharsets.UTF_8);
-            
+
             Mempool mempool = new Mempool();
             // Assign a validator ID to the first 4 nodes, dummy for others
             String localId = (i < 4) ? valIds.get(i) : "node-" + i;
             PBFTConsensus consensus = new PBFTConsensus(validators, localId, privKey);
-            
+
             File nodeDir = new File(runDataRoot, "data-" + i);
             Blockchain bc = new Blockchain(new Storage(nodeDir.getAbsolutePath(), aesKey), mempool, consensus);
+
+            // Pre-fund a shared test account in all nodes for gossip testing
+            bc.getAccountState().credit("0xAlice", 10000L);
+
             PeerNode node = new PeerNode(START_PORT + i, bc, consensus, privKey);
             node.start();
             nodes.add(node);
@@ -68,9 +72,23 @@ public class GossipNetworkTest {
             int next = (i + 1) % NODE_COUNT;
             nodes.get(i).connectToPeer("localhost", START_PORT + next);
         }
-        
-        // Wait for handshakes
-        Thread.sleep(2000);
+
+        // Wait for handshakes using polling
+        long start = System.currentTimeMillis();
+        boolean allConnected = false;
+        while (System.currentTimeMillis() - start < 15000) {
+            allConnected = true;
+            for (PeerNode n : nodes) {
+                if (n.getPeers().isEmpty()) {
+                    allConnected = false;
+                    break;
+                }
+            }
+            if (allConnected)
+                break;
+            Thread.sleep(500);
+        }
+        assertTrue(allConnected, "Nodes failed to connect within timeout");
     }
 
     @AfterEach
@@ -93,8 +111,10 @@ public class GossipNetworkTest {
         File[] files = dir.listFiles();
         if (files != null) {
             for (File f : files) {
-                if (f.isDirectory()) deleteDirectory(f);
-                else f.delete();
+                if (f.isDirectory())
+                    deleteDirectory(f);
+                else
+                    f.delete();
             }
         }
         dir.delete();
@@ -103,28 +123,43 @@ public class GossipNetworkTest {
     @Test
     public void testTransactionGossip() throws Exception {
         System.out.println("Testing transaction gossip across " + NODE_COUNT + " nodes...");
-        
-        // Create a transaction type that does not require signatures/account pre-state
-        Transaction tx = new Transaction.Builder()
-            .type(Transaction.Type.MINT)
-            .to("0xBob")
-            .amount(100)
-            .fee(0)
-            .build();
-            
+
+        TestKeyPair sender = new TestKeyPair(999);
+        for (PeerNode n : nodes) {
+            n.getBlockchain().getAccountState().credit(sender.getAddress(), 1000L);
+        }
+
+        Transaction tx = TestTransactionFactory.createAccountTransfer(sender, "0xBob", 10, 1, 1);
+        final String txid = tx.getId();
+
+        // Ensure node 0 has it in mempool too, as it is the sender
+        nodes.get(0).getBlockchain().addTransaction(tx);
+
+        // Broadcast
         nodes.get(0).broadcastTransaction(tx);
 
-        // Wait for gossip propagation (should be fast in a ring with fan-out 3)
-        Thread.sleep(5000);
+        System.out.println("Waiting for propagation of transaction " + txid + "...");
 
-        // Verify that all non-origin nodes received the transaction in their mempool
-        for (int i = 1; i < NODE_COUNT; i++) {
-            final String txid = tx.getId();
-            boolean received = nodes.get(i).getBlockchain().getMempool().toArray().stream()
-                .anyMatch(t -> t.getId().equals(txid));
-            assertTrue(received, "Node " + i + " did not receive the transaction");
+        long start = System.currentTimeMillis();
+        boolean allFinished = false;
+        while (System.currentTimeMillis() - start < 15000) {
+            allFinished = true;
+            for (int i = 0; i < NODE_COUNT; i++) {
+                boolean received = nodes.get(i).getBlockchain().getMempool().contains(txid);
+                if (!received) {
+                    allFinished = false;
+                    break;
+                }
+            }
+            if (allFinished)
+                break;
+            Thread.sleep(500);
         }
-        System.out.println("Gossip successful: transaction reached all nodes.");
+
+        for (int i = 0; i < NODE_COUNT; i++) {
+            boolean hasTx = nodes.get(i).getBlockchain().getMempool().contains(txid);
+            assertTrue(hasTx, "Node " + i + " did not receive the transaction");
+        }
     }
 
     @Test
@@ -132,7 +167,7 @@ public class GossipNetworkTest {
         PeerNode target = nodes.get(0);
         PeerNode malicious = nodes.get(1);
         String malId = malicious.getLocalAddress();
-        
+
         // Simulate malcontent relaying invalid signatures
         for (int i = 0; i < 60; i++) {
             target.getPeerManager().updatePeerScore(malId, -1.0);

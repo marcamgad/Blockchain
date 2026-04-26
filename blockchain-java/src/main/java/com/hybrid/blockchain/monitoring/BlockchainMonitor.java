@@ -124,7 +124,22 @@ public class BlockchainMonitor {
     }
 
     public HealthStatus checkHealth(com.hybrid.blockchain.Blockchain blockchain) {
-        // Just a wrapper to satisfy tests that check health of a chain
+        boolean storageHealthy = true;
+        String message = "OK";
+
+        if (blockchain != null) {
+            try {
+                if (blockchain.getStorage() == null) {
+                    throw new IllegalStateException("Storage unavailable");
+                }
+                blockchain.getStorage().loadTipHash();
+            } catch (Exception e) {
+                storageHealthy = false;
+                message = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            }
+        }
+
+        updateHealthCheck("storage", storageHealthy, message);
         return getHealthStatus();
     }
 

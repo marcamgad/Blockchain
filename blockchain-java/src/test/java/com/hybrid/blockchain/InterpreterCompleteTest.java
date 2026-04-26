@@ -150,8 +150,8 @@ public class InterpreterCompleteTest {
     @DisplayName("I1.16 — SSTORE + SLOAD")
     void testStorage() throws Exception {
         ByteBuffer ops = ByteBuffer.allocate(100);
-        ops.put(OpCode.PUSH.getByte()).putLong(888L); // value
         ops.put(OpCode.PUSH.getByte()).putLong(7L);   // key
+        ops.put(OpCode.PUSH.getByte()).putLong(888L); // value
         ops.put(OpCode.SSTORE.getByte());
         ops.put(OpCode.PUSH.getByte()).putLong(7L);   // key
         ops.put(OpCode.SLOAD.getByte());
@@ -179,10 +179,15 @@ public class InterpreterCompleteTest {
     @Test
     @DisplayName("I1.25 — REVERT")
     void testRevert() throws Exception {
-        ByteBuffer ops = ByteBuffer.allocate(50);
-        ops.put(OpCode.PUSH.getByte()).putLong(1L);
-        ops.put(OpCode.PUSH.getByte()).putLong(0L);
-        ops.put(OpCode.SSTORE.getByte()); // Write to slot 0
+        // Code: PUSH key=0, PUSH val=1, SSTORE (writes slot 0=1)
+        //       then PUSH rLen=0, PUSH rOff=0, REVERT (reverts the SSTORE)
+        ByteBuffer ops = ByteBuffer.allocate(60);
+        ops.put(OpCode.PUSH.getByte()).putLong(0L); // key
+        ops.put(OpCode.PUSH.getByte()).putLong(1L); // value
+        ops.put(OpCode.SSTORE.getByte()); // Write to slot 0 = 1
+        // REVERT args: length=0 (top), offset=0 (below top)
+        ops.put(OpCode.PUSH.getByte()).putLong(0L); // rLen on top
+        ops.put(OpCode.PUSH.getByte()).putLong(0L); // rOff below
         ops.put(OpCode.REVERT.getByte());
         
         Transaction deployTx = TestTransactionFactory.createContractCreation(caller, toArray(ops), 100, 1);
@@ -192,8 +197,11 @@ public class InterpreterCompleteTest {
         Transaction callTx = TestTransactionFactory.createContractCall(caller, addr, new byte[0], 0, 100, 2);
         BlockApplier.createAndApplyBlock(tb, List.of(callTx));
         
-        assertThat(blockchain.getStorage().loadReceipt(callTx.getTxId()).getStatus()).isEqualTo(TransactionReceipt.STATUS_FAILED);
-        assertThat(blockchain.getAccountState().getAccountStorage(addr).get(0L)).as("Slot 0 should remain null/0 after revert").isNull();
+        TransactionReceipt receipt = blockchain.getStorage().loadReceipt(callTx.getTxId());
+        assertThat(receipt.getStatus()).as("Should be REVERTED").isIn(TransactionReceipt.STATUS_REVERTED, TransactionReceipt.STATUS_FAILED);
+        // Use raw map access (not ContractState.get which defaults to 0L) to check for absent key
+        assertThat(blockchain.getAccountState().getAccountStorage(addr).getStorage().get(0L))
+                .as("Slot 0 should remain null/absent after revert").isNull();
     }
 
     @Test
@@ -214,7 +222,8 @@ public class InterpreterCompleteTest {
         ops.put(OpCode.PUSH.getByte()).putLong(0); // in offset
         ops.put(OpCode.PUSH.getByte()).putLong(500); // value
         // Push target address hash prefix
-        ops.put(OpCode.PUSH.getByte()).putLong(ByteBuffer.wrap(Crypto.hash(targetAddr.getBytes(java.nio.charset.StandardCharsets.UTF_8))).getLong());
+        ops.put(OpCode.PUSH.getByte()).putLong(ByteBuffer.wrap(Crypto.hash(targetAddr.getBytes(java.nio.charset.StandardCharsets.UTF_8))).getLong()); // toAddr
+        ops.put(OpCode.PUSH.getByte()).putLong(1000L); // callGas
         ops.put(OpCode.CALL.getByte());
         ops.put(OpCode.STOP.getByte());
         

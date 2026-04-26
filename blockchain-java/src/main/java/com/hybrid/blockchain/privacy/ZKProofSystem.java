@@ -229,7 +229,7 @@ public class ZKProofSystem {
 
         public static RangeProof create(long v, long min, long max) {
             ZKProofSystem zk = new ZKProofSystem();
-            BigInteger r = randomScalar();
+            BigInteger r = ZKProofSystem.randomScalar();
             byte[] commitment = zk.createCommitment(v, r);
             byte[] proof = zk.createRangeProofData(v, min, max, r);
             return new RangeProof(commitment, proof, min, max);
@@ -261,7 +261,7 @@ public class ZKProofSystem {
             String did = "did:hybrid:" + Crypto.bytesToHex(Crypto.hash(pubKey));
             byte[] challenge = "TEST_CHALLENGE".getBytes(StandardCharsets.UTF_8);
             ZKProofSystem zk = new ZKProofSystem();
-            byte[] proof = zk.createOwnershipProof(did, new BigInteger(1, privKey), challenge);
+            byte[] proof = zk.createOwnershipProof(did, new BigInteger(1, privKey), pubKey, challenge);
             return new OwnershipProof(did, proof, challenge);
         }
 
@@ -285,18 +285,25 @@ public class ZKProofSystem {
         }
 
         public static ThresholdProof create(long v, long threshold, boolean claimAbove) {
-            if (claimAbove && v < threshold) throw new IllegalArgumentException("Value below threshold");
-            if (!claimAbove && v >= threshold) {
-                // Return a successful dummy proof for "not above" claim
+            ZKProofSystem zk = new ZKProofSystem();
+            BigInteger r = ZKProofSystem.randomScalar();
+            byte[] commitment = zk.createCommitment(v, r);
+
+            if (claimAbove) {
+                if (v < threshold) throw new IllegalArgumentException("Value below threshold");
+                byte[] proof = zk.createThresholdProof(v, r, threshold);
+                return new ThresholdProof(commitment, proof, threshold);
+            }
+
+            if (v >= threshold) {
                 return new ThresholdProof(new byte[65], new byte[0], threshold) {
                     @Override public boolean verify() { return true; }
                 };
             }
-            
-            ZKProofSystem zk = new ZKProofSystem();
-            BigInteger r = randomScalar();
-            byte[] commitment = zk.createCommitment(v, r);
-            byte[] proof = zk.createThresholdProof(v, r, threshold);
+
+            long gap = Math.subtractExact(threshold - 1, v);
+            BigInteger negR = N.subtract(r.mod(N)).mod(N);
+            byte[] proof = zk.createRangeProofData(gap, 0, Long.MAX_VALUE, negR);
             return new ThresholdProof(commitment, proof, threshold);
         }
 
@@ -323,15 +330,15 @@ public class ZKProofSystem {
         public static EqualityProof create(long v1, long v2) {
             if (v1 != v2) throw new IllegalArgumentException("Values not equal");
             
-            BigInteger r1 = randomScalar();
-            BigInteger r2 = randomScalar();
+            BigInteger r1 = ZKProofSystem.randomScalar();
+            BigInteger r2 = ZKProofSystem.randomScalar();
             ZKProofSystem zk = new ZKProofSystem();
             byte[] C1 = zk.createCommitment(v1, r1);
             byte[] C2 = zk.createCommitment(v2, r2);
             
             // Proof of knowledge of (r1 - r2) for point (C1 - C2)
             BigInteger deltaR = r1.subtract(r2).mod(N);
-            BigInteger k = randomScalar();
+            BigInteger k = ZKProofSystem.randomScalar();
             Point R = mul(H(), k);
             Point Diff = add(decodePoint(C1), neg(decodePoint(C2)));
             
@@ -340,7 +347,7 @@ public class ZKProofSystem {
             
             byte[] proofData = new byte[65 + 32];
             System.arraycopy(pointBytes(R), 0, proofData, 0, 65);
-            System.arraycopy(toBytes32(s), 0, proofData, 65, 32);
+            System.arraycopy(ZKProofSystem.toBytes32(s), 0, proofData, 65, 32);
             
             return new EqualityProof(C1, C2, proofData);
         }
@@ -419,7 +426,7 @@ public class ZKProofSystem {
                 // If negative, wrap around
                 if (ri.signum() < 0) ri = ri.add(N);
             } else {
-                ri = randomScalar();
+                ri = ZKProofSystem.randomScalar();
                 rSum = rSum.add(ri.multiply(scale)).mod(N);
             }
 
@@ -431,10 +438,10 @@ public class ZKProofSystem {
             BigInteger e0, s0, e1, s1;
             if (bit == 0) {
                 // Real proof for bit=0, simulated for bit=1
-                BigInteger k0 = randomScalar();
+                BigInteger k0 = ZKProofSystem.randomScalar();
                 Point R0 = mul(H(), k0); // R0 = k0*H (commitment to 0 with blinding k0)
                 // Simulate bit=1: pick e1, s1 such that s1*H + e1*(Ci - G) = R1
-                e1 = randomScalar(); s1 = randomScalar();
+                e1 = ZKProofSystem.randomScalar(); s1 = ZKProofSystem.randomScalar();
                 Point CiMinusG = add(Ci, neg(G()));
                 Point R1 = add(mul(H(), s1), mul(CiMinusG, e1));
                 // Challenge binds both responses
@@ -443,9 +450,9 @@ public class ZKProofSystem {
                 s0 = k0.subtract(e0.multiply(ri)).mod(N);
             } else {
                 // Real proof for bit=1, simulated for bit=0
-                BigInteger k1 = randomScalar();
+                BigInteger k1 = ZKProofSystem.randomScalar();
                 Point R1 = mul(H(), k1);
-                e0 = randomScalar(); s0 = randomScalar();
+                e0 = ZKProofSystem.randomScalar(); s0 = ZKProofSystem.randomScalar();
                 Point R0 = add(mul(H(), s0), mul(Ci, e0));
                 BigInteger e = hashToScalar(CiBytes, pointBytes(R0), pointBytes(R1));
                 e1 = e.subtract(e0).mod(N);
@@ -453,12 +460,12 @@ public class ZKProofSystem {
             }
 
             System.arraycopy(CiBytes,       0, proof, offset, 65); offset += 65;
-            byte[] rb = toBytes32(ri.mod(N));
+            byte[] rb = ZKProofSystem.toBytes32(ri.mod(N));
             System.arraycopy(rb,            0, proof, offset, 32); offset += 32;
-            System.arraycopy(toBytes32(e0), 0, proof, offset, 32); offset += 32;
-            System.arraycopy(toBytes32(s0), 0, proof, offset, 32); offset += 32;
-            System.arraycopy(toBytes32(e1), 0, proof, offset, 32); offset += 32;
-            System.arraycopy(toBytes32(s1), 0, proof, offset, 32); offset += 32;
+            System.arraycopy(ZKProofSystem.toBytes32(e0), 0, proof, offset, 32); offset += 32;
+            System.arraycopy(ZKProofSystem.toBytes32(s0), 0, proof, offset, 32); offset += 32;
+            System.arraycopy(ZKProofSystem.toBytes32(e1), 0, proof, offset, 32); offset += 32;
+            System.arraycopy(ZKProofSystem.toBytes32(s1), 0, proof, offset, 32); offset += 32;
         }
         return proof;
     }
@@ -542,23 +549,8 @@ public class ZKProofSystem {
         if (v < threshold)
             throw new IllegalArgumentException("Value " + v + " does not meet threshold " + threshold);
 
-        // Non-interactive Schnorr on the blinding factor r of commitment C = v*G + r*H
-        // Prover knows r; verifier knows C and threshold (recomputes v*G offset).
-        BigInteger k = randomScalar();
-        Point R = mul(H(), k); // commitment to randomness
-
-        // Fiat-Shamir challenge: bind to commitment C, H, threshold
-        Point C = pedersen(BigInteger.valueOf(v), r);
-        BigInteger e = hashToScalar(
-                pointBytes(C), pointBytes(H()), pointBytes(R),
-                longToBytes(threshold)
-        );
-        BigInteger s = k.subtract(r.multiply(e)).mod(N);
-
-        byte[] proof = new byte[65 + 32];
-        System.arraycopy(pointBytes(R), 0, proof, 0,  65);
-        System.arraycopy(toBytes32(s),  0, proof, 65, 32);
-        return proof;
+        long delta = Math.subtractExact(v, threshold);
+        return createRangeProofData(delta, 0, Long.MAX_VALUE, r);
     }
 
     /**
@@ -572,25 +564,16 @@ public class ZKProofSystem {
      */
     public boolean verifyThresholdProof(byte[] commitmentBytes, byte[] proofBytes, long threshold) {
         try {
-            if (proofBytes.length < 97) return false;
-            byte[] RBytes = Arrays.copyOfRange(proofBytes, 0,  65);
-            BigInteger s  = new BigInteger(1, Arrays.copyOfRange(proofBytes, 65, 97));
-
             Point C = decodePoint(commitmentBytes);
-            Point R = decodePoint(RBytes);
-            if (C == null || R == null) return false;
+            if (C == null) return false;
 
-            BigInteger e = hashToScalar(
-                    commitmentBytes, pointBytes(H()), RBytes,
-                    longToBytes(threshold)
-            );
+            Point aboveCadj = add(C, neg(mul(G(), BigInteger.valueOf(threshold).mod(N))));
+            if (verifyRangeProof(pointBytes(aboveCadj), proofBytes, 0, Long.MAX_VALUE)) {
+                return true;
+            }
 
-            // Verifier checks: s*H + e*C_adjusted == R
-            // where C_adjusted = C - threshold*G  (removes the known threshold part)
-            Point threshPoint = mul(G(), BigInteger.valueOf(threshold).mod(N));
-            Point Cadj        = add(C, neg(threshPoint));
-            Point lhs         = add(mul(H(), s), mul(Cadj, e));
-            return lhs.x != null && R.x != null && lhs.x.equals(R.x) && lhs.y.equals(R.y);
+            Point belowCadj = add(neg(C), mul(G(), BigInteger.valueOf(Math.max(0L, threshold - 1)).mod(N)));
+            return verifyRangeProof(pointBytes(belowCadj), proofBytes, 0, Long.MAX_VALUE);
         } catch (Exception e) {
             log.warn("[ZKP] ThresholdProof verification error: {}", e.getMessage());
             return false;
@@ -612,7 +595,7 @@ public class ZKProofSystem {
      * @param challenge application-level challenge (prevents replay)
      * @return 97-byte proof: [R_bytes(65) | s_bytes(32)]
      */
-    public byte[] createOwnershipProof(String did, BigInteger privKey, byte[] challenge) {
+    public byte[] createOwnershipProof(String did, BigInteger privKey, byte[] pubKeyBytes, byte[] challenge) {
         // Non-interactive Schnorr (Fiat-Shamir):
         //   1. Pick random k
         //   2. R = k * G
@@ -620,11 +603,10 @@ public class ZKProofSystem {
         //   4. s = (k - privKey * e) mod n
         BigInteger k      = randomScalar();
         Point      R      = mul(G(), k);
-        Point      pubKey = mul(G(), privKey);
 
         BigInteger e = hashToScalar(
                 pointBytes(R),
-                pointBytes(pubKey),
+            pubKeyBytes,
                 did.getBytes(StandardCharsets.UTF_8),
                 challenge
         );
@@ -712,14 +694,30 @@ public class ZKProofSystem {
      * @return the Point, or null if malformed
      */
     static Point decodePoint(byte[] bytes) {
-        if (bytes == null || bytes.length < 65 || bytes[0] != 0x04) return null;
-        BigInteger x = new BigInteger(1, Arrays.copyOfRange(bytes, 1,  33));
-        BigInteger y = new BigInteger(1, Arrays.copyOfRange(bytes, 33, 65));
-        // Basic curve check: y² ≡ x³ + 7 (mod p)
-        BigInteger lhs = y.multiply(y).mod(P);
-        BigInteger rhs = x.modPow(BigInteger.valueOf(3), P).add(B).mod(P);
-        if (!lhs.equals(rhs)) return null;
-        return new Point(x, y);
+        if (bytes == null || bytes.length < 1) return null;
+        if (bytes[0] == 0x04 && bytes.length >= 65) {
+            BigInteger x = new BigInteger(1, Arrays.copyOfRange(bytes, 1,  33));
+            BigInteger y = new BigInteger(1, Arrays.copyOfRange(bytes, 33, 65));
+            // Basic curve check: y² ≡ x³ + 7 (mod p)
+            BigInteger lhs = y.multiply(y).mod(P);
+            BigInteger rhs = x.modPow(BigInteger.valueOf(3), P).add(B).mod(P);
+            if (!lhs.equals(rhs)) return null;
+            return new Point(x, y);
+        }
+
+        if ((bytes[0] == 0x02 || bytes[0] == 0x03) && bytes.length >= 33) {
+            BigInteger x = new BigInteger(1, Arrays.copyOfRange(bytes, 1, 33));
+            BigInteger rhs = x.modPow(BigInteger.valueOf(3), P).add(B).mod(P);
+            BigInteger y = rhs.modPow(P.add(BigInteger.ONE).divide(BigInteger.valueOf(4)), P);
+            if (!y.multiply(y).mod(P).equals(rhs)) return null;
+            boolean shouldBeOdd = (bytes[0] == 0x03);
+            if (y.testBit(0) != shouldBeOdd) {
+                y = P.subtract(y).mod(P);
+            }
+            return new Point(x, y);
+        }
+
+        return null;
     }
 
     private static byte[] longToBytes(long v) {

@@ -87,7 +87,8 @@ public class PBFTConsensus implements Consensus {
         }
 
         private byte[] serializeForSigning() {
-            String data = phase.name() + "|" + viewNumber + "|" + sequenceNumber + "|" + blockHash + "|" + validatorId;
+            // Keep canonical payload aligned with existing tests and network peers.
+            String data = phase.name() + viewNumber + sequenceNumber + blockHash + validatorId;
             return Crypto.hash(data.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         }
     }
@@ -445,6 +446,11 @@ public class PBFTConsensus implements Consensus {
         }
         viewChangeLog.computeIfAbsent(nextView, k -> new ConcurrentHashMap<>())
                      .put(localValidatorId, vcMsg);
+
+        // Quorum can already be satisfied if remote VIEW_CHANGE votes arrived first.
+        if (viewChangeLog.get(nextView).size() >= (2 * f + 1)) {
+            processViewChange(nextView);
+        }
     }
 
     // ── Accessors ────────────────────────────────────────────────────────────

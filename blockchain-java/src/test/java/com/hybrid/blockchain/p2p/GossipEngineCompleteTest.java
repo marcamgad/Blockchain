@@ -4,6 +4,7 @@ import com.hybrid.blockchain.Crypto;
 import org.junit.jupiter.api.*;
 import static org.assertj.core.api.Assertions.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.List;
 
 /**
  * Unit and logic tests for the P2P Gossip Engine.
@@ -57,10 +58,11 @@ public class GossipEngineCompleteTest {
     }
 
     @Test
-    @DisplayName("GE1.7 — Mandatory dispatcher (Stub)")
-    @Disabled("Requires Fix 11 — mandatory dispatcher enforcement")
+    @DisplayName("GE1.7 — Mandatory dispatcher")
     void testMissingDispatcher() {
-        // Assert throws IllegalStateException when relaying without a dispatcher
+        assertThatThrownBy(() -> engine.relay("data".getBytes(), "p1", java.util.Collections.emptyList(), 3))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Dispatcher not configured");
     }
 
     @Test

@@ -52,6 +52,7 @@ public class Blockchain {
         this.hardwareManager = new HardwareManager();
         this.transactionRateLimiter = RateLimiter.Presets.transactionLimiter();
         this.tokenRegistry = new TokenRegistry(this.storage);
+        this.monitor = com.hybrid.blockchain.monitoring.BlockchainMonitor.getInstance();
     }
 
     public void setTokenRegistry(TokenRegistry registry) { this.tokenRegistry = registry; }
@@ -245,7 +246,16 @@ public class Blockchain {
                     throw new Exception("Insufficient funds");
 
                 if (!skipNonce) {
-                    long expectedNonce = state.getNonce(tx.getFrom()) + 1;
+                    // For adding to mempool, allow nonces up to the max pending nonce + 1
+                    long currentNonce = state.getNonce(tx.getFrom());
+                    long expectedNonce = currentNonce + 1;
+                    if (this.mempool != null) {
+                        for (Transaction ptx : mempool.toArray()) {
+                            if (tx.getFrom().equals(ptx.getFrom())) {
+                                expectedNonce = Math.max(expectedNonce, ptx.getNonce() + 1);
+                            }
+                        }
+                    }
                     if (tx.getNonce() != expectedNonce) throw new IllegalArgumentException("Invalid nonce: expected " + expectedNonce + " got " + tx.getNonce());
                 }
                 long baseFeeAcc = feeMarket.getCurrentBaseFee(storage);
@@ -590,6 +600,7 @@ public class Blockchain {
 
         java.util.Map<String, Long> expectedNonces = new java.util.LinkedHashMap<>();
         for (Transaction tx : sortedTxs) {
+            if (tx.getType() == Transaction.Type.UTXO) continue;
             if (tx.getFrom() != null) {
                 long base = expectedNonces.computeIfAbsent(tx.getFrom(),
                         addr -> state.getNonce(addr) + 1);
@@ -765,13 +776,7 @@ public class Blockchain {
             // Perform deep validation (including AI audit for contracts).
             validateTransaction(tx, false);
 
-            // Nonce check: must be > current ledger nonce
-            if (tx.getFrom() != null) {
-                long currentNonce = state.getNonce(tx.getFrom());
-                if (tx.getNonce() <= currentNonce) {
-                    throw new IllegalArgumentException("Invalid nonce: " + tx.getNonce() + " <= current ledger nonce " + currentNonce);
-                }
-            }
+            // Nonce check: already covered by validateTransaction(tx, false);
             // Balance check: must account for pending transactions in mempool
             if (tx.getFrom() != null) {
                 long balance = getBalance(tx.getFrom());

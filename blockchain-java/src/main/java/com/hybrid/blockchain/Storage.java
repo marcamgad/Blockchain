@@ -2,7 +2,8 @@ package com.hybrid.blockchain;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.iq80.leveldb.*;
-import static org.fusesource.leveldbjni.JniDBFactory.*;
+import org.fusesource.leveldbjni.JniDBFactory;
+import org.iq80.leveldb.impl.Iq80DBFactory;
 
 import javax.crypto.Cipher;
 import javax.crypto.spec.GCMParameterSpec;
@@ -48,6 +49,7 @@ public class Storage implements AutoCloseable {
     private static final int GCM_IV_LENGTH = 12;
     private static final int GCM_TAG_LENGTH = 128; // in bits
     private final SecureRandom secureRandom = new SecureRandom();
+    private volatile boolean closed = false;
 
     public Storage(String dbPath, byte[] aesKeyBytes) throws IOException {
         if (aesKeyBytes.length != 16 && aesKeyBytes.length != 24 && aesKeyBytes.length != 32) {
@@ -69,6 +71,15 @@ public class Storage implements AutoCloseable {
 
         Options options = new Options();
         options.createIfMissing(true);
+
+        DBFactory factory;
+        try {
+            JniDBFactory.factory.pushMemoryPool(1048576);
+            JniDBFactory.factory.popMemoryPool();
+            factory = JniDBFactory.factory;
+        } catch (Throwable t) {
+            factory = Iq80DBFactory.factory;
+        }
         this.db = factory.open(folder, options);
     }
 
@@ -108,6 +119,7 @@ public class Storage implements AutoCloseable {
     }
 
     public void put(String key, Object value) {
+        ensureOpen();
         if (key == null) return;
         try {
             cache.put(key, value);
@@ -120,6 +132,7 @@ public class Storage implements AutoCloseable {
     }
 
     public <T> T get(String key, Class<T> clazz) {
+        ensureOpen();
         if (key == null) return null;
         if (cache.containsKey(key)) {
             return clazz.cast(cache.get(key));
@@ -139,6 +152,7 @@ public class Storage implements AutoCloseable {
     }
 
     public void del(String key) {
+        ensureOpen();
         if (key == null) return;
         cache.remove(key);
         String sk = secureKey(key);
@@ -148,7 +162,7 @@ public class Storage implements AutoCloseable {
     }
 
     public void saveBlock(String hash, Block block) {
-        put("block:" + hash, block);
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        put(blockStorageKey(hash), block);
         put("height:" + block.getIndex(), hash);
 
         // Critical tip update; use sync write
@@ -169,6 +183,8 @@ public class Storage implements AutoCloseable {
     }
 
     public Block loadBlockByHash(String hash) {
+        Block block = get(blockStorageKey(hash), Block.class);
+        if (block != null) return block;
         return get("block:" + hash, Block.class);
     }
 
@@ -207,8 +223,18 @@ public class Storage implements AutoCloseable {
     }
 
     public Object getMeta(String key) {
-        // Return Object to preserve numeric types instead of forcing String
-        return get("meta:" + key, Object.class);
+        Object value = get("meta:" + key, Object.class);
+        if (value == null) return null;
+
+        if (isNumericMetaKey(key)) {
+            return value;
+        }
+
+        if (value instanceof Number || value instanceof Boolean) {
+            return String.valueOf(value);
+        }
+
+        return value;
     }
 
     /**
@@ -223,6 +249,8 @@ public class Storage implements AutoCloseable {
 
     @Override
     public void close() throws IOException {
+        if (closed) return;
+        closed = true;
         db.close();
     }
     public void saveSnapshot(
@@ -451,6 +479,7 @@ public class Storage implements AutoCloseable {
      */
     public void saveCheckpoint(com.hybrid.blockchain.Checkpoint cp) {
         put("checkpoint:" + cp.getBlockHeight(), cp);
+        putMeta("lastCheckpointHeight", cp.getBlockHeight());
     }
 
     /**
@@ -459,6 +488,17 @@ public class Storage implements AutoCloseable {
      * @return the latest Checkpoint, or null if none exists
      */
     public com.hybrid.blockchain.Checkpoint loadLatestCheckpoint() {
+        Object latestHeight = getMeta("lastCheckpointHeight");
+        if (latestHeight instanceof Number) {
+            com.hybrid.blockchain.Checkpoint cp = loadCheckpointAtHeight(((Number) latestHeight).intValue());
+            if (cp != null) return cp;
+        } else if (latestHeight instanceof String) {
+            try {
+                com.hybrid.blockchain.Checkpoint cp = loadCheckpointAtHeight(Integer.parseInt((String) latestHeight));
+                if (cp != null) return cp;
+            } catch (NumberFormatException ignored) {}
+        }
+
         String prefix = "checkpoint:";
         // Scan backwards to find the highest checkpoint key
         try (DBIterator it = db.iterator()) {
@@ -497,5 +537,28 @@ public class Storage implements AutoCloseable {
     private static String asString(byte[] bytes) {
         return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
     }
-}
 
+    private static byte[] bytes(String value) {
+        return value == null ? null : value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    private static boolean isNumericMetaKey(String key) {
+        if (key == null) return false;
+        return key.equals("difficulty")
+                || key.equals("totalMinted")
+                || key.equals("baseFee")
+                || key.equals("lastSnapshotHeight")
+                || key.startsWith("rep:");
+    }
+
+    private static String blockStorageKey(String hash) {
+        if (hash == null) return null;
+        return "block:" + Crypto.bytesToHex(Crypto.hash(("block:" + hash).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    }
+
+    private void ensureOpen() {
+        if (closed) {
+            throw new IllegalStateException("Storage is closed");
+        }
+    }
+}
