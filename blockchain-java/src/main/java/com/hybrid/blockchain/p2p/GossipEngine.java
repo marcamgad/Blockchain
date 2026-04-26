@@ -8,7 +8,6 @@ import java.util.function.Consumer;
  * Handles message propagation logic, duplicate suppression, and peer selection.
  */
 public class GossipEngine {
-
     private final PeerManager peerManager;
     private final Map<String, Long> seenMessages = new LinkedHashMap<String, Long>(1000, 0.75f, true) {
         @Override
@@ -19,6 +18,11 @@ public class GossipEngine {
 
     private final Map<P2PMessage.Type, Consumer<P2PMessage>> handlers = new ConcurrentHashMap<>();
     private final int fanout;
+
+    public GossipEngine() {
+        this.peerManager = null;
+        this.fanout = 3;
+    }
 
     public GossipEngine(PeerManager peerManager, int fanout) {
         this.peerManager = peerManager;
@@ -40,7 +44,14 @@ public class GossipEngine {
         return accepted;
     }
 
+    public boolean validateAndProcess(byte[] payload) {
+        if (payload == null) return false;
+        P2PMessage msg = new P2PMessage("SYSTEM", "dummy", P2PMessage.Type.GOSSIP, payload);
+        return validateAndProcess(msg);
+    }
+
     public boolean validateAndProcess(P2PMessage message) {
+        if (message == null) return false;
         if (message.getPayload() == null || message.getPayload().length > 1024 * 1024) return false;
         
         String msgId = message.getMessageId();
@@ -64,25 +75,49 @@ public class GossipEngine {
      * Relays a message to a random subset of peers.
      */
     public void relay(P2PMessage message, String excludePeerId) {
+        if (peerManager == null) return;
         List<PeerManager.PeerInfo> targets = peerManager.selectGossipPeers(fanout, excludePeerId);
         for (PeerManager.PeerInfo peer : targets) {
-            // This would normally call PeerNode.sendMessage(peer, message)
-            // We'll use a functional approach or event bus to keep GossipEngine decoupled
             dispatchRelay(peer, message);
         }
     }
 
+    public void relay(byte[] payload, String excludePeerId, List<String> availablePeers, int fanout) {
+        P2PMessage msg = new P2PMessage("SYSTEM", "dummy", P2PMessage.Type.GOSSIP, payload);
+        String msgId = msg.getMessageId();
+        synchronized (seenMessages) {
+            seenMessages.put(msgId, System.currentTimeMillis());
+        }
+
+        List<String> targets = new ArrayList<>(availablePeers);
+        targets.remove(excludePeerId);
+        Collections.shuffle(targets);
+        List<String> selected = targets.subList(0, Math.min(fanout, targets.size()));
+
+        if (dispatcher != null) {
+            dispatcher.onDispatch(selected, payload);
+        }
+    }
+
     // Hook for PeerNode to perform actual socket write
-    private RelayDispatcher dispatcher;
-    public void setRelayDispatcher(RelayDispatcher dispatcher) { this.dispatcher = dispatcher; }
+    public interface Dispatcher {
+        void onDispatch(List<String> targets, byte[] payload);
+    }
+
+    private Dispatcher dispatcher;
+    public void setDispatcher(Dispatcher dispatcher) { this.dispatcher = dispatcher; }
+
+    public void setRelayDispatcher(RelayDispatcher dispatcher) { this.relayDispatcher = dispatcher; }
 
     public interface RelayDispatcher {
         void send(PeerManager.PeerInfo target, P2PMessage message);
     }
 
+    private RelayDispatcher relayDispatcher;
+
     private void dispatchRelay(PeerManager.PeerInfo target, P2PMessage message) {
-        if (dispatcher != null) {
-            dispatcher.send(target, message);
+        if (relayDispatcher != null) {
+            relayDispatcher.send(target, message);
         }
     }
 }

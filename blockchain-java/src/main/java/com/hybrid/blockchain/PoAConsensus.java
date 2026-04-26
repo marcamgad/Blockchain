@@ -99,6 +99,14 @@ public class PoAConsensus implements Consensus {
     }
 
     @Override
+    public void addValidator(String id, byte[] publicKey) {
+        Validator newValidator = new Validator(id, publicKey);
+        if (!validators.stream().anyMatch(v -> v.getId().equals(id))) {
+            validators.add(newValidator);
+        }
+    }
+
+    @Override
     public java.util.Set<String> getSlashedValidators() {
         return java.util.Collections.unmodifiableSet(slashedValidators);
     }

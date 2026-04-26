@@ -25,6 +25,9 @@ public enum OpCode {
     EQ(0x22, 3),
     LT(0x23, 3),
     GT(0x24, 3),
+    AND(0x25, 2),
+    OR(0x26, 2),
+    NOT(0x27, 2),
 
     // State & Storage (0x30 - 0x3F)
     SLOAD(0x30, 200), // Load from persistent storage
@@ -44,6 +47,9 @@ public enum OpCode {
     RETURN(0xf3, 0),
     REVERT(0xfd, 0),
     CALL(0xf1, 700),
+    // FIX 8: DELEGATECALL is HIGH severity — it can corrupt the calling contract's
+    // own storage when the callee writes to slot offsets it doesn't own.
+    DELEGATECALL(0xf4, 700),
     LOG(0xa0, 375),
 
     // IoT Capabilities (0x50 - 0x5F)

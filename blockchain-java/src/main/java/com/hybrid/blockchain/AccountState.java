@@ -214,13 +214,13 @@ public class AccountState {
      *
      * @param addr   the account address
      * @param amount the amount to debit
-     * @throws Exception if the balance is insufficient
+     * @throws IllegalArgumentException if the balance is insufficient or amount is negative
      */
-    public void debit(String addr, long amount) throws Exception {
+    public void debit(String addr, long amount) {
         ensure(addr);
         Account acc = state.get(addr);
         if (amount < 0) throw new IllegalArgumentException("Invalid amount: cannot debit negative amount");
-        if (acc.getBalance() < amount) throw new Exception("Insufficient balance");
+        if (acc.getBalance() < amount) throw new IllegalArgumentException("Insufficient balance for " + addr + ": " + acc.getBalance() + " < " + amount);
         acc.debit(amount);
         updateMpt(addr, acc);
     }
@@ -238,6 +238,20 @@ public class AccountState {
         ensure(addr);
         Account acc = state.get(addr);
         acc.creditToken(tokenId, amount);
+        updateMpt(addr, acc);
+    }
+
+    /**
+     * Sets a specific token balance for an address.
+     *
+     * @param addr    the account address
+     * @param tokenId the token identifier
+     * @param amount  the balance to set
+     */
+    public void setTokenBalance(String addr, String tokenId, long amount) {
+        ensure(addr);
+        Account acc = state.get(addr);
+        acc.setTokenBalance(tokenId, amount);
         updateMpt(addr, acc);
     }
 
@@ -300,7 +314,11 @@ public class AccountState {
     }
 
     public void ensure(String addr) {
-        state.putIfAbsent(addr, new Account(0, 0));
+        state.computeIfAbsent(addr, k -> {
+            Account acc = new Account(0, 0);
+            updateMpt(addr, acc);
+            return acc;
+        });
     }
 
     public void putStorage(String addr, long key, long value) {
@@ -358,6 +376,17 @@ public class AccountState {
     public SSIManager getSSIManager() { return ssiManager; }
 
     public DeviceLifecycleManager getLifecycleManager() { return lifecycleManager; }
+
+    /**
+     * Wires a Storage instance into the lifecycle manager so that reputation scores
+     * are persisted on-chain rather than kept only in memory.
+     * Call this once after construction when storage is available.
+     *
+     * @param storage the blockchain storage instance
+     */
+    public void setStorage(com.hybrid.blockchain.Storage storage) {
+        this.lifecycleManager.setStorage(storage);
+    }
 
     public void setBlockHeight(long height) {
         lifecycleManager.setCurrentBlockHeight(height);
@@ -420,18 +449,76 @@ public class AccountState {
         return AccountState.fromMap(this.toJSON());
     }
 
+    public DeviceLifecycleManager getDeviceLifecycleManager() {
+        return lifecycleManager;
+    }
+
     /**
-     * Merges another AccountState into this one. Used for committing successful
-     * smart contract executions.
+     * Merges another AccountState delta into this one.
+     *
+     * <p>Merge semantics:
+     * <ul>
+     *   <li>If the address exists in both states: the delta's balance is ADDED to this state.
+     *       Nonce is updated to the maximum of both.
+     *   <li>If the address only exists in the delta: it is copied into this state as-is.
+     * </ul>
+     *
+     * <p>This method is used to commit successful smart-contract executions and
+     * block-simulation side effects back to the canonical state.
      */
     public void merge(AccountState other) {
-        // Since we are committing a simulated state that is about to be discarded,
-        // we can just take over its internal objects for speed and correctness.
-        this.state = other.state;
-        this.ssiManager = other.ssiManager;
-        this.lifecycleManager = other.lifecycleManager;
-        this.privateDataManager = other.privateDataManager;
-        this.mpt = other.mpt;
+        for (Map.Entry<String, Account> entry : other.state.entrySet()) {
+            String addr = entry.getKey();
+            Account otherAccount = entry.getValue();
+
+            if (this.state.containsKey(addr)) {
+                Account thisAccount = this.state.get(addr);
+                
+                // OVERWRITE balances from the sim state (sim state started as a clone)
+                Map<String, Long> newsBals = otherAccount.getTokenBalances();
+                for (Map.Entry<String, Long> tokenEntry : newsBals.entrySet()) {
+                    thisAccount.setTokenBalance(tokenEntry.getKey(), tokenEntry.getValue());
+                }
+                
+                // Sync nonces
+                thisAccount.setNonce(otherAccount.getNonce());
+                
+                // Sync code if new
+                if (thisAccount.getCode() == null && otherAccount.getCode() != null) {
+                    thisAccount.setCode(otherAccount.getCode());
+                }
+
+                // Sync storage
+                if (otherAccount.getStorage() != null) {
+                    thisAccount.getStorage().putAll(otherAccount.getStorage().getStorage());
+                }
+
+                // Sync capabilities
+                thisAccount.getCapabilities().clear();
+                thisAccount.getCapabilities().addAll(otherAccount.getCapabilities());
+
+            } else {
+                // New account: clone it into this state
+                Map<String, Long> balCopy = new HashMap<>(otherAccount.getTokenBalances());
+                Account newAccount = new Account(balCopy, otherAccount.getNonce(), otherAccount.getCode());
+                if (otherAccount.getStorage() != null) {
+                    newAccount.getStorage().putAll(otherAccount.getStorage().getStorage());
+                }
+                newAccount.getCapabilities().addAll(otherAccount.getCapabilities());
+                this.state.put(addr, newAccount);
+            }
+        }
+
+        // Sync sub-managers (SSI, Lifecycle, PrivateData) via RESTORE to maintain references if they are already wired
+        this.ssiManager.restore(other.ssiManager);
+        this.lifecycleManager.restore(other.lifecycleManager);
+        this.privateDataManager.restore(other.privateDataManager);
+
+        // Refresh MPT for all modified accounts
+        for (String addr : other.state.keySet()) {
+            Account acc = this.state.get(addr);
+            if (acc != null) updateMpt(addr, acc);
+        }
     }
 
     private void updateMpt(String addr, Account acc) {
@@ -541,6 +628,11 @@ public class AccountState {
         /** Credits the native token. */
         public synchronized void credit(long amount) {
             tokenBalances.merge("native", amount, (a, b) -> a + b);
+        }
+
+        /** Sets a specific token balance. */
+        public synchronized void setTokenBalance(String tokenId, long amount) {
+            tokenBalances.put(tokenId, amount);
         }
 
         /** Credits a specific token. */

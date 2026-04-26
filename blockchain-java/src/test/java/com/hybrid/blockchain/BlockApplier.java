@@ -45,6 +45,15 @@ public class BlockApplier {
                 .thenComparingLong(Transaction::getNonce));
 
         long totalFees = 0;
+        // DEBUG
+        java.util.Set<String> mfs = ((com.hybrid.blockchain.lifecycle.DeviceLifecycleManager)simState.getLifecycleManager()).getStats().keySet();
+        // Since getStats returns a map, let's just check the size or something.
+        // Actually, getStats returns trustedManufacturers count.
+        int mfCount = (int)simState.getLifecycleManager().getStats().get("trustedManufacturers");
+        if (mfCount == 0) {
+            System.err.println("[BlockApplier] DEBUG: simState has 0 trustedManufacturers!");
+        }
+
         for (Transaction tx : simulationTxs) {
             totalFees += tx.getFee();
             try {

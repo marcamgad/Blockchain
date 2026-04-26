@@ -44,9 +44,10 @@ public class SmartContractAuditorTest {
 
     @Test
     public void testReentrancyFootprint() {
-        byte[] code = new byte[3];
+        byte[] code = new byte[4];
         code[0] = OpCode.CALL.getByte();
-        code[1] = OpCode.STOP.getByte();
+        code[1] = OpCode.SSTORE.getByte();
+        code[2] = OpCode.STOP.getByte();
         
         AuditResult result = SmartContractAuditor.audit(code);
         assertFalse(result.isRejected());

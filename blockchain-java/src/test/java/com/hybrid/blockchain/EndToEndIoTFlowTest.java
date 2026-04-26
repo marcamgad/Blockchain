@@ -89,7 +89,7 @@ public class EndToEndIoTFlowTest {
             BlockApplier.createAndApplyBlock(tb, Collections.singletonList(txCommit));
             
             // 6. Verify Fee Market Scaling
-            long currentFee = FeeMarket.getCurrentBaseFee(chain.getStorage());
+            long currentFee = new FeeMarket().getCurrentBaseFee(chain.getStorage());
             assertThat(currentFee).isGreaterThanOrEqualTo(Config.BASE_FEE_INITIAL);
         }
     }

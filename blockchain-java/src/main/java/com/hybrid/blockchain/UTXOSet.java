@@ -46,12 +46,18 @@ public class UTXOSet {
         map.put(key, new UTXO(address, amount));
     }
 
-    public void spendOutput(String txid, int index) throws Exception {
+    /** Overload for UTXOSetCompleteTest compat. */
+    public void addOutput(String txid, int index, UTXOOutput output) {
+        addOutput(txid, index, output.address, output.amount);
+    }
+
+    public boolean spendOutput(String txid, int index) {
         String key = txid + ":" + index;
         if (!map.containsKey(key)) {
-            throw new Exception("UTXO not found or already spent");
+            throw new IllegalArgumentException("UTXO not found: " + key);
         }
         map.remove(key);
+        return true;
     }
 
     public boolean isUnspent(String txid, int index) {
@@ -105,6 +111,15 @@ public class UTXOSet {
 
         public long getAmount() {
             return amount;
+        }
+    }
+
+    public static class UTXOOutput {
+        public final String address;
+        public final long amount;
+        public UTXOOutput(String address, long amount) {
+            this.address = address;
+            this.amount = amount;
         }
     }
 

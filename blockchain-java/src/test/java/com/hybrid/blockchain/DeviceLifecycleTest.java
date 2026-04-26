@@ -93,7 +93,7 @@ public class DeviceLifecycleTest {
         assertEquals(DeviceStatus.ACTIVE, record.getStatus());
         assertEquals(ownerAddress, record.getOwner());
         assertNotNull(record.getDid());
-        assertEquals("did:iot:" + deviceId, record.getDid());
+        assertEquals("did:hybrid:" + deviceId, record.getDid());
 
         // Verify device is operational
         assertTrue(lifecycleManager.isDeviceOperational(deviceId));

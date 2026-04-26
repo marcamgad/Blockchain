@@ -61,6 +61,25 @@ public class DeviceLifecycleManager {
             this.status = DeviceStatus.PROVISIONING;
         }
 
+        public DeviceRecord cloneRecord() {
+            DeviceRecord copy = new DeviceRecord();
+            copy.deviceId = this.deviceId;
+            copy.did = this.did;
+            copy.status = this.status;
+            copy.owner = this.owner;
+            copy.manufacturer = this.manufacturer;
+            copy.model = this.model;
+            copy.firmwareVersion = this.firmwareVersion;
+            copy.attestationSignature = this.attestationSignature != null ? this.attestationSignature.clone() : null;
+            copy.registrationBlock = this.registrationBlock;
+            copy.lastActivityBlock = this.lastActivityBlock;
+            copy.reputationScore = this.reputationScore;
+            // deep copy lists and maps
+            copy.firmwareHistory.addAll(this.firmwareHistory);
+            copy.metadata.putAll(this.metadata);
+            return copy;
+        }
+
         // Getters
         public String getDeviceId() {
             return deviceId;
@@ -202,12 +221,19 @@ public class DeviceLifecycleManager {
     // Current blockchain height (injected)
     private long currentBlockHeight;
 
+    // FIX 4: Storage reference for persisting reputation scores on-chain.
+    // May be null in lightweight / test contexts; reputation then falls back to in-memory only.
+    private com.hybrid.blockchain.Storage storage;
+
     public void restore(DeviceLifecycleManager other) {
         this.deviceRegistry.clear();
-        this.deviceRegistry.putAll(other.deviceRegistry);
+        for (Map.Entry<String, DeviceRecord> entry : other.deviceRegistry.entrySet()) {
+            this.deviceRegistry.put(entry.getKey(), entry.getValue().cloneRecord());
+        }
         this.trustedManufacturers.clear();
         this.trustedManufacturers.putAll(other.trustedManufacturers);
         this.currentBlockHeight = other.currentBlockHeight;
+        this.storage = other.storage;
     }
 
     public DeviceLifecycleManager(SSIManager ssiManager) {
@@ -215,6 +241,26 @@ public class DeviceLifecycleManager {
         this.trustedManufacturers = new ConcurrentHashMap<>();
         this.ssiManager = ssiManager;
         this.currentBlockHeight = 0;
+    }
+
+    /**
+     * Constructs a DeviceLifecycleManager with a Storage back-end for reputation persistence.
+     *
+     * @param ssiManager the SSI manager for DID operations
+     * @param storage    the storage instance (may be null for in-memory-only mode)
+     */
+    public DeviceLifecycleManager(SSIManager ssiManager, com.hybrid.blockchain.Storage storage) {
+        this(ssiManager);
+        this.storage = storage;
+    }
+
+    /**
+     * Injects the storage reference (called after construction when storage is available).
+     *
+     * @param storage the blockchain storage instance
+     */
+    public void setStorage(com.hybrid.blockchain.Storage storage) {
+        this.storage = storage;
     }
 
     /**
@@ -277,9 +323,16 @@ public class DeviceLifecycleManager {
     }
 
     /**
-     * Activate device (assign to owner and create DID)
+     * Activate device (assign to owner and create DID) - Simplified overload for non-consensus use.
      */
     public void activateDevice(String deviceId, String owner, byte[] devicePublicKey) {
+        activateDevice(deviceId, owner, devicePublicKey, System.currentTimeMillis());
+    }
+
+    /**
+     * Activate device (assign to owner and create DID)
+     */
+    public void activateDevice(String deviceId, String owner, byte[] devicePublicKey, long timestamp) {
         DeviceRecord record = getDeviceRecord(deviceId);
 
         // Verify state transition
@@ -291,7 +344,7 @@ public class DeviceLifecycleManager {
         record.setOwner(owner);
 
         // Create DID through SSI Manager
-        String did = ssiManager.registerDID(deviceId, devicePublicKey, owner);
+        String did = ssiManager.registerDID(deviceId, devicePublicKey, owner, timestamp);
         record.setDid(did);
 
         // Transition to ACTIVE
@@ -450,12 +503,23 @@ public class DeviceLifecycleManager {
     }
 
     /**
-     * Get device record
+     * Get device record, refreshing the reputation score from storage on every read.
+     *
+     * @param deviceId the device identifier
+     * @return the DeviceRecord with an up-to-date reputation score
+     * @throws IllegalArgumentException if the device is not found
      */
     public DeviceRecord getDeviceRecord(String deviceId) {
+        if (deviceId == null) return null;
         DeviceRecord record = deviceRegistry.get(deviceId);
         if (record == null) {
             throw new IllegalArgumentException("Device not found: " + deviceId);
+        }
+        // FIX 4: Always refresh reputation from storage so the value reflects
+        // any updates made by other components (e.g. slashing, cross-block penalties).
+        if (storage != null) {
+            double stored = com.hybrid.blockchain.reputation.ReputationEngine.readScore(deviceId, storage);
+            record.setReputationScore(stored);
         }
         return record;
     }
@@ -473,23 +537,46 @@ public class DeviceLifecycleManager {
     }
 
     /**
-     * Updates device reputation based on activity
+     * Updates device reputation based on activity outcome, persisting the new score to storage.
+     *
+     * @param deviceId the device identifier
+     * @param success  true if the activity (e.g. telemetry) was anomaly-free
      */
     public void recordDeviceActivity(String deviceId, boolean success) {
         try {
-            DeviceRecord record = getDeviceRecord(deviceId);
-            double oldScore = record.getReputationScore();
-            double newScore = com.hybrid.blockchain.reputation.ReputationEngine.calculateNewScore(oldScore, success);
-            
-            // Apply inactivity penalty if applicable
+            DeviceRecord record = deviceRegistry.get(deviceId);
+            if (record == null) return;
+
+            // Read current score (from storage if available, else in-memory)
+            double oldScore = storage != null
+                    ? com.hybrid.blockchain.reputation.ReputationEngine.readScore(deviceId, storage)
+                    : record.getReputationScore();
+
+            // Apply inactivity penalty first
+            double penalisedScore = oldScore;
             if (currentBlockHeight > record.getLastActivityBlock()) {
                 long inactivity = currentBlockHeight - record.getLastActivityBlock();
-                newScore = com.hybrid.blockchain.reputation.ReputationEngine.applyInactivityPenalty(newScore, inactivity);
+                penalisedScore = com.hybrid.blockchain.reputation.ReputationEngine
+                        .applyInactivityPenalty(penalisedScore, inactivity);
             }
-            
+
+            // Apply success/failure delta and persist
+            double newScore;
+            if (storage != null) {
+                // FIX 4: updateScore reads from storage, writes back — atomic for this thread
+                // Temporarily write penalised score so updateScore builds on it
+                com.hybrid.blockchain.reputation.ReputationEngine.writeScore(deviceId, penalisedScore, storage);
+                newScore = com.hybrid.blockchain.reputation.ReputationEngine
+                        .updateScore(deviceId, success, storage);
+            } else {
+                newScore = com.hybrid.blockchain.reputation.ReputationEngine
+                        .calculateNewScore(penalisedScore, success);
+            }
+
             record.setReputationScore(newScore);
             record.setLastActivityBlock(currentBlockHeight);
-            log.debug("[REPUTATION] Device {}: {} -> {}", deviceId, oldScore, newScore);
+            log.debug("[REPUTATION] Device {}: {:.4f} -> {:.4f} (success={})",
+                    deviceId, oldScore, newScore, success);
         } catch (Exception e) {
             log.warn("[REPUTATION] Failed to record activity for {}: {}", deviceId, e.getMessage());
         }
@@ -560,6 +647,13 @@ public class DeviceLifecycleManager {
         DeviceLifecycleManager manager = new DeviceLifecycleManager(ssiManager);
         if (json == null) return manager;
 
+        if (json.containsKey("trustedManufacturers")) {
+            Map<String, String> mfs = (Map<String, String>) json.get("trustedManufacturers");
+            for (Map.Entry<String, String> entry : mfs.entrySet()) {
+                manager.trustedManufacturers.put(entry.getKey(), com.hybrid.blockchain.HexUtils.decode(entry.getValue()));
+            }
+        }
+
         Map<String, Map<String, Object>> devices = (Map<String, Map<String, Object>>) json.get("devices");
         if (devices != null) {
             for (Map.Entry<String, Map<String, Object>> entry : devices.entrySet()) {
@@ -611,6 +705,11 @@ public class DeviceLifecycleManager {
             deviceData.put("reputationScore", record.getReputationScore());
             devices.put(entry.getKey(), deviceData);
         }
+        Map<String, String> mfs = new HashMap<>();
+        for (Map.Entry<String, byte[]> entry : trustedManufacturers.entrySet()) {
+            mfs.put(entry.getKey(), com.hybrid.blockchain.HexUtils.bytesToHex(entry.getValue()));
+        }
+        json.put("trustedManufacturers", mfs);
 
         json.put("devices", devices);
         json.put("currentBlockHeight", currentBlockHeight);

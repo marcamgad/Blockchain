@@ -51,16 +51,16 @@ public class Interpreter {
                     return;
 
                 case RETURN:
-                    long retLen = stack.pop();
                     long retOffset = stack.pop();
+                    long retLen = stack.pop();
                     if (retOffset < 0 || retOffset + retLen > memory.length) throw new Exception("Memory access out of bounds");
                     this.returnData = new byte[(int)retLen];
                     System.arraycopy(memory, (int)retOffset, this.returnData, 0, (int)retLen);
                     return;
 
                 case REVERT:
-                    long rLen = stack.pop();
                     long rOff = stack.pop();
+                    long rLen = stack.pop();
                     if (rOff < 0 || rOff + rLen > memory.length) throw new Exception("Memory access out of bounds");
                     byte[] rData = new byte[(int) rLen];
                     System.arraycopy(memory, (int) rOff, rData, 0, (int) rLen);
@@ -115,7 +115,17 @@ public class Interpreter {
                     // Check target has code
                     AccountState.Account targetAccount = context.state.getAccount(targetAddr);
                     if (targetAccount == null || targetAccount.getCode() == null) {
-                        stack.push(0L); // Target has no code
+                        // Even if no code, transfer value if present
+                        if (callValue > 0) {
+                            try {
+                                context.state.debit(context.contractAddress, callValue);
+                                context.state.credit(targetAddr, callValue);
+                            } catch (Exception e) {
+                                stack.push(0L); // Insufficient funds
+                                break;
+                            }
+                        }
+                        stack.push(1L); // Success (value transferred, no code to execute)
                         break;
                     }
 
@@ -235,8 +245,12 @@ public class Interpreter {
 
                 case MOD:
                     long mDivisor = stack.pop();
-                    if (mDivisor == 0) throw new Exception("Division by zero");
-                    stack.push(stack.pop() % mDivisor);
+                    if (mDivisor == 0) {
+                        stack.pop(); // Pop the dividend
+                        stack.push(0L);
+                    } else {
+                        stack.push(stack.pop() % mDivisor);
+                    }
                     break;
 
                 case MLOAD:
@@ -254,9 +268,12 @@ public class Interpreter {
 
                 case DIV:
                     long divisor = stack.pop();
-                    if (divisor == 0)
-                        throw new Exception("Division by zero");
-                    stack.push(stack.pop() / divisor);
+                    if (divisor == 0) {
+                        stack.pop(); // Pop the dividend
+                        stack.push(0L);
+                    } else {
+                        stack.push(stack.pop() / divisor);
+                    }
                     break;
 
                 case EQ:
@@ -273,6 +290,18 @@ public class Interpreter {
                     long gtB = stack.pop();
                     long gtA = stack.pop();
                     stack.push(gtA > gtB ? 1L : 0L);
+                    break;
+
+                case AND:
+                    stack.push(stack.pop() & stack.pop());
+                    break;
+
+                case OR:
+                    stack.push(stack.pop() | stack.pop());
+                    break;
+
+                case NOT:
+                    stack.push(~stack.pop());
                     break;
 
                 case SLOAD:
@@ -376,7 +405,7 @@ public class Interpreter {
     private void deductGas(int amount) throws Exception {
         gasRemaining -= amount;
         if (gasRemaining < 0)
-            throw new Exception("Out of Gas");
+            throw new Exception("Out of gas");
     }
 
     private long readLong() throws Exception {

@@ -44,7 +44,7 @@ public class CheckpointRecoveryTest {
                 System.currentTimeMillis(),
                 new HashMap<>()
         );
-        storage.saveState(chain.getAccountState().toJSON());
+        storage.saveState(chain.getAccountState());
         storage.saveUTXO(tb.getBlockchain().getUtxoSet().toJSON());
         storage.saveCheckpoint(cp);
         

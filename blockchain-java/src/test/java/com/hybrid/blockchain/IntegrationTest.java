@@ -50,7 +50,7 @@ public class IntegrationTest {
             .isNotNull();
         
         // Final check on FeeMarket
-        long initialFee = FeeMarket.getCurrentBaseFee(storage);
+        long initialFee = new FeeMarket().getCurrentBaseFee(storage);
         assertThat(initialFee).isEqualTo(Config.BASE_FEE_INITIAL);
         
         storage.close();

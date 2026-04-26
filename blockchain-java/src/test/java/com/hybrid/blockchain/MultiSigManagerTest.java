@@ -1,7 +1,7 @@
 package com.hybrid.blockchain;
 
 import com.hybrid.blockchain.security.MultiSigManager;
-import com.hybrid.blockchain.security.MultiSigManager.MultiSigWallet;
+import com.hybrid.blockchain.security.MultiSigManager.Wallet;
 import com.hybrid.blockchain.security.MultiSigManager.Proposal;
 import com.hybrid.blockchain.security.MultiSigManager.ProposalType;
 import org.junit.jupiter.api.BeforeEach;
@@ -40,7 +40,7 @@ public class MultiSigManagerTest {
     @Test
     @DisplayName("Invariant: Wallet creation establishes parameters correctly")
     public void testCreateWallet() {
-        MultiSigWallet wallet = multiSig.getWallet(WALLET_ID);
+        Wallet wallet = multiSig.getWallet(WALLET_ID);
 
         assertThat(wallet).isNotNull();
         assertThat(wallet.getTotalOwners()).isEqualTo(3);

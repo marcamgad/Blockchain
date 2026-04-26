@@ -28,6 +28,17 @@ public class PrivateDataManager {
      */
     public PrivateDataCollection createCollection(
             String collectionId,
+            List<String> authorizedMembers) {
+        // Use first member as creator if not specified
+        String creator = authorizedMembers.isEmpty() ? "SYSTEM" : authorizedMembers.get(0);
+        return createCollection(collectionId, authorizedMembers, creator);
+    }
+
+    /**
+     * Create a new private data collection
+     */
+    public PrivateDataCollection createCollection(
+            String collectionId,
             List<String> authorizedMembers,
             String creator) {
         if (collections.containsKey(collectionId)) {
@@ -46,6 +57,27 @@ public class PrivateDataManager {
         return collection;
     }
 
+    public void addData(String collectionId, String key, byte[] data) {
+        PrivateDataCollection collection = getCollection(collectionId);
+        // Using a dummy caller for manager-level convenience method (which assumes authorization is checked upstream)
+        String dummyCaller = collection.getAuthorizedMembers().get(0);
+        collection.writePrivateData(key, data, dummyCaller);
+    }
+
+    public byte[] getData(String caller, String collectionId, String key) {
+        return getCollection(collectionId).readPrivateData(key, caller);
+    }
+
+    public byte[] getDataHash(String collectionId, String key) {
+        return getCollection(collectionId).getPublicHash(key);
+    }
+
+    public void addMember(String collectionId, String address) {
+        PrivateDataCollection collection = getCollection(collectionId);
+        String dummyCaller = collection.getAuthorizedMembers().get(0);
+        collection.addAuthorizedMember(address, dummyCaller);
+    }
+
     public PrivateDataCollection getCollection(String collectionId) {
         PrivateDataCollection collection = collections.get(collectionId);
         if (collection == null) {
@@ -56,6 +88,10 @@ public class PrivateDataManager {
 
     public boolean hasCollection(String collectionId) {
         return collections.containsKey(collectionId);
+    }
+
+    public boolean isMember(String collectionId, String address) {
+        return getCollection(collectionId).isAuthorized(address);
     }
 
     public List<String> getCollectionsForMember(String memberAddress) {

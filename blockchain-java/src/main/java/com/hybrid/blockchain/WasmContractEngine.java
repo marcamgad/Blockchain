@@ -1,5 +1,9 @@
 package com.hybrid.blockchain;
 
+// FIX 5: Add gasConsumed tracking; throw RevertException (not generic Exception) on gas
+// exhaustion, consistent with the bytecode VM. Expose getGasConsumed() so the caller
+// can report actual gas used instead of the full gasLimit.
+
 import com.dylibso.chicory.runtime.HostFunction;
 import com.dylibso.chicory.runtime.ImportFunction;
 import com.dylibso.chicory.runtime.Instance;
@@ -16,21 +20,35 @@ import java.util.concurrent.*;
 /**
  * High-performance WASM Smart Contract Engine using Chicory (Pure Java).
  * Provides a secure sandbox with host-function access to the blockchain state.
- * 
- * Optimized for Chicory 1.0.0 API stability and Java type safety.
+ *
+ * <p>Gas accounting: every host-function call charges a fixed cost. When total
+ * {@code gasConsumed >= gasLimit}, a {@link RevertException} is thrown so that
+ * the calling pipeline treats the execution as reverted (not failed) and issues
+ * a {@code STATUS_REVERTED} receipt without committing state changes.
  */
 public class WasmContractEngine {
 
     private final byte[] wasmBinary;
     private final Interpreter.BlockchainContext context;
-    private long gasRemaining;
+    private final long gasLimit;
+
+    /** Total gas units consumed during this execution. */
+    private long gasConsumed = 0;
 
     public WasmContractEngine(byte[] wasmBinary, long gasLimit, Interpreter.BlockchainContext context) {
         this.wasmBinary = wasmBinary;
-        this.gasRemaining = gasLimit;
-        this.context = context;
+        this.gasLimit   = gasLimit;
+        this.context    = context;
     }
 
+    /**
+     * Executes the named WASM export function with the provided arguments.
+     *
+     * @param functionName name of the WASM export to invoke
+     * @param args         arguments passed to the export
+     * @throws RevertException if gas is exhausted during execution
+     * @throws Exception       on any other execution failure
+     */
     public void execute(String functionName, List<Long> args) throws Exception {
         ExecutorService executor = Executors.newSingleThreadExecutor();
         try {
@@ -40,10 +58,10 @@ public class WasmContractEngine {
 
                 // hb_state_read(key) -> value
                 hostFunctions.add(new HostFunction(
-                    "env", 
-                    "hb_state_read", 
-                    List.of(ValueType.I64), 
-                    List.of(ValueType.I64), 
+                    "env",
+                    "hb_state_read",
+                    List.of(ValueType.I64),
+                    List.of(ValueType.I64),
                     (Instance instance, long... params) -> {
                         deductGas(50);
                         long key = params[0];
@@ -54,10 +72,10 @@ public class WasmContractEngine {
 
                 // hb_state_write(key, value)
                 hostFunctions.add(new HostFunction(
-                    "env", 
-                    "hb_state_write", 
-                    List.of(ValueType.I64, ValueType.I64), 
-                    List.of(), 
+                    "env",
+                    "hb_state_write",
+                    List.of(ValueType.I64, ValueType.I64),
+                    List.of(),
                     (Instance instance, long... params) -> {
                         deductGas(100);
                         long key = params[0];
@@ -69,10 +87,10 @@ public class WasmContractEngine {
 
                 // hb_read_sensor(id) -> value
                 hostFunctions.add(new HostFunction(
-                    "env", 
-                    "hb_read_sensor", 
-                    List.of(ValueType.I64), 
-                    List.of(ValueType.I64), 
+                    "env",
+                    "hb_read_sensor",
+                    List.of(ValueType.I64),
+                    List.of(ValueType.I64),
                     (Instance instance, long... params) -> {
                         deductGas(150);
                         long sensorId = params[0];
@@ -86,18 +104,18 @@ public class WasmContractEngine {
 
                 // hb_get_gas() -> gasRemaining
                 hostFunctions.add(new HostFunction(
-                    "env", 
-                    "hb_get_gas", 
-                    List.of(), 
-                    List.of(ValueType.I64), 
+                    "env",
+                    "hb_get_gas",
+                    List.of(),
+                    List.of(ValueType.I64),
                     (Instance instance, long... params) -> {
-                        return new long[]{gasRemaining};
+                        return new long[]{gasLimit - gasConsumed};
                     }
                 ));
 
                 // Load Wasm Module
                 WasmModule module = Parser.parse(wasmBinary);
-                
+
                 // Setup Imports
                 ImportValues imports = ImportValues.builder()
                     .withFunctions(hostFunctions)
@@ -114,26 +132,53 @@ public class WasmContractEngine {
                 return null;
             });
 
-            future.get(5, TimeUnit.SECONDS);
+            try {
+                future.get(5, TimeUnit.SECONDS);
+            } catch (ExecutionException e) {
+                Throwable cause = e.getCause();
+                // FIX 5: Propagate RevertException specifically so state is not committed
+                if (cause instanceof RevertException) throw (RevertException) cause;
+                if (cause instanceof Exception) throw (Exception) cause;
+                throw new Exception(cause);
+            }
         } catch (TimeoutException e) {
-            this.gasRemaining = 0;
-            throw new RuntimeException("WASM execution timed out (possible infinite loop)");
-        } catch (ExecutionException e) {
-            if (e.getCause() instanceof Exception) throw (Exception) e.getCause();
-            throw new Exception(e.getCause());
+            this.gasConsumed = gasLimit; // Mark as fully consumed
+            throw new RevertException("WASM execution timed out (gas limit equivalent exhausted)");
         } finally {
             executor.shutdownNow();
         }
     }
 
-    private void deductGas(int amount) {
-        gasRemaining -= amount;
-        if (gasRemaining < 0) {
-            throw new RuntimeException("Out of Gas (WASM)");
-        }
+    /**
+     * Returns the total gas units consumed during execution.
+     * Call this after {@link #execute} to report actual usage.
+     *
+     * @return gas units consumed
+     */
+    public long getGasConsumed() {
+        return gasConsumed;
     }
 
+    /**
+     * Returns remaining gas (gasLimit - gasConsumed).
+     *
+     * @return remaining gas units
+     */
     public long getGasRemaining() {
-        return gasRemaining;
+        return gasLimit - gasConsumed;
+    }
+
+    /**
+     * Deducts {@code amount} gas units.
+     *
+     * @param amount units to deduct
+     * @throws RevertException if total consumed reaches or exceeds the gas limit
+     */
+    private void deductGas(int amount) {
+        gasConsumed += amount;
+        // FIX 5: Throw RevertException (not RuntimeException) to trigger STATUS_REVERTED receipt
+        if (gasConsumed >= gasLimit) {
+            throw new RevertException("Out of Gas (WASM): consumed=" + gasConsumed + " limit=" + gasLimit);
+        }
     }
 }

@@ -16,7 +16,8 @@ public class TestTransactionFactory {
                 .amount(amount)
                 .fee(fee)
                 .nonce(nonce)
-                .sign(from.getPrivateKey(), from.getPublicKey());
+                .sign(from.getPrivateKey(), from.getPublicKey())
+                .build();
     }
 
     public static Transaction createContractCreation(TestKeyPair creator, byte[] bytecode, long fee, long nonce) {
@@ -27,7 +28,8 @@ public class TestTransactionFactory {
                 .data(bytecode)
                 .fee(fee)
                 .nonce(nonce)
-                .sign(creator.getPrivateKey(), creator.getPublicKey());
+                .sign(creator.getPrivateKey(), creator.getPublicKey())
+                .build();
     }
 
     public static Transaction createContractCall(TestKeyPair caller, String contractAddress, byte[] callData, long value, long fee, long nonce) {
@@ -39,7 +41,8 @@ public class TestTransactionFactory {
                 .data(callData)
                 .fee(fee)
                 .nonce(nonce)
-                .sign(caller.getPrivateKey(), caller.getPublicKey());
+                .sign(caller.getPrivateKey(), caller.getPublicKey())
+                .build();
     }
     
     public static Transaction createTokenRegister(TestKeyPair issuer, String symbol, String name, String tokenId, long initialSupply, long fee, long nonce) {
@@ -60,9 +63,19 @@ public class TestTransactionFactory {
                     .fee(fee)
                     .nonce(nonce)
                     .data(data)
-                    .sign(issuer.getPrivateKey(), issuer.getPublicKey());
+                    .sign(issuer.getPrivateKey(), issuer.getPublicKey())
+                    .build();
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+    public static Transaction createMint(String toAddress, long amount, long nonce) {
+        return new Transaction.Builder()
+                .type(Transaction.Type.MINT)
+                .from(null)
+                .to(toAddress)
+                .amount(amount)
+                .nonce(nonce)
+                .build();
     }
 }

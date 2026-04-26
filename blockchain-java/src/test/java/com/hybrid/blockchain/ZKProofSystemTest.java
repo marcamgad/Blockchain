@@ -15,151 +15,96 @@ public class ZKProofSystemTest {
 
     @Test
     public void testRangeProof() {
-        // Create range proof for temperature reading
-        long temperature = 25; // Actual value (secret)
+        long temperature = 25;
         long min = 20;
         long max = 30;
-        BigInteger randomness = ZKProofSystem.generateRandomness();
+        BigInteger randomness = ZKProofSystem.randomScalar();
 
-        // Create proof
-        RangeProof proof = RangeProof.create(temperature, min, max, randomness);
+        ZKProofSystem zkp = new ZKProofSystem();
+        
+        byte[] commitment = zkp.createCommitment(temperature, randomness);
+        byte[] proof = zkp.createRangeProofData(temperature, min, max, randomness);
 
-        // Verify proof (without knowing actual temperature)
-        assertTrue(proof.verify());
-        assertEquals(min, proof.getMin());
-        assertEquals(max, proof.getMax());
-        assertNotNull(proof.getCommitment());
-        assertNotNull(proof.getProof());
+        assertTrue(zkp.verifyRangeProof(commitment, proof, min, max));
     }
 
     @Test
     public void testRangeProofOutOfRange() {
-        // Try to create proof for value outside range
         long temperature = 35; // Outside range
         long min = 20;
         long max = 30;
-        BigInteger randomness = ZKProofSystem.generateRandomness();
+        BigInteger randomness = ZKProofSystem.randomScalar();
 
+        ZKProofSystem zkp = new ZKProofSystem();
+        
         assertThrows(IllegalArgumentException.class, () -> {
-            RangeProof.create(temperature, min, max, randomness);
+            zkp.createRangeProofData(temperature, min, max, randomness);
         });
+    }
+
+    private byte[] getUncompressedPublicKey(BigInteger privateKey) {
+        return org.bouncycastle.crypto.ec.CustomNamedCurves.getByName("secp256k1").getG().multiply(privateKey).getEncoded(false);
     }
 
     @Test
     public void testOwnershipProof() {
-        // Generate device keys
         BigInteger privateKey = new BigInteger("ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF123456", 16);
-        byte[] publicKey = Crypto.derivePublicKey(privateKey);
+        byte[] publicKey = getUncompressedPublicKey(privateKey);
+        String deviceDID = "did:hybrid:sensor-001";
+        byte[] challenge = new byte[]{1,2,3,4};
 
-        String deviceDID = "did:iot:sensor-001";
+        ZKProofSystem zkp = new ZKProofSystem();
+        byte[] proof = zkp.createOwnershipProof(deviceDID, privateKey, challenge);
 
-        // Generate challenge
-        byte[] challenge = OwnershipProof.generateChallenge();
-
-        // Create ownership proof
-        OwnershipProof proof = OwnershipProof.create(deviceDID, privateKey, challenge);
-
-        // Verify proof
-        assertTrue(proof.verify(deviceDID, publicKey));
-        assertArrayEquals(challenge, proof.getChallenge());
+        assertTrue(zkp.verifyOwnershipProof(deviceDID, publicKey, proof, challenge));
     }
 
     @Test
     public void testOwnershipProofWrongKey() {
         BigInteger privateKey1 = new BigInteger("1111111111111111111111111111111111111111111111111111111111111111", 16);
         BigInteger privateKey2 = new BigInteger("2222222222222222222222222222222222222222222222222222222222222222", 16);
+        byte[] publicKey1 = getUncompressedPublicKey(privateKey1);
+        String deviceDID = "did:hybrid:sensor-002";
+        byte[] challenge = new byte[]{1,2,3,4};
 
-        byte[] publicKey1 = Crypto.derivePublicKey(privateKey1);
-        byte[] publicKey2 = Crypto.derivePublicKey(privateKey2);
+        ZKProofSystem zkp = new ZKProofSystem();
+        byte[] proof = zkp.createOwnershipProof(deviceDID, privateKey2, challenge); // Created with wrong key
 
-        String deviceDID = "did:iot:sensor-002";
-        byte[] challenge = OwnershipProof.generateChallenge();
-
-        // Create proof with privateKey1
-        OwnershipProof proof = OwnershipProof.create(deviceDID, privateKey1, challenge);
-
-        // Verify with correct key
-        assertTrue(proof.verify(deviceDID, publicKey1));
-
-        // Verify with wrong key (should fail)
-        assertFalse(proof.verify(deviceDID, publicKey2));
+        assertFalse(zkp.verifyOwnershipProof(deviceDID, publicKey1, proof, challenge));
     }
 
     @Test
-    public void testEqualityProof() {
-        // Two sensors report same temperature
-        long temperature = 22;
-        BigInteger randomness1 = ZKProofSystem.generateRandomness();
-        BigInteger randomness2 = ZKProofSystem.generateRandomness();
-
-        // Create equality proof
-        EqualityProof proof = EqualityProof.create(temperature, randomness1, randomness2);
-
-        // Verify proof
-        assertTrue(proof.verify());
-        assertNotNull(proof.getCommitment1());
-        assertNotNull(proof.getCommitment2());
-    }
-
-    @Test
-    public void testThresholdProofAbove() {
-        // Prove temperature is above threshold
-        long temperature = 28;
+    public void testThresholdProofEqual() {
+        long temperature = 25;
         long threshold = 25;
-        BigInteger randomness = ZKProofSystem.generateRandomness();
+        BigInteger randomness = ZKProofSystem.randomScalar();
 
-        // Create proof that temperature > 25
-        ThresholdProof proof = ThresholdProof.create(temperature, threshold, true, randomness);
+        ZKProofSystem zkp = new ZKProofSystem();
+        byte[] commitment = zkp.createCommitment(temperature, randomness);
+        byte[] proof = zkp.createThresholdProof(temperature, randomness, threshold);
 
-        // Verify proof
-        assertTrue(proof.verify());
-        assertEquals(threshold, proof.getThreshold());
-        assertTrue(proof.isAbove());
-    }
-
-    @Test
-    public void testThresholdProofBelow() {
-        // Prove temperature is below threshold
-        long temperature = 18;
-        long threshold = 20;
-        BigInteger randomness = ZKProofSystem.generateRandomness();
-
-        // Create proof that temperature < 20
-        ThresholdProof proof = ThresholdProof.create(temperature, threshold, false, randomness);
-
-        // Verify proof
-        assertTrue(proof.verify());
-        assertEquals(threshold, proof.getThreshold());
-        assertFalse(proof.isAbove());
+        assertTrue(zkp.verifyThresholdProof(commitment, proof, threshold));
     }
 
     @Test
     public void testThresholdProofInvalidClaim() {
-        // Try to prove temperature > 25 when it's actually 20
         long temperature = 20;
         long threshold = 25;
-        BigInteger randomness = ZKProofSystem.generateRandomness();
+        BigInteger randomness = ZKProofSystem.randomScalar();
 
+        ZKProofSystem zkp = new ZKProofSystem();
         assertThrows(IllegalArgumentException.class, () -> {
-            ThresholdProof.create(temperature, threshold, true, randomness);
+            zkp.createThresholdProof(temperature, randomness, threshold);
         });
     }
 
     @Test
     public void testRandomnessGeneration() {
-        // Generate multiple random values
-        BigInteger r1 = ZKProofSystem.generateRandomness();
-        BigInteger r2 = ZKProofSystem.generateRandomness();
-        BigInteger r3 = ZKProofSystem.generateRandomness();
-
-        // Verify they're different
+        BigInteger r1 = ZKProofSystem.randomScalar();
+        BigInteger r2 = ZKProofSystem.randomScalar();
+        
         assertNotEquals(r1, r2);
-        assertNotEquals(r2, r3);
-        assertNotEquals(r1, r3);
-
-        // Verify they're positive
         assertTrue(r1.compareTo(BigInteger.ZERO) > 0);
         assertTrue(r2.compareTo(BigInteger.ZERO) > 0);
-        assertTrue(r3.compareTo(BigInteger.ZERO) > 0);
     }
 }

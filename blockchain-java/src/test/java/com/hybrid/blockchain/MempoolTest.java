@@ -75,4 +75,37 @@ public class MempoolTest {
         assertThat(ids).contains(tx2.getId(), tx3.getId());
         assertThat(ids).doesNotContain(tx1.getId()); // tx1 evicted
     }
+
+    @Test
+    @DisplayName("Concurrency: Mempool allows concurrent additions safely")
+    void testConcurrentAdditions() throws InterruptedException {
+        Mempool mempool = new Mempool(2000);
+        int threadCount = 10;
+        int txsPerThread = 100;
+        java.util.concurrent.CountDownLatch startLatch = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch doneLatch = new java.util.concurrent.CountDownLatch(threadCount);
+
+        for (int i = 0; i < threadCount; i++) {
+            final int tId = i;
+            new Thread(() -> {
+                TestKeyPair kp = new TestKeyPair(tId + 1);
+                try {
+                    startLatch.await();
+                    for (int j = 1; j <= txsPerThread; j++) {
+                        Transaction tx = TestTransactionFactory.createAccountTransfer(kp, "to" + tId, 10, 10, j);
+                        mempool.add(tx);
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    doneLatch.countDown();
+                }
+            }).start();
+        }
+
+        startLatch.countDown(); // Start all threads at once
+        doneLatch.await(10, java.util.concurrent.TimeUnit.SECONDS);
+
+        assertThat(mempool.size()).isEqualTo(threadCount * txsPerThread);
+    }
 }

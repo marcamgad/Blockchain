@@ -80,7 +80,9 @@ public class BlockTest {
             validTx.getFee(), validTx.getNonce(), validTx.getTimestamp(), validTx.getNetworkId(), 
             validTx.getData(), validTx.getValidUntilBlock(), validTx.getInputs(), validTx.getOutputs(), 
             validTx.getPubKey(),
-            new byte[64] // Fake signature
+            new byte[64], // Fake signature
+            validTx.getDilithiumPublicKey(),
+            validTx.getDilithiumSignature()
         );
         
         txs.add(invalidTx);

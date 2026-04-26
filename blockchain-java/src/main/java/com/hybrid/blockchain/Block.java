@@ -9,6 +9,7 @@ public class Block {
     public int index;
     public long timestamp;
     public String prevHash;
+    public String getPreviousHash() { return prevHash; }
     public List<Transaction> transactions;
     public long nonce;
     public int difficulty;
@@ -35,7 +36,7 @@ public class Block {
         this.hash = calculateHash();
     }
 
-    private String calculateTxRoot() {
+    public String calculateTxRoot() {
         if (transactions == null || transactions.isEmpty()) {
             return Crypto.bytesToHex(new byte[32]);
         }
@@ -91,8 +92,9 @@ public class Block {
     }
 
     public boolean hasValidTransactions() {
+        if (transactions == null) return true;
         for (Transaction tx : transactions) {
-            if (!Config.isDebug() && !tx.verify())
+            if (!tx.verify())
                 return false;
         }
         return true;
@@ -152,6 +154,7 @@ public class Block {
 
     public void setStateRoot(String stateRoot) {
         this.stateRoot = stateRoot;
+        this.hash = calculateHash();
     }
 
     public String getTxRoot() {
@@ -160,6 +163,7 @@ public class Block {
 
     public void setTxRoot(String txRoot) {
         this.txRoot = txRoot;
+        this.hash = calculateHash();
     }
 
     public int getBlockSizeBytes() {
@@ -168,5 +172,20 @@ public class Block {
 
     public void setBlockSizeBytes(int blockSizeBytes) {
         this.blockSizeBytes = blockSizeBytes;
+    }
+
+    public void setTimestamp(long timestamp) {
+        this.timestamp = timestamp;
+        this.hash = calculateHash();
+    }
+
+    public void setIndex(int index) {
+        this.index = index;
+        this.hash = calculateHash();
+    }
+
+    public void setPreviousHash(String prevHash) {
+        this.prevHash = prevHash;
+        this.hash = calculateHash();
     }
 }

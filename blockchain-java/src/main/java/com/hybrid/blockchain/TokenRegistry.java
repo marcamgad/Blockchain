@@ -55,6 +55,10 @@ public class TokenRegistry {
             this.owner = owner;
             this.totalMinted = 0;
         }
+
+        public long getTotalMinted() {
+            return totalMinted;
+        }
     }
 
     /**
@@ -70,6 +74,11 @@ public class TokenRegistry {
      */
     public synchronized void registerToken(String tokenId, String name, String symbol,
                                             int decimals, long maxSupply, String owner) throws Exception {
+        registerToken(tokenId, name, symbol, decimals, maxSupply, owner, false);
+    }
+
+    public synchronized void registerToken(String tokenId, String name, String symbol,
+                                            int decimals, long maxSupply, String owner, boolean isSimulation) throws Exception {
         TokenInfo existing = getTokenInfo(tokenId);
         if (existing != null) {
             if (existing.name.equals(name) && existing.symbol.equals(symbol) && 
@@ -80,9 +89,11 @@ public class TokenRegistry {
             throw new Exception("Token already registered with different metadata: " + tokenId);
         }
         TokenInfo info = new TokenInfo(tokenId, name, symbol, decimals, maxSupply, owner);
-        tokenCache.put(tokenId, info);
-        persistToken(info);
-        log.info("[TokenRegistry] Registered token: {} ({})", name, tokenId);
+        if (!isSimulation) {
+            tokenCache.put(tokenId, info);
+            persistToken(info);
+            log.info("[TokenRegistry] Registered token: {} ({})", name, tokenId);
+        }
     }
 
     /**
@@ -96,14 +107,20 @@ public class TokenRegistry {
      * @throws Exception if the token does not exist or max supply would be exceeded
      */
     public synchronized void mintToken(AccountState state, String tokenId, String to, long amount) throws Exception {
+        mintToken(state, tokenId, to, amount, false);
+    }
+
+    public synchronized void mintToken(AccountState state, String tokenId, String to, long amount, boolean isSimulation) throws Exception {
         TokenInfo info = requireToken(tokenId);
         if (info.maxSupply > 0 && info.totalMinted + amount > info.maxSupply) {
             throw new Exception("Minting would exceed max supply for token: " + tokenId);
         }
         state.creditToken(to, tokenId, amount);
-        info.totalMinted += amount;
-        persistToken(info);
-        log.info("[TokenRegistry] Minted {} of {} to {}", amount, tokenId, to);
+        if (!isSimulation) {
+            info.totalMinted += amount;
+            persistToken(info);
+            log.info("[TokenRegistry] Minted {} of {} to {}", amount, tokenId, to);
+        }
     }
 
     /**
@@ -116,14 +133,20 @@ public class TokenRegistry {
      * @throws Exception if the token does not exist or the balance is insufficient
      */
     public synchronized void burnToken(AccountState state, String tokenId, String from, long amount) throws Exception {
+        burnToken(state, tokenId, from, amount, false);
+    }
+
+    public synchronized void burnToken(AccountState state, String tokenId, String from, long amount, boolean isSimulation) throws Exception {
         requireToken(tokenId);
         state.debitToken(from, tokenId, amount);
-        TokenInfo info = tokenCache.get(tokenId);
-        if (info != null && info.totalMinted >= amount) {
-            info.totalMinted -= amount;
-            persistToken(info);
+        if (!isSimulation) {
+            TokenInfo info = tokenCache.get(tokenId);
+            if (info != null && info.totalMinted >= amount) {
+                info.totalMinted -= amount;
+                persistToken(info);
+            }
+            log.info("[TokenRegistry] Burned {} of {} from {}", amount, tokenId, from);
         }
-        log.info("[TokenRegistry] Burned {} of {} from {}", amount, tokenId, from);
     }
 
     /**
@@ -171,7 +194,7 @@ public class TokenRegistry {
             TokenInfo info = deserializeToken(raw);
             tokenCache.put(tokenId, info);
             return info;
-        } catch (IOException e) {
+        } catch (Exception e) {
             log.warn("[TokenRegistry] Failed to load token {}: {}", tokenId, e.getMessage());
             return null;
         }
@@ -206,7 +229,7 @@ public class TokenRegistry {
             raw.put("owner", info.owner);
             raw.put("totalMinted", info.totalMinted);
             storage.put(KEY_PREFIX + info.tokenId, raw);
-        } catch (IOException e) {
+        } catch (Exception e) {
             log.error("[TokenRegistry] Failed to persist token {}: {}", info.tokenId, e.getMessage());
         }
     }

@@ -14,6 +14,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
+import com.hybrid.blockchain.testutil.TestTransactionFactory;
 
 public class ForkResolutionTest {
 
@@ -21,6 +22,7 @@ public class ForkResolutionTest {
     private Storage storage;
     private PBFTConsensus consensus;
     private Mempool mempool;
+    private TestKeyPair sender;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -41,75 +43,108 @@ public class ForkResolutionTest {
 
         blockchain = new Blockchain(storage, mempool, consensus);
         blockchain.init();
-        storage.saveSnapshot(0, new java.util.HashMap<>(), new java.util.HashMap<>());
         
-        com.hybrid.blockchain.AccountState stateSpy = Mockito.spy(blockchain.getState());
-        java.lang.reflect.Field stateField = Blockchain.class.getDeclaredField("state");
-        stateField.setAccessible(true);
-        stateField.set(blockchain, stateSpy);
-        Mockito.doReturn("dummy_root").when(stateSpy).calculateStateRoot();
+        // Establish a funded state in Block 1 so it survives reorganizations
+        sender = new TestKeyPair(1);
+        Transaction mint = TestTransactionFactory.createMint(sender.getAddress(), 50, 0);
+        Block b1 = new Block(1, System.currentTimeMillis(), java.util.Collections.singletonList(mint), blockchain.getLatestBlock().getHash(), blockchain.getDifficulty(), "");
+        b1.setValidatorId("ValidatorA");
+        b1.setSignature(new byte[64]);
+        
+        AccountState simState = blockchain.getState().cloneState();
+        simState.setBlockHeight(1);
+        blockchain.applyTransactionToState(simState, blockchain.getUTXOSet(), mint, 1, b1.getTimestamp(), b1.getHash(), new java.util.ArrayList<>());
+        b1.setStateRoot(simState.calculateStateRoot());
+        b1.setTxRoot(b1.calculateTxRoot());
+        
+        // Bypassing validation for test blocks
+        blockchain = Mockito.spy(blockchain);
+        Mockito.doNothing().when(blockchain).validateBlock(any());
+        blockchain.applyBlock(b1);
+        
+        storage.saveSnapshot(1, blockchain.getState().toJSON(), blockchain.getUTXOSet().toJSON());
     }
 
     @Test
     void testDeterministicForkResolution() throws Exception {
-        // 1. Create two competing blocks at height 1
-        // ValidatorA hash: ca7e...
-        // ValidatorB hash: 0672...
-        // ValidatorA should win over ValidatorB (ca7e > 0672)
+        Block precursor = blockchain.getLatestBlock();
+        AccountState baseState = blockchain.getState().cloneState();
         
-        Block genesis = blockchain.getLatestBlock();
+        Block blockLow = new Block(2, System.currentTimeMillis(), new ArrayList<>(), precursor.getHash(), blockchain.getDifficulty(), "");
+        blockLow.setValidatorId("ValidatorB");
+        blockLow.setSignature(new byte[64]);
         
-        Block blockB = new Block(1, System.currentTimeMillis(), new ArrayList<Transaction>(), genesis.getHash(), blockchain.getDifficulty(), "dummy_root");
-        blockB.setValidatorId("ValidatorB");
-        blockB.setSignature(new byte[64]);
-        blockB.setHash(blockB.calculateHash());
+        // Add a transaction to blockLow so we can see it returned to mempool
+        Transaction tx1 = TestTransactionFactory.createAccountTransfer(sender, "receiver", 10, 1, 1);
+        blockLow.getTransactions().add(tx1);
+        blockLow.setTxRoot(blockLow.calculateTxRoot());
+        blockLow.setHash("0000000000000000000000000000000000000000000000000000000000000000");
+
+        Block blockHigh = new Block(2, System.currentTimeMillis() + 1000, new ArrayList<>(), precursor.getHash(), blockchain.getDifficulty(), "");
+        blockHigh.setValidatorId("ValidatorA");
+        blockHigh.setSignature(new byte[64]);
+        blockHigh.setHash("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF");
+
+        // 2. Apply Block Low first (transitions from precursor)
+        AccountState simStateLow = baseState.cloneState();
+        UTXOSet simUtxoLow = UTXOSet.fromMap(blockchain.getUTXOSet().toJSON());
         
-        Block blockA = new Block(1, System.currentTimeMillis() + 1000, new ArrayList<Transaction>(), genesis.getHash(), blockchain.getDifficulty(), "dummy_root");
-        blockA.setValidatorId("ValidatorA");
-        blockA.setSignature(new byte[64]);
-        blockA.setHash(blockA.calculateHash());
+        simStateLow.setBlockHeight(blockLow.getIndex());
+        blockchain.applyTransactionToState(simStateLow, simUtxoLow, tx1, 2, blockLow.getTimestamp(), blockLow.getHash(), new ArrayList<>());
+        if (tx1.getFee() > 0) {
+            simStateLow.credit(blockLow.getValidatorId(), tx1.getFee());
+        }
         
-        // We bypass state root validation by making the test use Mockito spy or we know the state root isn't checked strictly if consensus throws no error? 
-        // Actually, state root is verified in validateBlock. We should pre-calculate it or ignore it.
-        // Wait, calculateStateRoot() is checked. Let's spy blockchain:
-        blockchain = Mockito.spy(blockchain);
-        Mockito.doNothing().when(blockchain).validateBlock(any());
+        blockLow.setStateRoot(simStateLow.calculateStateRoot());
+        
+        blockchain.applyBlock(blockLow);
+        assertThat(blockchain.getLatestBlock().getHash()).isEqualTo(blockLow.getHash());
 
+        // 3. Apply Block High (the winner due to lexical hash >)
+        // High also transitions from precursor during fork resolution
+        AccountState simStateHigh = baseState.cloneState();
+        simStateHigh.setBlockHeight(blockHigh.getIndex());
+        // Empty block High, no transactions, no fees
+        blockHigh.setStateRoot(simStateHigh.calculateStateRoot());
+        
+        blockchain.applyBlock(blockHigh);
 
-        // 2. Apply Block B first
-        blockchain.applyBlock(blockB);
-        assertThat(blockchain.getLatestBlock().getHash()).isEqualTo(blockB.getHash());
-        assertThat(blockchain.getHeight()).isEqualTo(1);
-
-        // 3. Apply Block A (the winner)
-        blockchain.applyBlock(blockA);
-
-        // 4. Verify Reorg
-        assertThat(blockchain.getLatestBlock().getHash()).isEqualTo(blockB.getHash());
-        assertThat(blockchain.getLatestBlock().getValidatorId()).isEqualTo("ValidatorB");
-        assertThat(blockchain.getHeight()).isEqualTo(1);
+        // 4. Verify Reorg happened (blockHigh is latest)
+        assertThat(blockchain.getLatestBlock().getHash()).isEqualTo(blockHigh.getHash());
+        assertThat(blockchain.getLatestBlock().getValidatorId()).isEqualTo("ValidatorA");
+        
+        // 5. Verify Mempool returned transactions from Loser
+        assertThat(blockchain.getMempool().size()).isEqualTo(1);
+        assertThat(blockchain.getMempool().getTop(1).get(0).getId()).isEqualTo(tx1.getId());
     }
     
     @Test
     void testLowerTieBreakIgnored() throws Exception {
-        Block genesis = blockchain.getLatestBlock();
+        Block precursor = blockchain.getLatestBlock();
         
-        Block blockA = new Block(1, System.currentTimeMillis(), new ArrayList<Transaction>(), genesis.getHash(), blockchain.getDifficulty(), "dummy_root");
-        blockA.setValidatorId("ValidatorA");
-        blockA.setSignature(new byte[64]);
-        blockA.setHash(blockA.calculateHash());
+        Block blockHigh = new Block(2, System.currentTimeMillis(), new ArrayList<>(), precursor.getHash(), blockchain.getDifficulty(), "");
+        blockHigh.setValidatorId("ValidatorA");
+        blockHigh.setSignature(new byte[64]);
+        blockHigh.setHash("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF");
         
-        Block blockB = new Block(1, System.currentTimeMillis() + 1000, new ArrayList<Transaction>(), genesis.getHash(), blockchain.getDifficulty(), "dummy_root");
-        blockB.setValidatorId("ValidatorB");
-        blockB.setSignature(new byte[64]);
-        blockB.setHash(blockB.calculateHash());
+        Block blockLow = new Block(2, System.currentTimeMillis() + 1000, new ArrayList<>(), precursor.getHash(), blockchain.getDifficulty(), "");
+        blockLow.setValidatorId("ValidatorB");
+        blockLow.setSignature(new byte[64]);
+        blockLow.setHash("0000000000000000000000000000000000000000000000000000000000000000");
+
+        // Simulate root for index 2
+        AccountState simState = blockchain.getState().cloneState();
+        simState.setBlockHeight(2);
+        String expectedRoot = simState.calculateStateRoot();
+        blockHigh.setStateRoot(expectedRoot);
+        blockLow.setStateRoot(expectedRoot);
 
         // Apply Winner first
-        blockchain.applyBlock(blockB);
-        assertThat(blockchain.getLatestBlock().getHash()).isEqualTo(blockB.getHash());
+        blockchain.applyBlock(blockHigh);
+        assertThat(blockchain.getLatestBlock().getHash()).isEqualTo(blockHigh.getHash());
 
         // Apply Loser second - should be ignored
-        blockchain.applyBlock(blockA);
-        assertThat(blockchain.getLatestBlock().getHash()).isEqualTo(blockB.getHash());
+        blockchain.applyBlock(blockLow);
+        assertThat(blockchain.getLatestBlock().getHash()).isEqualTo(blockHigh.getHash());
     }
 }

@@ -38,6 +38,10 @@ public final class Transaction {
 
     private byte[] pubKey;
     private byte[] signature;
+    @JsonProperty("dilithiumPublicKey")
+    private byte[] dilithiumPublicKey;
+    @JsonProperty("dilithiumSignature")
+    private byte[] dilithiumSignature;
     private String txid;
 
     @JsonCreator
@@ -55,7 +59,9 @@ public final class Transaction {
             @JsonProperty("inputs") List<UTXOInput> inputs,
             @JsonProperty("outputs") List<UTXOOutput> outputs,
             @JsonProperty("pubKey") byte[] pubKey,
-            @JsonProperty("signature") byte[] signature) {
+            @JsonProperty("signature") byte[] signature,
+            @JsonProperty("dilithiumPublicKey") byte[] dilithiumPublicKey,
+            @JsonProperty("dilithiumSignature") byte[] dilithiumSignature) {
         this.type = type;
         this.from = from;
         this.to = to;
@@ -70,11 +76,13 @@ public final class Transaction {
         this.outputs = outputs == null ? List.of() : List.copyOf(outputs);
         this.pubKey = pubKey;
         this.signature = signature;
+        this.dilithiumPublicKey = dilithiumPublicKey;
+        this.dilithiumSignature = dilithiumSignature;
         this.txid = Crypto.bytesToHex(Crypto.hash(serializeCanonical()));
     }
 
     private Transaction(Builder b) {
-        this(b.type, b.from, b.to, b.amount, b.fee, b.nonce, b.timestamp, b.networkId, b.data, b.validUntilBlock, b.inputs, b.outputs, b.pubKey, b.signature);
+        this(b.type, b.from, b.to, b.amount, b.fee, b.nonce, b.timestamp, b.networkId, b.data, b.validUntilBlock, b.inputs, b.outputs, b.pubKey, b.signature, b.dilithiumPublicKey, b.dilithiumSignature);
     }
 
     public static class Builder {
@@ -92,6 +100,8 @@ public final class Transaction {
         private List<UTXOOutput> outputs = new ArrayList<>();
         private byte[] pubKey;
         private byte[] signature;
+        private byte[] dilithiumPublicKey;
+        private byte[] dilithiumSignature;
 
         public Builder type(Type t) {
             this.type = t;
@@ -123,6 +133,11 @@ public final class Transaction {
             return this;
         }
 
+        public Builder timestamp(long t) {
+            this.timestamp = t;
+            return this;
+        }
+
         public Builder networkId(int n) {
             this.networkId = n;
             return this;
@@ -147,6 +162,29 @@ public final class Transaction {
             this.outputs = o;
             return this;
         }
+
+        /** Sets the raw public key bytes directly (used when reconstructing a transaction without re-signing). */
+        public Builder publicKey(byte[] pk) {
+            this.pubKey = pk;
+            return this;
+        }
+
+        /** Sets the raw signature bytes directly (used when reconstructing a transaction without re-signing). */
+        public Builder signature(byte[] sig) {
+            this.signature = sig;
+            return this;
+        }
+
+        public Builder addInput(String txid, int index) {
+            this.inputs.add(new UTXOInput(txid, index));
+            return this;
+        }
+
+        public Builder addOutput(String address, long amount) {
+            this.outputs.add(new UTXOOutput(address, amount));
+            return this;
+        }
+
         public Transaction sign(BigInteger privateKey, byte[] publicKey) {
             this.pubKey = publicKey;
             if (this.from == null) {
@@ -155,12 +193,41 @@ public final class Transaction {
             Transaction unsigned = new Transaction(this);
             byte[] msg = unsigned.signingPayload();
             this.signature = Crypto.sign(msg, privateKey);
-            return new Transaction(this);
+            return this.build();
+        }
+
+        public Transaction signHybrid(BigInteger ecPrivKey, byte[] ecPubKey, java.security.PrivateKey dilithiumPrivKey, java.security.PublicKey dilithiumPubKey) {
+            this.pubKey = ecPubKey;
+            if (this.dilithiumPublicKey == null) {
+                this.dilithiumPublicKey = dilithiumPubKey.getEncoded();
+            }
+            if (this.from == null) {
+                this.from = Crypto.deriveAddress(ecPubKey);
+            }
+            Transaction unsigned = new Transaction(this);
+            byte[] msg = unsigned.signingPayload();
+            this.signature = Crypto.sign(msg, ecPrivKey);
+            try {
+                this.dilithiumSignature = com.hybrid.blockchain.security.QuantumResistantCrypto.signDilithium(msg, dilithiumPrivKey);
+            } catch (Exception e) {
+                throw new RuntimeException("Dilithium signing failed", e);
+            }
+            return this.build();
         }
 
         public Transaction build() {
             return new Transaction(this);
         }
+    }
+
+    /**
+     * Identity method allowing chaining: {@code builder.sign(...).build()} still works
+     * even though {@code sign()} now returns Transaction directly.
+     *
+     * @return {@code this}
+     */
+    public Transaction build() {
+        return this;
     }
 
     private byte[] signingPayload() {
@@ -215,6 +282,19 @@ public final class Transaction {
         this.txid = Crypto.bytesToHex(Crypto.hash(serializeCanonical()));
     }
 
+    public void signHybrid(BigInteger ecPrivKey, java.security.PrivateKey dilithiumPrivKey, java.security.PublicKey dilithiumPubKey) {
+        this.pubKey = Crypto.derivePublicKey(ecPrivKey);
+        this.dilithiumPublicKey = dilithiumPubKey.getEncoded();
+        byte[] payload = signingPayload();
+        this.signature = Crypto.sign(payload, ecPrivKey);
+        try {
+            this.dilithiumSignature = com.hybrid.blockchain.security.QuantumResistantCrypto.signDilithium(payload, dilithiumPrivKey);
+        } catch (Exception e) {
+            throw new RuntimeException("Dilithium signing failed", e);
+        }
+        this.txid = Crypto.bytesToHex(Crypto.hash(serializeCanonical()));
+    }
+
     private static void writeString(java.io.DataOutputStream dos, String s) throws java.io.IOException {
         if (s == null) {
             dos.writeInt(0);
@@ -230,7 +310,25 @@ public final class Transaction {
             return false;
         if (!Crypto.deriveAddress(pubKey).equals(from))
             return false;
-        return Crypto.verify(signingPayload(), signature, pubKey);
+        
+        byte[] payload = signingPayload();
+        boolean ecValid = Crypto.verify(payload, signature, pubKey);
+        if (!ecValid) return false;
+
+        // FIX 2: Enforce Dilithium hybrid signature check if required
+        if (Config.REQUIRE_QUANTUM_SIG) {
+            if (dilithiumSignature == null || dilithiumPublicKey == null) return false;
+            try {
+                // To avoid storing raw byte-arrays where Keys are needed, we assume 
+                // QuantumResistantCrypto provides a way, or we reconstruct the key:
+                java.security.KeyFactory kf = java.security.KeyFactory.getInstance("Dilithium", "BCPQC");
+                java.security.PublicKey dPubKey = kf.generatePublic(new java.security.spec.X509EncodedKeySpec(dilithiumPublicKey));
+                return com.hybrid.blockchain.security.QuantumResistantCrypto.verifyDilithium(payload, dilithiumSignature, dPubKey);
+            } catch (Exception e) {
+                return false;
+            }
+        }
+        return true;
     }
 
     public String getTxid() {
@@ -239,6 +337,11 @@ public final class Transaction {
 
     @JsonIgnore
     public String getId() {
+        return txid;
+    }
+
+    @JsonIgnore
+    public String getTxId() {
         return txid;
     }
 
@@ -300,6 +403,19 @@ public final class Transaction {
 
     public byte[] getPubKey() {
         return pubKey;
+    }
+
+    /** Alias for {@link #getPubKey()} used by tests that call {@code getPublicKey()}. */
+    public byte[] getPublicKey() {
+        return pubKey;
+    }
+
+    public byte[] getDilithiumSignature() {
+        return dilithiumSignature;
+    }
+
+    public byte[] getDilithiumPublicKey() {
+        return dilithiumPublicKey;
     }
 
     @JsonIgnore

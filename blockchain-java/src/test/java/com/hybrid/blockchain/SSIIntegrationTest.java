@@ -42,7 +42,7 @@ public class SSIIntegrationTest {
         String did = ssiManager.registerDID(deviceId, devicePublicKey, ownerAddress);
 
         // Verify DID format
-        assertEquals("did:iot:sensor-001", did);
+        assertEquals("did:hybrid:sensor-001", did);
 
         // Resolve DID
         DecentralizedIdentifier didDoc = ssiManager.resolveDID(did);
