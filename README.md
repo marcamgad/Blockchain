@@ -229,3 +229,4 @@ java -jar target/blockchain-java-3.1.0.jar
 **Certified By:** Marc Amgad Open Source Engineering  
 **Copyright:** © 2026 MIT License. All rights reserved.  
 **Contact:** [GitHub Repository Issues]
+
