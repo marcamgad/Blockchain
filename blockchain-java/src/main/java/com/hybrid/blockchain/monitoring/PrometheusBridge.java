@@ -29,12 +29,13 @@ public class PrometheusBridge {
         for (Map.Entry<String, BlockchainMonitor.MetricSummary> entry : summary.entrySet()) {
             String rawName = entry.getKey();
             String prometheusName = rawName.replace(".", "_");
+            String totalMetricName = prometheusName.endsWith("_total") ? prometheusName : prometheusName + "_total";
             BlockchainMonitor.MetricSummary s = entry.getValue();
 
             // Total Counter
-            sb.append("# HELP ").append(prometheusName).append("_total ").append(s.getName()).append(" total\n");
-            sb.append("# TYPE ").append(prometheusName).append("_total counter\n");
-            sb.append(prometheusName).append("_total ").append(s.getTotal()).append("\n\n");
+            sb.append("# HELP ").append(totalMetricName).append(" ").append(s.getName()).append(" total\n");
+            sb.append("# TYPE ").append(totalMetricName).append(" counter\n");
+            sb.append(totalMetricName).append(" ").append(s.getTotal()).append("\n\n");
 
             // Count
             sb.append("# HELP ").append(prometheusName).append("_count ").append(s.getName()).append(" sample count\n");

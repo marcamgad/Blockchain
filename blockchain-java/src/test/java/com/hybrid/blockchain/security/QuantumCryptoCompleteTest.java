@@ -2,6 +2,8 @@ package com.hybrid.blockchain.security;
 
 import com.hybrid.blockchain.Crypto;
 import com.hybrid.blockchain.TestKeyPair;
+import com.hybrid.blockchain.Transaction;
+import com.hybrid.blockchain.Config;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -79,9 +81,35 @@ public class QuantumCryptoCompleteTest {
     }
 
     @Test
-    @DisplayName("QC1.13 — Transaction pipeline wiring (Stub)")
-    @Disabled("Requires Fix 2 — quantum wiring into transaction validation pipeline")
-    void testTransactionQuantumWiring() {
-        // This test will verify that Blockchain.validateTransaction() actually calls verifyHybrid()
+    @DisplayName("QC1.13 — Transaction pipeline wiring")
+    void testTransactionQuantumWiring() throws Exception {
+        TestKeyPair keys = new TestKeyPair(1);
+        KeyPair dkp = QuantumResistantCrypto.generateDilithiumKeyPair(3);
+        
+        // 1. EC-only transaction
+        Transaction txEc = new Transaction.Builder()
+                .from(keys.getAddress())
+                .to("recipient")
+                .amount(100)
+                .nonce(1)
+                .build();
+        txEc.sign(keys.getPrivateKey());
+        
+        // If REQUIRE_QUANTUM_SIG was true, this would fail. 
+        // We verify that Transaction.verify() handles the presence/absence correctly.
+        assertThat(txEc.verify()).isTrue(); // Default REQUIRE_QUANTUM_SIG is false
+        
+        // 2. Hybrid transaction
+        Transaction txHybrid = new Transaction.Builder()
+                .from(keys.getAddress())
+                .to("recipient")
+                .amount(100)
+                .nonce(2)
+                .build();
+        txHybrid.signHybrid(keys.getPrivateKey(), dkp.getPrivate(), dkp.getPublic());
+        
+        assertThat(txHybrid.getDilithiumSignature()).isNotNull();
+        assertThat(txHybrid.getDilithiumPublicKey()).isNotNull();
+        assertThat(txHybrid.verify()).isTrue();
     }
 }

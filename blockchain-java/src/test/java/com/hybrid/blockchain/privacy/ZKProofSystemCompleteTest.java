@@ -40,10 +40,10 @@ public class ZKProofSystemCompleteTest {
 
     @Test
     @DisplayName("ZK1.5 — RangeProof.verify() failure on tampering")
-    @Disabled("Requires Fix 1 — real ZKP commitment check implementation")
     void testRangeProofTamper() {
         ZKProofSystem.RangeProof proof = ZKProofSystem.RangeProof.create(50, 0, 100);
-        // Tamper with the internal commitment if accessible, or public bytes
+        byte[] commitment = proof.getCommitment();
+        commitment[10] ^= 0xFF; // Flip bits in the commitment
         assertThat(proof.verify()).isFalse();
     }
 

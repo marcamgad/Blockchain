@@ -41,7 +41,6 @@ public class TestBlockchain implements AutoCloseable {
         Mempool mempool = new Mempool();
         
         this.blockchain = new Blockchain(storage, mempool, consensus);
-        // Config.BYPASS_CONTRACT_AUDIT = false; (Default)
         this.blockchain.init();
     }
 

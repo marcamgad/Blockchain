@@ -69,7 +69,7 @@ public class CheckpointRecoveryCompleteTest {
         storage().saveSnapshot(cpHeight, blockchain.getAccountState().toJSON(), blockchain.getUTXOSet().toJSON());
         
         String path = tb.getStorage().getDbPath();
-        tb.close(); // Close DB so new instance can open it
+        tb.getStorage().close(); // Close only the DB handle; keep the temp directory for restart validation
         
         // 2. Open new blockchain on same storage
         byte[] key = HexUtils.decode("00112233445566778899001122334455");
@@ -90,7 +90,7 @@ public class CheckpointRecoveryCompleteTest {
         // No snapshot saved for height 10
         
         String path = tb.getStorage().getDbPath();
-        tb.close();
+        tb.getStorage().close();
         
         byte[] key = HexUtils.decode("00112233445566778899001122334455");
         Storage newStorage = new Storage(path, key);

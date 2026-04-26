@@ -83,6 +83,7 @@ public class GossipEngine {
     }
 
     public void relay(byte[] payload, String excludePeerId, List<String> availablePeers, int fanout) {
+        if (dispatcher == null) throw new IllegalStateException("Dispatcher not configured");
         P2PMessage msg = new P2PMessage("SYSTEM", "dummy", P2PMessage.Type.GOSSIP, payload);
         String msgId = msg.getMessageId();
         synchronized (seenMessages) {

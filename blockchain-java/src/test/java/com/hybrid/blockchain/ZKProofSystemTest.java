@@ -1,7 +1,6 @@
 package com.hybrid.blockchain;
 
 import com.hybrid.blockchain.privacy.ZKProofSystem;
-import com.hybrid.blockchain.privacy.ZKProofSystem.*;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigInteger;
@@ -54,7 +53,7 @@ public class ZKProofSystemTest {
         byte[] challenge = new byte[]{1,2,3,4};
 
         ZKProofSystem zkp = new ZKProofSystem();
-        byte[] proof = zkp.createOwnershipProof(deviceDID, privateKey, challenge);
+        byte[] proof = zkp.createOwnershipProof(deviceDID, privateKey, publicKey, challenge);
 
         assertTrue(zkp.verifyOwnershipProof(deviceDID, publicKey, proof, challenge));
     }
@@ -68,7 +67,7 @@ public class ZKProofSystemTest {
         byte[] challenge = new byte[]{1,2,3,4};
 
         ZKProofSystem zkp = new ZKProofSystem();
-        byte[] proof = zkp.createOwnershipProof(deviceDID, privateKey2, challenge); // Created with wrong key
+        byte[] proof = zkp.createOwnershipProof(deviceDID, privateKey2, getUncompressedPublicKey(privateKey2), challenge); // Created with wrong key
 
         assertFalse(zkp.verifyOwnershipProof(deviceDID, publicKey1, proof, challenge));
     }

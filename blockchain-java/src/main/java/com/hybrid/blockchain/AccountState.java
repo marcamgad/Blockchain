@@ -26,6 +26,10 @@ public class AccountState {
     private PrivateDataManager privateDataManager;
     private MerklePatriciaTrie mpt;
 
+    public String calculateRoot() {
+        return HexUtils.encode(mpt.getRootHash());
+    }
+
     public AccountState() {
         this.state = new ConcurrentHashMap<>();
         this.mpt = new MerklePatriciaTrie();
@@ -349,6 +353,13 @@ public class AccountState {
         updateMpt(addr, acc);
     }
 
+    public void setAccountReputation(String addr, double reputation) {
+        ensure(addr);
+        Account acc = state.get(addr);
+        acc.setReputation(reputation);
+        updateMpt(addr, acc);
+    }
+
     public void setCode(String addr, byte[] code) {
         ensure(addr);
         Account acc = state.get(addr);
@@ -533,6 +544,7 @@ public class AccountState {
 
             dos.writeLong(acc.getBalance());
             dos.writeLong(acc.getNonce());
+            dos.writeDouble(acc.getReputation()); // FIX 4: persistent reputation in state root
 
             byte[] storageRoot = HexUtils.decode(acc.getStorage().calculateRoot());
             dos.writeInt(storageRoot.length);
@@ -580,6 +592,7 @@ public class AccountState {
         private byte[] abi;
         private final ContractState storage;
         private final java.util.Set<Capability> capabilities;
+        private double reputation = 0.5;
 
         public Account(long balance, long nonce) {
             this(balance, nonce, null);
@@ -600,6 +613,11 @@ public class AccountState {
             this.code = code;
             this.storage = new ContractState();
             this.capabilities = Collections.synchronizedSet(new java.util.HashSet<>());
+        }
+
+        public synchronized double getReputation() { return reputation; }
+        public synchronized void setReputation(double r) { 
+            this.reputation = r; 
         }
 
         /** Returns the native token balance. */

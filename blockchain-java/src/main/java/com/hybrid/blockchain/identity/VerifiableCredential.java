@@ -132,7 +132,7 @@ public class VerifiableCredential {
      * Sign the credential with issuer's private key
      */
     public void sign(BigInteger issuerPrivateKey, byte[] issuerPublicKey) {
-        byte[] message = serializeForSigning();
+        byte[] message = Crypto.hash(serializeForSigning());
         byte[] signature = Crypto.sign(message, issuerPrivateKey);
 
         this.proof = new Proof(
@@ -149,7 +149,7 @@ public class VerifiableCredential {
             return false;
         }
 
-        byte[] message = serializeForSigning();
+        byte[] message = Crypto.hash(serializeForSigning());
         byte[] signature = Crypto.hexToBytes(proof.signatureValue);
 
         return Crypto.verify(message, signature, issuerPublicKey);

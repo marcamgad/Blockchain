@@ -20,12 +20,19 @@ public class FederatedLearningManager {
     private volatile String currentModelHash = "0".repeat(64);
     private volatile long lastAggregatedTimestamp = 0;
     private volatile int roundNumber = 0;
+    private boolean differentialPrivacyEnabled = false;
+    private double epsilon = 1.0;
+
+    public void setDifferentialPrivacyEnabled(boolean enabled) { this.differentialPrivacyEnabled = enabled; }
+    public void setEpsilon(double epsilon) { this.epsilon = epsilon; }
 
     public synchronized void resetForTesting() {
         pendingUpdates.clear();
         roundNumber = 0;
         currentModel = new double[0];
         currentModelHash = "0".repeat(64);
+        differentialPrivacyEnabled = false;
+        epsilon = 1.0;
     }
 
     public synchronized void reset() {
@@ -92,6 +99,15 @@ public class FederatedLearningManager {
 
         double[] aggregated = new double[targetDim];
         for (int i = 0; i < targetDim; i++) aggregated[i] = sum[i] / count;
+
+        if (differentialPrivacyEnabled) {
+            Random rand = new Random();
+            for (int i = 0; i < targetDim; i++) {
+                // Add noise proportional to 1/epsilon
+                double noise = (rand.nextGaussian() * 0.1) / epsilon;
+                aggregated[i] += noise;
+            }
+        }
 
         this.currentModel            = aggregated;
         this.currentModelHash        = computeModelHash(aggregated);

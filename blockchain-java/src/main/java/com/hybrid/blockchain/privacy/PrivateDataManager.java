@@ -65,7 +65,11 @@ public class PrivateDataManager {
     }
 
     public byte[] getData(String caller, String collectionId, String key) {
-        return getCollection(collectionId).readPrivateData(key, caller);
+        PrivateDataCollection col = getCollection(collectionId);
+        if (!col.isAuthorized(caller)) {
+            return null; // Non-members receive null, not an exception
+        }
+        return col.readPrivateData(key, caller);
     }
 
     public byte[] getDataHash(String collectionId, String key) {
