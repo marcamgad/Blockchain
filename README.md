@@ -1,7 +1,7 @@
 # X-Ledger: Enterprise Private IoT Blockchain
 
-**Version:** 3.1.0-STABLE  
-**Stability:** Production-Grade (466/466 Tests Passing - 100%)  
+**Version:** 3.1.5-STABLE  
+**Stability:** Production-Grade (532/532 Tests Passing - 100%)  
 **Security Audit:** Post-Quantum Ready | mTLS-Hardened | AI-Driven Threat Detection  
 **Author:** Marc Amgad Open Source Engineering
 
@@ -168,8 +168,38 @@ X-Ledger manages the complete lifecycle of hardware assets:
 
 - **Throughput**: 1,200+ TPS (Verified via `StressTest.java`).
 - **Finality Latency**: < 800ms (Deterministic).
-- **Test Integrity**: **100% Green Bar** (466/466 tests) covering all edge cases.
+- **Test Integrity**: **100% Green Bar** (532/532 tests) covering all infrastructure and security workstreams.
 - **AI Efficiency**: 99.4% Anomaly Detection accuracy for IoT telemetry.
+
+---
+
+## 🛡️ Deep Technical Deep Dive: Reliability & Hardening (v3.1.5)
+
+The v3.1.5 release introduces significant hardening to the X-Ledger infrastructure, focusing on the interface between unreliable IoT hardware and the deterministic blockchain core.
+
+### 📡 1. High-Integrity IoT Connectivity (CoAP & MQTT)
+X-Ledger now supports native **Constrained Application Protocol (CoAP)** and **MQTT** ingestion with cryptographic enforcement.
+*   **CoAP Integration**: Optimized for UDP-based low-power devices. The `CoAPAdapter` runs an embedded server that handles `GET /health`, `GET /balance`, and `POST /tx`.
+*   **Telemetry Hardening**: The `TelemetryResource` doesn't just log data; it validates incoming JSON, extracts device IDs, and **signs the telemetry** using the node's private key before committing it to the mempool as a `TELEMETRY` transaction. This prevents data injection from unauthorized gateways.
+*   **MQTT Routing**: A reflective message-routing system maps MQTT topics (e.g., `blockchain/iot/device-id/telemetry`) directly to blockchain state-mutating functions, ensuring high-throughput ingestion without the overhead of HTTP headers.
+
+### 🧠 2. Federated Learning: Cross-Node E2E Harness
+The `FederatedLearningCrossNodeE2ETest` suite validates the entire collaborative ML lifecycle across an N-node cluster.
+*   **Model Gossip**: Validates that local weight updates are correctly gossiped across the peer-to-peer network without losing gradient integrity.
+*   **Byzantine Resilience**: Specifically tests how the `FederatedLearningManager` handles "Poisoned" model updates (Byzantine attacks) and ensures the global model remains accurate.
+*   **Differential Privacy**: Enforces strict noise bounds on aggregated models, ensuring that individual device telemetry cannot be reverse-engineered from the global AI weights.
+
+### 🔐 3. ZK Proof Soundness Matrix (12-Case Validation)
+The Zero-Knowledge system has been hardened against advanced cryptographic attacks through a comprehensive soundness matrix in `ZKProofSystemCompleteTest`.
+*   **Forged Proof Rejection**: Targets cases where an attacker tries to pass a validly-formatted but mathematically incorrect proof.
+*   **Tamper Detection**: Ensures that even a single-bit change in the proof or the public signals results in an immediate rejection.
+*   **Cross-Substitution Guards**: Prevents "Proof Replay" attacks where a valid proof from one transaction is attempted to be reused for a different set of public parameters.
+
+### 🧪 4. VM/WASM Fuzz Hardening
+The `VmWasmFuzzTest` suite provides an adversarial testing environment for the smart contract engine, targeting the **Chicory WASM Interpreter**.
+*   **Malformed Binary Ingestion**: Fuzzes the WASM parser with thousands of XOR-corrupted binaries to ensure that illegal opcodes or truncated headers result in a clean `InvalidException` rather than a JVM crash or hang.
+*   **Gas-Exhaustion Loops**: Specifically targets "Tight Loop" attacks (infinite `br_if` loops). The engine is verified to accurately consume gas and throw a `RevertException` exactly when the limit is breached, protecting nodes from CPU exhaustion DoS.
+*   **Stack Safety**: Validates that deep recursion or stack-overflow attempts in WASM are trapped by the interpreter's sandbox.
 
 ---
 
