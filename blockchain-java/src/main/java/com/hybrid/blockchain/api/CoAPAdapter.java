@@ -32,9 +32,13 @@ public class CoAPAdapter {
     }
 
     public CoAPAdapter(Blockchain blockchain) {
+        this(blockchain, Config.COAP_PORT);
+    }
+
+    public CoAPAdapter(Blockchain blockchain, int port) {
         this.blockchain = blockchain;
         Configuration config = Configuration.getStandard();
-        this.server = new CoapServer(config, Config.COAP_PORT);
+        this.server = new CoapServer(config, port);
         
         server.add(new HealthResource());
         server.add(new BalanceResource());
@@ -43,8 +47,12 @@ public class CoAPAdapter {
     }
 
     public void start() {
-        if (Config.NODE_ROLE == Config.NodeRole.GATEWAY || Config.NODE_ROLE == Config.NodeRole.VALIDATOR) {
-            log.info("Starting CoAP Interface on port {}", Config.COAP_PORT);
+        start(false);
+    }
+
+    public void start(boolean force) {
+        if (force || Config.NODE_ROLE == Config.NodeRole.GATEWAY || Config.NODE_ROLE == Config.NodeRole.VALIDATOR) {
+            log.info("Starting CoAP Interface on port {}", server.getEndpoints().get(0).getAddress().getPort());
             server.start();
         } else {
             log.info("Node role {} does not require CoAP Interface.", Config.NODE_ROLE);
@@ -113,11 +121,76 @@ public class CoAPAdapter {
         public TelemetryResource() {
             super("telemetry");
         }
+
+        /**
+         * Accepts a minimal JSON body: {@code {"deviceId":"<id>","value":<number>}}.
+         * Wraps the raw payload as a signed TELEMETRY transaction using the node key
+         * and pushes it to the blockchain mempool.
+         *
+         * <p>Response codes:
+         * <ul>
+         *   <li>CREATED (2.01) + txid on success</li>
+         *   <li>BAD_REQUEST (4.00) on missing/malformed payload</li>
+         *   <li>INTERNAL_SERVER_ERROR (5.00) on blockchain rejection</li>
+         * </ul>
+         */
         @Override
         public void handlePOST(CoapExchange exchange) {
-            // Usually wrapped in a Transaction of type TELEMETRY
-            // For raw telemetry, we expect a JSON or CBOR payload that the gateway wraps
-            exchange.respond(org.eclipse.californium.core.coap.CoAP.ResponseCode.NOT_IMPLEMENTED, "Submit telemetry via POST /tx as TELEMETRY transaction");
+            byte[] payload = exchange.getRequestPayload();
+            if (payload == null || payload.length == 0) {
+                exchange.respond(org.eclipse.californium.core.coap.CoAP.ResponseCode.BAD_REQUEST, "Empty payload");
+                return;
+            }
+            try {
+                // Validate the incoming JSON has the required fields
+                @SuppressWarnings("unchecked")
+                java.util.Map<String, Object> body = mapper.readValue(payload, java.util.Map.class);
+                if (!body.containsKey("deviceId") || !body.containsKey("value")) {
+                    exchange.respond(org.eclipse.californium.core.coap.CoAP.ResponseCode.BAD_REQUEST,
+                            "Missing required fields: deviceId, value");
+                    return;
+                }
+
+                String deviceId = String.valueOf(body.get("deviceId"));
+                long   nonce    = System.currentTimeMillis(); // monotonic enough for gateway use
+                String nodeAddr = com.hybrid.blockchain.Config.NODE_ID;
+
+                com.hybrid.blockchain.Transaction tx;
+                try {
+                    java.math.BigInteger privKey = com.hybrid.blockchain.Config.getNodePrivateKey();
+                    byte[] pubKey = com.hybrid.blockchain.Crypto.derivePublicKey(privKey);
+                    tx = new com.hybrid.blockchain.Transaction.Builder()
+                            .type(com.hybrid.blockchain.Transaction.Type.TELEMETRY)
+                            .from(nodeAddr)
+                            .to(deviceId)
+                            .amount(0)
+                            .data(payload)
+                            .nonce(nonce)
+                            .sign(privKey, pubKey)
+                            .build();
+                } catch (RuntimeException noKey) {
+                    // Unsigned gateway mode (no node key configured — debug/test only)
+                    tx = new com.hybrid.blockchain.Transaction.Builder()
+                            .type(com.hybrid.blockchain.Transaction.Type.TELEMETRY)
+                            .from(nodeAddr)
+                            .to(deviceId)
+                            .amount(0)
+                            .data(payload)
+                            .nonce(nonce)
+                            .build();
+                }
+
+                blockchain.addTransaction(tx);
+                exchange.respond(org.eclipse.californium.core.coap.CoAP.ResponseCode.CREATED, tx.getTxid());
+                log.info("[CoAP] Telemetry from device {} submitted as tx {}", deviceId, tx.getTxid());
+            } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+                exchange.respond(org.eclipse.californium.core.coap.CoAP.ResponseCode.BAD_REQUEST,
+                        "Invalid JSON: " + e.getOriginalMessage());
+            } catch (Exception e) {
+                log.warn("[CoAP] Telemetry submission failed: {}", e.getMessage());
+                exchange.respond(org.eclipse.californium.core.coap.CoAP.ResponseCode.INTERNAL_SERVER_ERROR,
+                        e.getMessage());
+            }
         }
     }
 }

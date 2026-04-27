@@ -95,7 +95,39 @@ public class PoAConsensus implements Consensus {
 
     @Override
     public Block selectLeader(List<String> authorizeNodes, long round) {
-        return null; // Simplified
+        List<String> candidates = new java.util.ArrayList<>();
+        if (authorizeNodes != null && !authorizeNodes.isEmpty()) {
+            for (String nodeId : authorizeNodes) {
+                if (isValidator(nodeId)) {
+                    candidates.add(nodeId);
+                }
+            }
+        }
+
+        if (candidates.isEmpty()) {
+            for (Validator v : validators) {
+                if (isValidator(v.getId())) {
+                    candidates.add(v.getId());
+                }
+            }
+        }
+
+        if (candidates.isEmpty()) {
+            return null;
+        }
+
+        candidates.sort(String::compareTo);
+        String leaderId = candidates.get((int) Math.floorMod(round, candidates.size()));
+
+        Block descriptor = new Block(
+                0,
+                0L,
+                java.util.Collections.emptyList(),
+                "",
+                0,
+                "");
+        descriptor.setValidatorId(leaderId);
+        return descriptor;
     }
 
     @Override

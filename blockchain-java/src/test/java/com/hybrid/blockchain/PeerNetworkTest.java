@@ -27,6 +27,14 @@ public class PeerNetworkTest {
     }
 
     @Test
+    @DisplayName("Compatibility: deprecated onPeerConnected bridge should not throw")
+    void testDeprecatedOnPeerConnectedBridge() {
+        PeerManager pm = new PeerManager();
+        assertThatCode(() -> pm.onPeerConnected("legacy-peer")).doesNotThrowAnyException();
+        assertThat(pm.getPeer("legacy-peer")).isNotNull();
+    }
+
+    @Test
     @DisplayName("Security: Malicious peers (sending garbage) must be blacklisted")
     void testPeerBlacklisting() {
         PeerManager pm = new PeerManager();

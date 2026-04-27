@@ -6,6 +6,7 @@ import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.ExpiredJwtException;
 
 import java.util.Date;
+import java.util.Optional;
 
 public class JwtManager {
 
@@ -59,15 +60,24 @@ public class JwtManager {
         return getDeviceId(token);
     }
 
+    public Optional<String> getSubjectOptional(String token) {
+        return getDeviceIdOptional(token);
+    }
+
     public String getDeviceId(String token) {
+        return getDeviceIdOptional(token)
+                .orElseThrow(() -> new IllegalArgumentException("Invalid JWT token"));
+    }
+
+    public Optional<String> getDeviceIdOptional(String token) {
         try {
             Claims claims = Jwts.parser()
                     .setSigningKey(SECRET)
                     .parseClaimsJws(token)
                     .getBody();
-            return claims.getSubject();
+            return Optional.ofNullable(claims.getSubject());
         } catch (Exception e) {
-            return null;
+            return Optional.empty();
         }
     }
 }

@@ -131,10 +131,11 @@ public class SmartContractAuditor {
                     break;
 
                 case PUSH:
-                    if (pc + 8 <= bytecode.length) {
-                        ByteBuffer buffer = ByteBuffer.wrap(bytecode, pc, 8).order(ByteOrder.BIG_ENDIAN);
+                    int immediateBytes = op.getImmediateBytes();
+                    if (pc + immediateBytes <= bytecode.length) {
+                        ByteBuffer buffer = ByteBuffer.wrap(bytecode, pc, immediateBytes).order(ByteOrder.BIG_ENDIAN);
                         lastPushedValue = buffer.getLong();
-                        pc += 8;
+                        pc += immediateBytes;
                     } else {
                         result.addFinding(Severity.CRITICAL, "Malformed PUSH at PC " + currentPc);
                         pc = bytecode.length; // abort scan

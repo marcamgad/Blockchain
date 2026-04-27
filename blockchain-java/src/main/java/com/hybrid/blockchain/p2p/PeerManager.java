@@ -1,5 +1,8 @@
 package com.hybrid.blockchain.p2p;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -8,6 +11,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Manages peer connections, health tracking, and reputation scoring.
  */
 public class PeerManager {
+
+    private static final Logger log = LoggerFactory.getLogger(PeerManager.class);
 
     public static class PeerInfo {
         private final String id;
@@ -70,8 +75,10 @@ public class PeerManager {
      */
     @Deprecated(forRemoval = true)
     public void onPeerConnected(String id) {
-        throw new UnsupportedOperationException(
-            "Bug fixed: call addPeer(id, realIp, realPort) with actual socket address");
+        // Backward-safe bridge: keep running while directing callers to the correct API.
+        log.warn("[PeerManager] Deprecated onPeerConnected(id) used for {}. " +
+            "Call addPeer(id, realIp, realPort) with actual socket address.", id);
+        addPeer(id, "127.0.0.1", 0);
     }
 
     public void removePeer(String id) {
@@ -101,7 +108,7 @@ public class PeerManager {
         if (info != null) {
             info.updateScore(delta);
             if (info.getScore() < 10) {
-                System.err.println("[PeerManager] Peer " + id + " banned due to low score");
+                log.warn("[PeerManager] Peer {} banned due to low score", id);
                 bannedIps.add(info.getAddress());
                 removePeer(id);
             }

@@ -1118,10 +1118,46 @@ public class Blockchain {
                 {
                     targetState.debit(tx.getFrom(), tx.getFee());
                     targetState.incrementNonce(tx.getFrom());
-                    
-                    // Only perform aggregation if tx data matches current model hash (simple consensus check)
-                    String modelHash = new String(tx.getData(), java.nio.charset.StandardCharsets.UTF_8).trim();
-                    storage.putMeta("federated:latest:hash", modelHash);
+
+                    String modelHash = null;
+                    double[] modelWeights = null;
+                    Integer round = null;
+                    Integer contributors = null;
+
+                    if (tx.getData() != null && tx.getData().length > 0) {
+                        String rawPayload = new String(tx.getData(), java.nio.charset.StandardCharsets.UTF_8).trim();
+                        if (rawPayload.startsWith("{")) {
+                            try {
+                                @SuppressWarnings("unchecked")
+                                Map<String, Object> payload = new ObjectMapper().readValue(tx.getData(), Map.class);
+                                Object hashObj = payload.get("modelHash");
+                                if (hashObj == null) hashObj = payload.get("hash");
+                                if (hashObj instanceof String) modelHash = ((String) hashObj).trim();
+
+                                Object modelObj = payload.get("model");
+                                if (modelObj == null) modelObj = payload.get("weights");
+                                modelWeights = convertToDoubleArray(modelObj);
+
+                                if (payload.get("round") instanceof Number) {
+                                    round = ((Number) payload.get("round")).intValue();
+                                }
+                                if (payload.get("contributors") instanceof Number) {
+                                    contributors = ((Number) payload.get("contributors")).intValue();
+                                }
+                            } catch (Exception e) {
+                                log.warn("[FedLearn] Invalid FEDERATED_COMMIT JSON payload: {}", e.getMessage());
+                            }
+                        } else {
+                            modelHash = rawPayload;
+                        }
+                    }
+
+                    if (modelHash == null || modelHash.isBlank()) {
+                        throw new Exception("FEDERATED_COMMIT missing model hash");
+                    }
+
+                    com.hybrid.blockchain.ai.FederatedLearningManager.getInstance()
+                            .applyCommittedModel(modelHash, modelWeights, round, contributors, storage);
                 }
                 return new ExecutionResult(0, null, null, transactionEvents);
 
@@ -1198,6 +1234,21 @@ public class Blockchain {
                 lifecycle.updateFirmware((String) data.get("deviceId"), (String) data.get("version"), HexUtils.decode((String) data.get("hash")), from);
                 break;
         }
+    }
+
+    private static double[] convertToDoubleArray(Object raw) {
+        if (raw == null) return null;
+        if (raw instanceof double[]) return Arrays.copyOf((double[]) raw, ((double[]) raw).length);
+        if (!(raw instanceof List<?>)) return null;
+
+        List<?> values = (List<?>) raw;
+        double[] out = new double[values.size()];
+        for (int i = 0; i < values.size(); i++) {
+            Object value = values.get(i);
+            if (!(value instanceof Number)) return null;
+            out[i] = ((Number) value).doubleValue();
+        }
+        return out;
     }
 
     // Expose chain height for convenience

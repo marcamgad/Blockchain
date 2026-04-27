@@ -170,5 +170,14 @@ public final class Config {
         return getBooleanEnv("DEBUG", false);
     }
 
+    /**
+     * Returns true when runtime profile indicates production mode.
+     */
+    public static boolean isProductionProfile() {
+        String profile = getEnv("SPRING_PROFILES_ACTIVE", "");
+        String nodeEnv = getEnv("NODE_ENV", "");
+        return profile.toLowerCase().contains("prod") || "production".equalsIgnoreCase(nodeEnv);
+    }
+
     private Config() {}
 }
