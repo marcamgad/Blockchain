@@ -112,6 +112,51 @@ public class FederatedLearningE2ETest {
         assertThat(result.model.length).isEqualTo(4);
     }
 
+    @Test
+    @DisplayName("C1.5: Aggregated model persisted to storage")
+    public void testAggregatedModelPersistedToStorage() {
+        manager.submitUpdate("node1", new double[]{2.0, 4.0});
+        manager.submitUpdate("node2", new double[]{4.0, 6.0});
+
+        FederatedLearningManager.AggregationResult result = manager.aggregate("leader", tb.getStorage());
+
+        assertThat(result).isNotNull();
+        assertThat(tb.getStorage().getMeta("federated:latest:hash")).isEqualTo(result.modelHash);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> persisted = tb.getStorage().get("federated:model:" + result.modelHash, Map.class);
+        assertThat(persisted).isNotNull();
+        assertThat(persisted.get("modelHash")).isEqualTo(result.modelHash);
+        assertThat(((Number) persisted.get("round")).intValue()).isEqualTo(result.round);
+    }
+
+    @Test
+    @DisplayName("C1.6: FEDERATED_COMMIT can distribute full model payload")
+    public void testFederatedCommitPayloadDistributesModel() throws Exception {
+        TestKeyPair validator = tb.getValidatorKey();
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("modelHash", "feedface00112233");
+        payload.put("model", List.of(9.0, 8.0, 7.0));
+        payload.put("round", 5);
+        payload.put("contributors", 3);
+
+        byte[] jsonPayload = new ObjectMapper().writeValueAsBytes(payload);
+        Transaction commitTx = new Transaction.Builder()
+                .type(Transaction.Type.FEDERATED_COMMIT)
+                .from(validator.getAddress())
+                .data(jsonPayload)
+                .nonce(tb.getBlockchain().getAccountState().getNonce(validator.getAddress()) + 1)
+                .build();
+        commitTx.sign(validator.getPrivateKey());
+
+        BlockApplier.createAndApplyBlock(tb, Collections.singletonList(commitTx));
+
+        assertThat(manager.getCurrentModelHash()).isEqualTo("feedface00112233");
+        assertThat(manager.getCurrentModel()).containsExactly(9.0, 8.0, 7.0);
+        assertThat(tb.getStorage().getMeta("federated:latest:hash")).isEqualTo("feedface00112233");
+    }
+
     private Transaction createUpdateTx(TestKeyPair kp, double[] weights, long nonce) throws Exception {
         String json = new ObjectMapper().writeValueAsString(weights);
         Transaction tx = new Transaction.Builder()

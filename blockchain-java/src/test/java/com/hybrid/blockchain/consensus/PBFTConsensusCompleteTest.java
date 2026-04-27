@@ -71,6 +71,22 @@ public class PBFTConsensusCompleteTest {
     }
 
     @Test
+    @DisplayName("P1.4b — High-threat validator excluded from leader selection")
+    void testThreatScoreAffectsLeaderSelection() {
+        String risky = validators.keySet().iterator().next();
+        com.hybrid.blockchain.ai.PredictiveThreatScorer scorer = com.hybrid.blockchain.ai.PredictiveThreatScorer.getInstance();
+
+        for (int i = 0; i < 8; i++) {
+            scorer.recordActivity(risky, -0.5, i);
+        }
+        assertThat(scorer.predictThreatScore(risky)).isGreaterThan(0.7);
+
+        for (long view = 1; view <= 200; view++) {
+            assertThat(pbft.selectLeader(view)).isNotEqualTo(risky);
+        }
+    }
+
+    @Test
     @DisplayName("P1.5-1.6 — Prepare vote quorum")
     void testPrepareQuorum() {
         String hash = "block_hash";

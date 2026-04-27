@@ -73,6 +73,20 @@ public class ZKProofSystemTest {
     }
 
     @Test
+    public void testOwnershipProofForgedChallengeRejected() {
+        BigInteger privateKey = new BigInteger("ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF123456", 16);
+        byte[] publicKey = getUncompressedPublicKey(privateKey);
+        String deviceDID = "did:hybrid:sensor-forge";
+        byte[] challenge = new byte[]{9, 8, 7, 6};
+
+        ZKProofSystem zkp = new ZKProofSystem();
+        byte[] proof = zkp.createOwnershipProof(deviceDID, privateKey, publicKey, challenge);
+
+        byte[] forgedChallenge = new byte[]{9, 8, 7, 5};
+        assertFalse(zkp.verifyOwnershipProof(deviceDID, publicKey, proof, forgedChallenge));
+    }
+
+    @Test
     public void testThresholdProofEqual() {
         long temperature = 25;
         long threshold = 25;

@@ -105,7 +105,11 @@ public class ReputationEngine {
         double current = readScore(deviceId, storage);
         double updated = calculateNewScore(current, success);
         writeScore(deviceId, updated, storage);
-        log.debug("[REPUTATION] Device {}: {:.4f} -> {:.4f} (success={})", deviceId, current, updated, success);
+        log.debug("[REPUTATION] Device {}: {} -> {} (success={})",
+                deviceId,
+                String.format("%.4f", current),
+                String.format("%.4f", updated),
+                success);
         return updated;
     }
 

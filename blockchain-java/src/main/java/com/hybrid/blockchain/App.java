@@ -34,6 +34,11 @@ public class App {
         try {
             log.info("=== HybridChain Node starting (label={}) ===", Config.NODE_ID);
 
+            if (Config.BYPASS_CONTRACT_AUDIT && Config.isProductionProfile()) {
+                throw new IllegalStateException(
+                        "BYPASS_CONTRACT_AUDIT must be false in production profile");
+            }
+
             // ── 1. Keys & cryptographic identity ────────────────────────────────
             // BUG 6 FIX: localId must be the crypto address derived from the private
             // key, NOT the NODE_ID env-var label (e.g. "validator-1").

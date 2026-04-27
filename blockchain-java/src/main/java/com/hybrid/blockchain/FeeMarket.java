@@ -50,7 +50,8 @@ public final class FeeMarket {
         }
 
         long nextFee = currentBaseFee + baseFeeChange;
-        System.err.println("[FEEMARKET] current=" + currentBaseFee + " gasUsed=" + blockGasUsed + " target=" + targetGas + " change=" + baseFeeChange + " next=" + nextFee);
+        log.debug("[FEEMARKET] current={} gasUsed={} target={} change={} next={}",
+            currentBaseFee, blockGasUsed, targetGas, baseFeeChange, nextFee);
         return Math.max(0L, nextFee);
     }
 
@@ -69,7 +70,7 @@ public final class FeeMarket {
         try {
             Object val = storage.getMeta("baseFee");
             if (val != null) {
-                System.err.println("[FEEMARKET] LOAD baseFee=" + val + " type=" + val.getClass().getName());
+                log.debug("[FEEMARKET] LOAD baseFee={} type={}", val, val.getClass().getName());
             }
             if (val instanceof Number) {
                 return ((Number) val).longValue();
@@ -88,7 +89,7 @@ public final class FeeMarket {
      */
     public void saveBaseFee(Storage storage, long newBaseFee) {
         try {
-            System.err.println("[FEEMARKET] SAVE baseFee=" + newBaseFee);
+            log.debug("[FEEMARKET] SAVE baseFee={}", newBaseFee);
             storage.putMeta("baseFee", newBaseFee);
         } catch (Exception e) {
             log.error("[FeeMarket] Failed to save baseFee to storage: {}", e.getMessage());

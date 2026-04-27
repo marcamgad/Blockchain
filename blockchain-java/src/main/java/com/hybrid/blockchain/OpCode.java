@@ -75,6 +75,13 @@ public enum OpCode {
         return (byte) code;
     }
 
+    public int getImmediateBytes() {
+        if (this == PUSH) {
+            return Long.BYTES;
+        }
+        return 0;
+    }
+
     public static OpCode fromByte(byte b) {
         for (OpCode op : values()) {
             if (op.code == (b & 0xFF))

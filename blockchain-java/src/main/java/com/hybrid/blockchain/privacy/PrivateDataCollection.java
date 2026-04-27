@@ -78,16 +78,20 @@ public class PrivateDataCollection {
      * @return Decrypted data
      */
     public byte[] readPrivateData(String key, String caller) {
+        return readPrivateDataOptional(key, caller).orElse(null);
+    }
+
+    public Optional<byte[]> readPrivateDataOptional(String key, String caller) {
         if (!isAuthorized(caller)) {
             throw new SecurityException("Caller not authorized for collection: " + collectionId);
         }
 
         byte[] encrypted = privateData.get(key);
         if (encrypted == null) {
-            return null;
+            return Optional.empty();
         }
 
-        return decrypt(encrypted);
+        return Optional.of(decrypt(encrypted));
     }
 
     /**

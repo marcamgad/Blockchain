@@ -16,7 +16,7 @@ public class GossipNetworkTest {
     private List<PeerNode> nodes;
     private List<java.math.BigInteger> nodeKeys;
     private static final int NODE_COUNT = 20;
-    private static final int START_PORT = 10000;
+    private List<Integer> allocatedPorts;
     private File runDataRoot;
 
     @BeforeEach
@@ -41,6 +41,14 @@ public class GossipNetworkTest {
             valIds.add(id);
         }
 
+        allocatedPorts = new ArrayList<>();
+        for (int i = 0; i < NODE_COUNT; i++) {
+            try (java.net.ServerSocket ss = new java.net.ServerSocket(0)) {
+                ss.setReuseAddress(true);
+                allocatedPorts.add(ss.getLocalPort());
+            }
+        }
+
         for (int i = 0; i < NODE_COUNT; i++) {
             // Generate unique key for each node
             byte[] keyBytes = new byte[32];
@@ -62,7 +70,7 @@ public class GossipNetworkTest {
             // Pre-fund a shared test account in all nodes for gossip testing
             bc.getAccountState().credit("0xAlice", 10000L);
 
-            PeerNode node = new PeerNode(START_PORT + i, bc, consensus, privKey);
+            PeerNode node = new PeerNode(allocatedPorts.get(i), bc, consensus, privKey);
             node.start();
             nodes.add(node);
         }
@@ -70,7 +78,7 @@ public class GossipNetworkTest {
         // Connect nodes in a ring topology to ensure a valid graph
         for (int i = 0; i < NODE_COUNT; i++) {
             int next = (i + 1) % NODE_COUNT;
-            nodes.get(i).connectToPeer("localhost", START_PORT + next);
+            nodes.get(i).connectToPeer("localhost", allocatedPorts.get(next));
         }
 
         // Wait for handshakes using polling

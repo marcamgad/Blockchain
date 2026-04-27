@@ -23,6 +23,12 @@ public class FederatedLearningManager {
     private boolean differentialPrivacyEnabled = false;
     private double epsilon = 1.0;
 
+    private static final String META_LATEST_HASH = "federated:latest:hash";
+    private static final String META_LATEST_ROUND = "federated:latest:round";
+    private static final String META_LAST_AGG_TS = "federated:latest:timestamp";
+    private static final String META_LAST_CONTRIB = "federated:latest:contributors";
+    private static final String MODEL_PREFIX = "federated:model:";
+
     public void setDifferentialPrivacyEnabled(boolean enabled) { this.differentialPrivacyEnabled = enabled; }
     public void setEpsilon(double epsilon) { this.epsilon = epsilon; }
 
@@ -85,7 +91,7 @@ public class FederatedLearningManager {
                 }
                 dist = Math.sqrt(dist);
                 if (dist > 3.0) {
-                    log.warn("[FedLearn] REJECT BYZANTINE node={} dist=%.2f", entry.getKey(), dist);
+                    log.warn("[FedLearn] REJECT BYZANTINE node={} dist={}", entry.getKey(), String.format("%.2f", dist));
                     continue;
                 }
             }
@@ -113,9 +119,75 @@ public class FederatedLearningManager {
         this.currentModelHash        = computeModelHash(aggregated);
         this.lastAggregatedTimestamp = System.currentTimeMillis();
         this.roundNumber++;
+
+        persistModel(storage, leaderId, currentModel, currentModelHash, roundNumber, count, lastAggregatedTimestamp);
         pendingUpdates.clear();
 
         return new AggregationResult(currentModel, currentModelHash, roundNumber, count);
+    }
+
+    public synchronized void applyCommittedModel(String modelHash,
+                                                 double[] model,
+                                                 Integer round,
+                                                 Integer contributors,
+                                                 com.hybrid.blockchain.Storage storage) {
+        if (modelHash == null || modelHash.isBlank()) {
+            return;
+        }
+
+        double[] committed = (model == null) ? new double[0] : Arrays.copyOf(model, model.length);
+        long now = System.currentTimeMillis();
+        int effectiveRound = (round != null && round >= 0) ? round : this.roundNumber;
+        int effectiveContributors = (contributors != null && contributors >= 0) ? contributors : 0;
+
+        if (committed.length > 0) {
+            this.currentModel = committed;
+            this.currentModelHash = modelHash;
+            this.lastAggregatedTimestamp = now;
+            this.roundNumber = Math.max(this.roundNumber, effectiveRound);
+            persistModel(storage, "network-commit", committed, modelHash, this.roundNumber, effectiveContributors, now);
+            return;
+        }
+
+        if (storage != null) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> stored = storage.get(MODEL_PREFIX + modelHash, Map.class);
+            if (stored != null) {
+                double[] restored = toDoubleArray(stored.get("model"));
+                if (restored.length > 0) {
+                    this.currentModel = restored;
+                    this.currentModelHash = modelHash;
+                    this.lastAggregatedTimestamp = readLong(stored.get("timestamp"), now);
+                    this.roundNumber = Math.max(this.roundNumber, readInt(stored.get("round"), this.roundNumber));
+                    return;
+                }
+            }
+        }
+
+        this.currentModelHash = modelHash;
+        this.lastAggregatedTimestamp = now;
+        persistModel(storage, "network-commit", new double[0], modelHash, this.roundNumber, effectiveContributors, now);
+    }
+
+    public synchronized boolean loadLatestModel(com.hybrid.blockchain.Storage storage) {
+        if (storage == null) return false;
+
+        Object hashObj = storage.getMeta(META_LATEST_HASH);
+        if (!(hashObj instanceof String) || ((String) hashObj).isBlank()) return false;
+
+        String hash = (String) hashObj;
+        @SuppressWarnings("unchecked")
+        Map<String, Object> stored = storage.get(MODEL_PREFIX + hash, Map.class);
+        if (stored == null) return false;
+
+        double[] restored = toDoubleArray(stored.get("model"));
+        if (restored.length == 0) return false;
+
+        this.currentModel = restored;
+        this.currentModelHash = hash;
+        this.lastAggregatedTimestamp = readLong(stored.get("timestamp"), System.currentTimeMillis());
+        this.roundNumber = Math.max(this.roundNumber, readInt(stored.get("round"), this.roundNumber));
+        return true;
     }
 
     public double[] getCurrentModel() {
@@ -126,6 +198,57 @@ public class FederatedLearningManager {
     public long getLastAggregatedTimestamp() { return lastAggregatedTimestamp; }
     public int getRoundNumber() { return roundNumber; }
     public int getPendingUpdateCount() { return pendingUpdates.size(); }
+
+    private void persistModel(com.hybrid.blockchain.Storage storage,
+                              String source,
+                              double[] model,
+                              String modelHash,
+                              int round,
+                              int contributors,
+                              long timestamp) {
+        if (storage == null) return;
+        try {
+            Map<String, Object> record = new LinkedHashMap<>();
+            record.put("model", Arrays.copyOf(model, model.length));
+            record.put("modelHash", modelHash);
+            record.put("round", round);
+            record.put("contributors", contributors);
+            record.put("leaderId", source);
+            record.put("timestamp", timestamp);
+
+            storage.put(MODEL_PREFIX + modelHash, record);
+            storage.putMeta(META_LATEST_HASH, modelHash);
+            storage.putMeta(META_LATEST_ROUND, round);
+            storage.putMeta(META_LAST_AGG_TS, timestamp);
+            storage.putMeta(META_LAST_CONTRIB, contributors);
+        } catch (Exception e) {
+            log.warn("[FedLearn] Failed to persist model hash={}: {}", modelHash, e.getMessage());
+        }
+    }
+
+    private static int readInt(Object value, int fallback) {
+        return (value instanceof Number) ? ((Number) value).intValue() : fallback;
+    }
+
+    private static long readLong(Object value, long fallback) {
+        return (value instanceof Number) ? ((Number) value).longValue() : fallback;
+    }
+
+    private static double[] toDoubleArray(Object raw) {
+        if (raw == null) return new double[0];
+        if (raw instanceof double[]) return Arrays.copyOf((double[]) raw, ((double[]) raw).length);
+        if (raw instanceof List<?>) {
+            List<?> list = (List<?>) raw;
+            double[] out = new double[list.size()];
+            for (int i = 0; i < list.size(); i++) {
+                Object v = list.get(i);
+                if (!(v instanceof Number)) return new double[0];
+                out[i] = ((Number) v).doubleValue();
+            }
+            return out;
+        }
+        return new double[0];
+    }
 
     private static String computeModelHash(double[] model) {
         try {

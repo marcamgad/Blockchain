@@ -21,7 +21,10 @@ public final class ABIDecoder {
      */
     public static Object decode(byte[] result, String returnType) {
         if (result == null || result.length == 0) {
-            return null;
+            if ("void".equalsIgnoreCase(returnType)) {
+                return null;
+            }
+            throw new IllegalArgumentException("Empty ABI result for non-void return type: " + returnType);
         }
         switch (returnType.toLowerCase()) {
             case "long":

@@ -35,6 +35,8 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
     
     private final int port;
     private final ExecutorService executor;
+    private final ScheduledExecutorService peerSyncScheduler;
+    private volatile ScheduledFuture<?> peerSyncTask;
     private ServerSocket serverSocket;
     private final java.math.BigInteger privateKey;
     private final byte[] localPubKey;
@@ -83,6 +85,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
     public PeerNode(int port, Blockchain blockchain, Consensus consensus, BigInteger privateKey, List<X509Certificate> trustedCerts) {
         this.port = port;
         this.executor = Executors.newCachedThreadPool();
+        this.peerSyncScheduler = Executors.newSingleThreadScheduledExecutor();
         this.serverSocket = null;
         this.privateKey = privateKey;
         this.localPubKey = Crypto.derivePublicKey(this.privateKey);
@@ -133,6 +136,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                     KeyPair nodeKeyPair, CertificateAuthority ca) {
         this.port = port;
         this.executor = Executors.newCachedThreadPool();
+        this.peerSyncScheduler = Executors.newSingleThreadScheduledExecutor();
         this.serverSocket = null;
         this.privateKey = privateKey;
         this.localPubKey = Crypto.derivePublicKey(this.privateKey);
@@ -327,38 +331,35 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
      * Periodically syncs the blockchain state with peers and broadcasts peer lists.
      */
     public void startPeerSync() {
-        executor.submit(() -> {
-            int noProgressCount = 0;
-            long lastSyncHeight = blockchain.getLatestBlock().getIndex();
-            
-            while (!Thread.currentThread().isInterrupted()) {
-                try {
-                    Thread.sleep(30000); // Sync every 30s
-                    
-                    // Attempt to sync blocks with peers
-                    boolean progress = syncBlocksWithPeers();
-                    
-                    long currentHeight = blockchain.getLatestBlock().getIndex();
-                    if (currentHeight == lastSyncHeight && !progress) {
-                        noProgressCount++;
-                        if (noProgressCount >= 3) {
-                            log.warn("[SYNC] No progress in 3 rounds. Pausing sync for 10 seconds.");
-                            Thread.sleep(10000);
-                            noProgressCount = 0;
-                        }
-                    } else {
-                        noProgressCount = 0;
-                        lastSyncHeight = currentHeight;
+        if (peerSyncTask != null && !peerSyncTask.isCancelled()) {
+            return;
+        }
+
+        final java.util.concurrent.atomic.AtomicInteger noProgressCount = new java.util.concurrent.atomic.AtomicInteger(0);
+        final java.util.concurrent.atomic.AtomicLong lastSyncHeight =
+                new java.util.concurrent.atomic.AtomicLong(blockchain.getLatestBlock().getIndex());
+
+        peerSyncTask = peerSyncScheduler.scheduleWithFixedDelay(() -> {
+            try {
+                boolean progress = syncBlocksWithPeers();
+
+                long currentHeight = blockchain.getLatestBlock().getIndex();
+                if (currentHeight == lastSyncHeight.get() && !progress) {
+                    int idleRounds = noProgressCount.incrementAndGet();
+                    if (idleRounds >= 3) {
+                        log.warn("[SYNC] No progress in 3 rounds.");
+                        noProgressCount.set(0);
                     }
-                    
-                    broadcastPeerList();
-                } catch (InterruptedException e) {
-                    break;
-                } catch (Exception e) {
-                    log.warn("[SYNC] Error during sync: {}", e.getMessage());
+                } else {
+                    noProgressCount.set(0);
+                    lastSyncHeight.set(currentHeight);
                 }
+
+                broadcastPeerList();
+            } catch (Exception e) {
+                log.warn("[SYNC] Error during sync: {}", e.getMessage());
             }
-        });
+        }, 30, 30, TimeUnit.SECONDS);
     }
 
     /**
@@ -822,6 +823,10 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
         log.debug("[P2P] All peer connections closed");
         
         // Shut down executor
+        if (peerSyncTask != null) {
+            peerSyncTask.cancel(true);
+        }
+        peerSyncScheduler.shutdownNow();
         executor.shutdownNow();
         if (consensus != null) {
             consensus.shutdown();

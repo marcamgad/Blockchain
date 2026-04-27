@@ -409,10 +409,11 @@ public class Interpreter {
     }
 
     private long readLong() throws Exception {
-        if (pc + 8 > bytecode.length)
-            throw new Exception("Malformed bytecode: expected 8 bytes for PUSH");
-        ByteBuffer buffer = ByteBuffer.wrap(bytecode, pc, 8).order(ByteOrder.BIG_ENDIAN);
-        pc += 8;
+        int immediateBytes = OpCode.PUSH.getImmediateBytes();
+        if (pc + immediateBytes > bytecode.length)
+            throw new Exception("Malformed bytecode: expected " + immediateBytes + " bytes for PUSH");
+        ByteBuffer buffer = ByteBuffer.wrap(bytecode, pc, immediateBytes).order(ByteOrder.BIG_ENDIAN);
+        pc += immediateBytes;
         return buffer.getLong();
     }
 

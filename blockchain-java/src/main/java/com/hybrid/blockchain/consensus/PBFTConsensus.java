@@ -236,7 +236,18 @@ public class PBFTConsensus implements Consensus {
 
     @Override
     public Block selectLeader(List<String> authorizedNodes, long round) {
-        return null; // Not used in PBFT
+        String leaderId = selectLeader(round);
+        if (leaderId == null) return null;
+
+        Block descriptor = new Block(
+                0,
+                0L,
+                java.util.Collections.emptyList(),
+                "",
+                0,
+                "");
+        descriptor.setValidatorId(leaderId);
+        return descriptor;
     }
 
     @Override

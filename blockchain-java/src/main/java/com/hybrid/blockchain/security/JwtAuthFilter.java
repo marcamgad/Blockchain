@@ -15,6 +15,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Optional;
 
 /**
  * JWT authentication filter that validates JWT tokens on incoming requests.
@@ -35,17 +36,15 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             throws ServletException, IOException {
         
         try {
-            String bearerToken = extractBearerToken(request);
+            Optional<String> bearerToken = extractBearerToken(request);
             
-            if (bearerToken != null && jwtManager != null && jwtManager.validateToken(bearerToken)) {
-                String subject = jwtManager.getSubject(bearerToken);
-                
-                // Create authentication token
-                UsernamePasswordAuthenticationToken authToken = 
-                    new UsernamePasswordAuthenticationToken(subject, null, new ArrayList<>());
-                
-                // Set in security context
-                SecurityContextHolder.getContext().setAuthentication(authToken);
+            if (bearerToken.isPresent() && jwtManager != null && jwtManager.validateToken(bearerToken.get())) {
+                Optional<String> subject = jwtManager.getSubjectOptional(bearerToken.get());
+                if (subject.isPresent()) {
+                    UsernamePasswordAuthenticationToken authToken =
+                            new UsernamePasswordAuthenticationToken(subject.get(), null, new ArrayList<>());
+                    SecurityContextHolder.getContext().setAuthentication(authToken);
+                }
             }
         } catch (Exception e) {
             logger.error("JWT authentication failed: " + e.getMessage());
@@ -58,11 +57,11 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     /**
      * Extract JWT token from Authorization header (Bearer scheme)
      */
-    private String extractBearerToken(HttpServletRequest request) {
+    private Optional<String> extractBearerToken(HttpServletRequest request) {
         String authHeader = request.getHeader(HttpHeaders.AUTHORIZATION);
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
-            return authHeader.substring(7); // Remove "Bearer " prefix
+            return Optional.of(authHeader.substring(7)); // Remove "Bearer " prefix
         }
-        return null;
+        return Optional.empty();
     }
 }

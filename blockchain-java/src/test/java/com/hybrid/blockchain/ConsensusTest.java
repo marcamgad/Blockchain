@@ -118,6 +118,54 @@ public class ConsensusTest {
         assertThat(poa.getSlashedValidators()).contains(v1.getAddress());
     }
 
+    @Test
+    @DisplayName("C10.3: PoA selectLeader returns deterministic non-null descriptor")
+    void testPoALeaderDescriptorSelection() {
+        TestKeyPair v1 = new TestKeyPair(101);
+        TestKeyPair v2 = new TestKeyPair(102);
+        Validator val1 = new Validator(v1.getAddress(), v1.getPublicKey());
+        Validator val2 = new Validator(v2.getAddress(), v2.getPublicKey());
+
+        java.util.List<Validator> validatorList = new java.util.ArrayList<>();
+        validatorList.add(val1);
+        validatorList.add(val2);
+        PoAConsensus poa = new PoAConsensus(validatorList);
+
+        java.util.List<String> authorized = new java.util.ArrayList<>();
+        authorized.add(v1.getAddress());
+        authorized.add(v2.getAddress());
+
+        Block leader0 = poa.selectLeader(authorized, 0);
+        Block leader1 = poa.selectLeader(authorized, 1);
+
+        assertThat(leader0).isNotNull();
+        assertThat(leader1).isNotNull();
+        assertThat(leader0.getValidatorId()).isNotBlank();
+        assertThat(leader1.getValidatorId()).isNotBlank();
+        assertThat(poa.selectLeader(authorized, 1).getValidatorId()).isEqualTo(leader1.getValidatorId());
+    }
+
+    @Test
+    @DisplayName("C10.4: PBFT consensus-interface leader descriptor is non-null")
+    void testPBFTLeaderDescriptorViaInterface() {
+        Map<String, byte[]> validatorSet = new HashMap<>();
+        TestKeyPair v1 = new TestKeyPair(201);
+        TestKeyPair v2 = new TestKeyPair(202);
+        TestKeyPair v3 = new TestKeyPair(203);
+        TestKeyPair v4 = new TestKeyPair(204);
+        validatorSet.put(v1.getAddress(), v1.getPublicKey());
+        validatorSet.put(v2.getAddress(), v2.getPublicKey());
+        validatorSet.put(v3.getAddress(), v3.getPublicKey());
+        validatorSet.put(v4.getAddress(), v4.getPublicKey());
+
+        Consensus consensus = new PBFTConsensus(validatorSet, v1.getAddress(), v1.getPrivateKey());
+        Block descriptor = consensus.selectLeader(new java.util.ArrayList<>(validatorSet.keySet()), 3);
+
+        assertThat(descriptor).isNotNull();
+        assertThat(descriptor.getValidatorId()).isNotBlank();
+        consensus.shutdown();
+    }
+
     private byte[] signViewChange(long view, long seq, TestKeyPair kp) {
         String data = PBFTConsensus.Phase.VIEW_CHANGE.name() + view + seq + "VIEW_CHANGE_PROOF" + kp.getAddress();
         return com.hybrid.blockchain.Crypto.sign(com.hybrid.blockchain.Crypto.hash(data.getBytes()), kp.getPrivateKey());
