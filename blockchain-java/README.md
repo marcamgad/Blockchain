@@ -371,56 +371,76 @@ Copyright (c) 2026 **Marc Amgad Open Source Engineering**. All rights reserved.
 
 ---
 
-**Built for High-Trust Industrial IoT Ecosystems**
+## Documentation
 
-*Last Updated: 2026-04-27*  
-*Version: 3.1.5-PRODUCTION*  
-*Build Status: 532/532 Passing*
-
----
-
-## 📖 Appendix: Full Technical Feature Inventory
-
-### Consensus Subsystem
-- [x] PBFT Core State Machine (f=1, f=2, f=3 support)
-- [x] Deterministic Leader Rotation
-- [x] Pre-prepare, Prepare, Commit phases
-- [x] View Change timeout logic
-- [x] Sequence number gap recovery
-- [x] Block finality callbacks
-
-### Virtual Machine (WASM)
-- [x] Chicory Interpreter Integration
-- [x] O(1) Memory Allocation Tracking
-- [x] Infinite Loop / Gas Trap detection
-- [x] Host Function API (ReadState, WriteState)
-- [x] Bytecode validation pass
-
-### Cryptography
-- [x] secp256k1 ECDSA (Legacy support)
-- [x] CRYSTALS-Dilithium (Post-Quantum)
-- [x] Schnorr ZK Range Proofs
-- [x] SHA3-256 (Keccak) Hashing
-- [x] AES-256-GCM Storage Encryption
-
-### Networking
-- [x] mTLS 1.3 Handshake (Internal CA)
-- [x] GossipEngine v2 (Push-Pull propagation)
-- [x] Dynamic Peer Scoring / Banning
-- [x] Block Sync / Chunked Downloads
-- [x] UpnP / Port Mapping (Auto-Discovery)
-
-### AI & Data
-- [x] Federated Learning Orchestrator
-- [x] Differential Privacy Noise Generator
-- [x] Anomaly Detection (Isolation Forest)
-- [x] Telemetry Outlier Rejection
+- **`README.md`** - This file
+- **`MTLS_SETUP.md`** - Certificate Authority and mTLS bootstrap
+- **`PRODUCTION_CHECKLIST.md`** - Feature completion and deployment readiness
+- **`BLOCKCHAIN_ANALYSIS.txt`** - Architecture and design decisions
+- **`API_AUTH.md`** (to be created) - JWT authentication flow
+- **`QUANTUM_CRYPTO.md`** (to be created) - Dilithium integration
+- **JavaDocs** - In source code (`@param`, `@return`, `@throws`)
 
 ---
 
-### End of Documentation
-Total Line Count: 1042
-Stability: Green
-Documentation Level: Deep-Dive Technical
-Target Audience: Senior Blockchain Engineers / Architects
-Status: FINALIZED
+## Support & Contributing
+
+For issues, questions, or contributions:
+1. Check `PRODUCTION_CHECKLIST.md` for known issues
+2. Enable `DEBUG=true` and check logs
+3. Review `MTLS_SETUP.md` for mTLS troubleshooting
+4. Create an issue with reproduction steps
+
+---
+
+## License
+- **Latency**: less than 100ms average
+- **Storage**: Optimized with pruning
+
+---
+
+## Contributing
+
+1. Fork the repository
+2. Create feature branch
+3. Add tests for new features
+4. Ensure all tests pass
+5. Submit pull request
+
+---
+
+## License
+
+MIT License
+
+Copyright (c) 2026 Marc Amgad
+
+See LICENSE file for details.
+
+---
+
+## Use Cases
+
+- **IoT Device Networks**: Secure device management and data sharing
+- **Supply Chain**: Track products with privacy
+- **Healthcare**: HIPAA-compliant data sharing
+- **Smart Cities**: Distributed sensor networks
+- **Industrial IoT**: Manufacturing and logistics
+
+---
+
+## Roadmap
+
+- [ ] Advanced ZK-SNARKs
+- [ ] Cross-chain bridges
+- [ ] Edge/Fog topology
+- [ ] Performance optimization
+- [ ] Web dashboard UI
+
+---
+
+**Built for production IoT deployments**
+
+*Last Updated: 2026-03-16*  
+*Version: 2.2.0-PRODUCTION*  
+*Author: Marc Amgad*
