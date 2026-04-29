@@ -23,7 +23,8 @@ public class P2PMessage {
         REQUEST_BLOCKS,
         BLOCKS_RESPONSE,
         CHECKPOINT,
-        GOSSIP
+        GOSSIP,
+        FL_MODEL_BROADCAST
     }
 
     private final String messageId;

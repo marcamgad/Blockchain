@@ -1158,6 +1158,11 @@ public class Blockchain {
 
                     com.hybrid.blockchain.ai.FederatedLearningManager.getInstance()
                             .applyCommittedModel(modelHash, modelWeights, round, contributors, storage);
+
+                    if (peerNode != null && modelWeights != null && modelWeights.length > 0) {
+                        int broadcastRound = com.hybrid.blockchain.ai.FederatedLearningManager.getInstance().getRoundNumber();
+                        peerNode.broadcastFLModel(broadcastRound, modelHash, modelWeights);
+                    }
                 }
                 return new ExecutionResult(0, null, null, transactionEvents);
 

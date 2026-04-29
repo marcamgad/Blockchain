@@ -25,7 +25,7 @@ public class PredictiveThreatScorer {
     private static final PredictiveThreatScorer INSTANCE = new PredictiveThreatScorer();
 
     public static final int WINDOW_SIZE = 50;
-    public static final double DECAY_FACTOR = 0.3;
+    public static final double DECAY_FACTOR = 0.88;
 
     public static class ValidatorActivity {
         public final double reputationDelta;

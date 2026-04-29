@@ -5,6 +5,7 @@ import javax.net.ssl.*;
 import java.io.*;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.security.*;
 import java.security.cert.X509Certificate;
 import java.util.*;
@@ -322,6 +323,44 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                 }
             } catch (Exception e) {
                 log.warn("[P2P] Error handling checkpoint: {}", e.getMessage());
+            }
+        });
+
+        gossipEngine.registerHandler(P2PMessage.Type.FL_MODEL_BROADCAST, msg -> {
+            try {
+                String raw = new String(msg.getPayload(), StandardCharsets.UTF_8);
+                String[] parts = raw.split(":", 3);
+                if (parts.length != 3) {
+                    log.warn("[FL] Malformed FL_MODEL_BROADCAST payload");
+                    return;
+                }
+
+                int round = Integer.parseInt(parts[0]);
+                String modelHash = parts[1].trim();
+                double[] weights = bytesToWeights(Base64.getDecoder().decode(parts[2]));
+
+                int currentRound = com.hybrid.blockchain.ai.FederatedLearningManager.getInstance().getRoundNumber();
+                if (round < currentRound) {
+                    log.debug("[FL] Ignoring stale model round={} currentRound={}", round, currentRound);
+                    return;
+                }
+
+                com.hybrid.blockchain.ai.FederatedLearningManager.getInstance()
+                        .applyCommittedModel(modelHash, weights, round, 0, blockchain.getStorage());
+
+                if (weights.length >= 2) {
+                    double phi1 = Math.max(0.0, Math.min(0.99, weights[0]));
+                    double theta1 = Math.max(0.0, Math.min(0.99, weights[1]));
+                    com.hybrid.blockchain.ai.TelemetryAnomalyDetector.getInstance()
+                            .setArimaCoefficients(phi1, theta1);
+                    log.info("[FL] Applied model round={} hash={} phi1={} theta1={}",
+                            round,
+                            modelHash.length() > 12 ? modelHash.substring(0, 12) : modelHash,
+                            String.format("%.3f", phi1),
+                            String.format("%.3f", theta1));
+                }
+            } catch (Exception e) {
+                log.warn("[FL] Error applying FL model broadcast: {}", e.getMessage());
             }
         });
     }
@@ -756,6 +795,43 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
         byte[] payload = blockchain.serializeTransaction(tx);
         P2PMessage msg = P2PMessage.create(localAddress, privateKey, P2PMessage.Type.TRANSACTION, payload);
         gossipEngine.onMessageReceived(msg, localAddress);
+    }
+
+    public void broadcastFLModel(int round, String modelHash, double[] weights) {
+        if (weights == null || weights.length == 0 || modelHash == null || modelHash.isBlank()) {
+            return;
+        }
+
+        try {
+            byte[] payloadBytes = weightsToBytes(weights);
+            String encodedWeights = Base64.getEncoder().encodeToString(payloadBytes);
+            String payload = round + ":" + modelHash + ":" + encodedWeights;
+            P2PMessage msg = P2PMessage.create(localAddress, privateKey,
+                    P2PMessage.Type.FL_MODEL_BROADCAST,
+                    payload.getBytes(StandardCharsets.UTF_8));
+            gossipEngine.onMessageReceived(msg, localAddress);
+            log.info("[FL] Broadcast model round={} hash={}", round,
+                    modelHash.length() > 12 ? modelHash.substring(0, 12) : modelHash);
+        } catch (Exception e) {
+            log.warn("[FL] Failed to broadcast model: {}", e.getMessage());
+        }
+    }
+
+    private static byte[] weightsToBytes(double[] weights) {
+        ByteBuffer buffer = ByteBuffer.allocate(weights.length * Double.BYTES);
+        for (double weight : weights) {
+            buffer.putDouble(weight);
+        }
+        return buffer.array();
+    }
+
+    private static double[] bytesToWeights(byte[] bytes) {
+        ByteBuffer buffer = ByteBuffer.wrap(bytes);
+        double[] weights = new double[bytes.length / Double.BYTES];
+        for (int i = 0; i < weights.length; i++) {
+            weights[i] = buffer.getDouble();
+        }
+        return weights;
     }
 
     /**

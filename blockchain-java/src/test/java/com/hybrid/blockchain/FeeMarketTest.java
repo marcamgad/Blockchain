@@ -37,14 +37,14 @@ public class FeeMarketTest {
     }
 
     @Test
-    @DisplayName("Security: Base fee must never drop below 0")
+    @DisplayName("Security: Base fee must never drop below 1")
     void testBaseFeeFloor() {
         long currentBaseFee = 1;
         int targetGas = 1000;
         int usedGas = 0;
         
         long nextFee = new FeeMarket().calculateNextBaseFee(currentBaseFee, usedGas, targetGas);
-        assertThat(nextFee).isEqualTo(0);
+        assertThat(nextFee).isEqualTo(1);
     }
 
     @Test

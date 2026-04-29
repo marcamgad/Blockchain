@@ -59,7 +59,7 @@ public class FeeMarketCompleteTest {
     @DisplayName("F1.4 — calculateNextBaseFee: minimum floor")
     void testFeeFloor() {
         long next = new FeeMarket().calculateNextBaseFee(1, 0);
-        assertThat(next).isGreaterThanOrEqualTo(0);
+        assertThat(next).isGreaterThanOrEqualTo(1);
     }
 
     @Test
@@ -88,7 +88,7 @@ public class FeeMarketCompleteTest {
         for (int i = 0; i < 25; i++) {
             List<Transaction> txs = new ArrayList<>();
             for(int j=0; j < Config.MAX_TRANSACTIONS_PER_BLOCK; j++) {
-                txs.add(TestTransactionFactory.createAccountTransfer(alice, "b", 1, 10, (long)i * Config.MAX_TRANSACTIONS_PER_BLOCK + j + 1));
+                txs.add(TestTransactionFactory.createAccountTransfer(alice, "b", 1, 100, (long)i * Config.MAX_TRANSACTIONS_PER_BLOCK + j + 1));
             }
             BlockApplier.createAndApplyBlock(tb, txs);
         }

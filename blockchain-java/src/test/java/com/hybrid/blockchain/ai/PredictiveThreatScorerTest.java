@@ -49,7 +49,7 @@ public class PredictiveThreatScorerTest {
         // It's a severe test, let's just test EWMA decay by giving negative delta then positive delta
         scorer.recordActivity(valId, -1.0, 2);
         double highThreat = scorer.predictThreatScore(valId);
-        assertTrue(highThreat > 0.7);
+        assertTrue(highThreat > 0.5);
         
         for (int i = 0; i < 20; i++) {
             scorer.recordActivity(valId, 0.2, i + 3);

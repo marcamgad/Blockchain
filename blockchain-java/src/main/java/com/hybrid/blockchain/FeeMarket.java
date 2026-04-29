@@ -52,7 +52,7 @@ public final class FeeMarket {
         long nextFee = currentBaseFee + baseFeeChange;
         log.debug("[FEEMARKET] current={} gasUsed={} target={} change={} next={}",
             currentBaseFee, blockGasUsed, targetGas, baseFeeChange, nextFee);
-        return Math.max(0L, nextFee);
+        return Math.max(1L, nextFee);
     }
 
     public long calculateNextBaseFee(long currentBaseFee, long blockGasUsed) {

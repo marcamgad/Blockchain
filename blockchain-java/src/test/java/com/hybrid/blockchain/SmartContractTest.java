@@ -300,7 +300,7 @@ public class SmartContractTest {
             String addrA = Crypto.deriveAddress(Crypto.hash((user.getAddress() + 1).getBytes()));
             
             // Fund contract A (nonce 2)
-            Transaction fundTx = TestTransactionFactory.createAccountTransfer(user, addrA, 1000, 0, 2);
+            Transaction fundTx = TestTransactionFactory.createAccountTransfer(user, addrA, 1000, 1, 2);
             BlockApplier.createAndApplyBlock(tb, List.of(fundTx));
 
             // Call contract (nonce 3)

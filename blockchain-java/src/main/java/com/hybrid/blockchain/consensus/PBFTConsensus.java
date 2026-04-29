@@ -342,12 +342,19 @@ public class PBFTConsensus implements Consensus {
 
         PBFTMessage msg = new PBFTMessage(Phase.PREPARE, viewNumber, seq, blockHash, validatorId);
         msg.signature = signature;
-        if (!msg.verify(validators.get(validatorId)))
+        if (!msg.verify(validators.get(validatorId))) {
+            com.hybrid.blockchain.ai.PredictiveThreatScorer.getInstance().recordActivity(validatorId, -0.15, viewNumber);
             throw new SecurityException("Invalid PREPARE signature from " + validatorId);
+        }
 
-        messageLog.computeIfAbsent(seq, k -> new ConcurrentHashMap<>())
-                  .computeIfAbsent(Phase.PREPARE, k -> new ConcurrentHashMap<>())
-                  .compute(validatorId, (id, existing) -> {
+        Map<String, PBFTMessage> phaseVotes = messageLog.computeIfAbsent(seq, k -> new ConcurrentHashMap<>())
+                .computeIfAbsent(Phase.PREPARE, k -> new ConcurrentHashMap<>());
+        PBFTMessage existing = phaseVotes.get(validatorId);
+        if (existing != null) {
+            com.hybrid.blockchain.ai.PredictiveThreatScorer.getInstance().recordActivity(validatorId, -0.05, viewNumber);
+        }
+
+        phaseVotes.compute(validatorId, (id, current) -> {
                       if (existing != null && !existing.blockHash.equals(blockHash)) {
                           log.error("[PBFT] SLASH: double-PREPARE from {} ({} vs {})",
                                   id, existing.blockHash, blockHash);
@@ -370,12 +377,19 @@ public class PBFTConsensus implements Consensus {
 
         PBFTMessage msg = new PBFTMessage(Phase.COMMIT, viewNumber, seq, blockHash, validatorId);
         msg.signature = signature;
-        if (!msg.verify(validators.get(validatorId)))
+        if (!msg.verify(validators.get(validatorId))) {
+            com.hybrid.blockchain.ai.PredictiveThreatScorer.getInstance().recordActivity(validatorId, -0.15, viewNumber);
             throw new SecurityException("Invalid COMMIT signature from " + validatorId);
+        }
 
-        messageLog.computeIfAbsent(seq, k -> new ConcurrentHashMap<>())
-                  .computeIfAbsent(Phase.COMMIT, k -> new ConcurrentHashMap<>())
-                  .compute(validatorId, (id, existing) -> {
+        Map<String, PBFTMessage> phaseVotes = messageLog.computeIfAbsent(seq, k -> new ConcurrentHashMap<>())
+                .computeIfAbsent(Phase.COMMIT, k -> new ConcurrentHashMap<>());
+        PBFTMessage existing = phaseVotes.get(validatorId);
+        if (existing != null) {
+            com.hybrid.blockchain.ai.PredictiveThreatScorer.getInstance().recordActivity(validatorId, -0.05, viewNumber);
+        }
+
+        phaseVotes.compute(validatorId, (id, current) -> {
                       if (existing != null && !existing.blockHash.equals(blockHash)) {
                           log.error("[PBFT] SLASH: double-COMMIT from {} ({} vs {})",
                                   id, existing.blockHash, blockHash);

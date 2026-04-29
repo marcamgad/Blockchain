@@ -30,6 +30,9 @@ public class TelemetryAnomalyDetector {
 
     // ── per-device state ────────────────────────────────────────────────────
 
+    private volatile double globalPhi1 = 0.5;
+    private volatile double globalTheta1 = 0.5;
+
     /** Sliding window of recent telemetry values per device. */
     private final Map<String, LinkedList<Double>> windows = new ConcurrentHashMap<>();
 
@@ -97,9 +100,11 @@ public class TelemetryAnomalyDetector {
             double zScore = Math.abs((value - mean) / stddev);
             stats.lastZScore = zScore;
 
+            double phi1 = globalPhi1;
+            double theta1 = globalTheta1;
+
             // [FEATURE B3] ARIMA(1,1,1) approximation
-            // using fixed coefficients: phi_1=0.5, theta_1=0.5
-            double predicted = Double.isNaN(stats.arimaPrevValue) ? value : stats.arimaPrevValue + 0.5 * stats.arimaPrevDiff + 0.5 * stats.arimaPrevError;
+            double predicted = Double.isNaN(stats.arimaPrevValue) ? value : stats.arimaPrevValue + phi1 * stats.arimaPrevDiff + theta1 * stats.arimaPrevError;
             double error = value - predicted;
             stats.arimaPrevDiff = Double.isNaN(stats.arimaPrevValue) ? 0 : value - stats.arimaPrevValue;
             stats.arimaPrevValue = value;
@@ -176,6 +181,14 @@ public class TelemetryAnomalyDetector {
 
     public Map<String, AnomalyStats> getAllStats() {
         return Collections.unmodifiableMap(statsMap);
+    }
+
+    public void setArimaCoefficients(double phi1, double theta1) {
+        globalPhi1 = Math.max(0.0, Math.min(0.99, phi1));
+        globalTheta1 = Math.max(0.0, Math.min(0.99, theta1));
+        log.info("[ARIMA] Updated coefficients phi1={} theta1={}",
+                String.format("%.3f", globalPhi1),
+                String.format("%.3f", globalTheta1));
     }
 
     /** Number of values currently in the sliding window for a device. */
