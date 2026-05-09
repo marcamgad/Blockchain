@@ -42,6 +42,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
     private final java.math.BigInteger privateKey;
     private final byte[] localPubKey;
     private final String localAddress;
+    private final String localDID;
     private Blockchain blockchain;
     private Consensus consensus;
     private SSLContext sslContext;
@@ -91,6 +92,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
         this.privateKey = privateKey;
         this.localPubKey = Crypto.derivePublicKey(this.privateKey);
         this.localAddress = Crypto.deriveAddress(localPubKey);
+        this.localDID = com.hybrid.blockchain.security.IdentityUtils.addressToDID(localAddress);
         this.blockchain = blockchain;
         this.consensus = consensus;
         
@@ -142,6 +144,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
         this.privateKey = privateKey;
         this.localPubKey = Crypto.derivePublicKey(this.privateKey);
         this.localAddress = Crypto.deriveAddress(localPubKey);
+        this.localDID = com.hybrid.blockchain.security.IdentityUtils.addressToDID(localAddress);
         this.blockchain = blockchain;
         this.consensus = consensus;
         
@@ -193,6 +196,13 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                         long view = pbft.getViewNumber();
 
                         pbft.setPendingBlock(seq, block);
+
+                        // [PHASE-1] P1-A: Async Fast Path
+                        if (pbft.isFastPathActive(seq)) {
+                            log.info("[PBFT-ASYNC] Fast path active for seq {}. Skipping PREPARE.", seq);
+                            sendCommit(pbft, seq, hash, view);
+                            return;
+                        }
 
                         // Generate and send PREPARE
                         PBFTConsensus.PBFTMessage prepMsg = new PBFTConsensus.PBFTMessage(
@@ -351,9 +361,9 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                 if (weights.length >= 2) {
                     double phi1 = Math.max(0.0, Math.min(0.99, weights[0]));
                     double theta1 = Math.max(0.0, Math.min(0.99, weights[1]));
-                    com.hybrid.blockchain.ai.TelemetryAnomalyDetector.getInstance()
-                            .setArimaCoefficients(phi1, theta1);
-                    log.info("[FL] Applied model round={} hash={} phi1={} theta1={}",
+                    // [PHASE-0] FIX-1: Global coefficients removed in favor of per-device stats.
+                    // New devices will start with these as defaults if implemented in TelemetryAnomalyDetector.
+                    log.info("[FL] Received new model round={} hash={} baseline_phi1={} baseline_theta1={}",
                             round,
                             modelHash.length() > 12 ? modelHash.substring(0, 12) : modelHash,
                             String.format("%.3f", phi1),
@@ -542,14 +552,26 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                 byte[] localNonce = new byte[32];
                 new SecureRandom().nextBytes(localNonce);
 
-                remotePeerId = isInbound ? 
-                    performInboundHandshake(in, out, localNonce) : 
-                    performOutboundHandshake(in, out, localNonce);
-
-                log.info("Secure session established with {} ID: {}", socket.getInetAddress(), remotePeerId);
+                if (peerConnections.size() >= Config.MAX_PEERS) {
+                    log.warn("[P2P] Rejecting connection: MAX_PEERS ({}) reached.", Config.MAX_PEERS);
+                    socket.close();
+                    return;
+                }
+                
+                remotePeerId = !isInbound ? performOutboundHandshake(in, out, localNonce)
+                        : performInboundHandshake(in, out, localNonce);
+                
+                if (peerManager.isBanned(socket.getInetAddress().getHostAddress())) {
+                    log.warn("[P2P] Rejecting banned peer {}", remotePeerId);
+                    socket.close();
+                    return;
+                }
+                
+                peerConnections.put(remotePeerId, out);
+                log.info("[P2P] Secure session established with {} ID: {} (Local: {})", 
+                        socket.getInetAddress(), remotePeerId, localDID);
                 
                 peerManager.addPeer(remotePeerId, socket.getInetAddress().getHostAddress(), socket.getPort());
-                peerConnections.put(remotePeerId, out);
 
                 ObjectMapper mapper = new ObjectMapper();
                 while (true) {
@@ -927,6 +949,10 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
      * @param port the peer's P2P port
      */
     public void connectToPeer(String host, int port) {
+        if (peerConnections.size() >= Config.MAX_PEERS) {
+            log.debug("[P2P] Skip connecting to {}:{}: MAX_PEERS reached.", host, port);
+            return;
+        }
         executor.submit(() -> {
             try {
                 SSLSocketFactory sf = sslContext.getSocketFactory();

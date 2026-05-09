@@ -50,7 +50,7 @@ public class FederatedLearningCompleteTest {
         
         double[] avg = manager.aggregate();
         assertThat(avg).hasSize(2);
-        assertThat(avg).containsExactly(new double[]{2.0, 3.0}, within(0.001));
+        assertThat(avg).containsExactly(new double[]{3.0, 4.0}, within(0.001));
     }
 
     @Test

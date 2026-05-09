@@ -27,6 +27,8 @@ import java.util.concurrent.*;
  * a {@code STATUS_REVERTED} receipt without committing state changes.
  */
 public class WasmContractEngine {
+    private static final ConcurrentHashMap<String, WasmModule> MODULE_CACHE = new ConcurrentHashMap<>();
+
 
     private final byte[] wasmBinary;
     private final Interpreter.BlockchainContext context;
@@ -113,8 +115,10 @@ public class WasmContractEngine {
                     }
                 ));
 
-                // Load Wasm Module
-                WasmModule module = Parser.parse(wasmBinary);
+                // Load Wasm Module (with caching)
+                String moduleKey = HexUtils.encode(Crypto.hash(wasmBinary));
+                WasmModule module = MODULE_CACHE.computeIfAbsent(moduleKey, k -> Parser.parse(wasmBinary));
+
 
                 // Setup Imports
                 ImportValues imports = ImportValues.builder()

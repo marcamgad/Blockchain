@@ -18,6 +18,9 @@ public class BlockApplier {
         Block lastBlock = chain.getLatestBlock();
         int nextIndex = lastBlock.getIndex() + 1;
         long timestamp = System.currentTimeMillis();
+        if (timestamp <= lastBlock.getTimestamp()) {
+            timestamp = lastBlock.getTimestamp() + 1;
+        }
         
         // 1. Create MINT reward transaction for the simulation
         long rwd = Tokenomics.getCurrentReward(nextIndex, chain.getTotalMinted());

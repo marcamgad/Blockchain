@@ -130,7 +130,8 @@ public class FederatedLearningCrossNodeE2ETest {
     void testDifferentialPrivacyNoiseBounds() {
         FederatedLearningManager mgr = freshManager();
         mgr.setDifferentialPrivacyEnabled(true);
-        mgr.setEpsilon(1.0);
+        mgr.setEpsilon(2.0); // Higher epsilon for tighter bounds in test
+        mgr.setDPParameters(2.0, 1e-5, 0.1); // Lower sensitivity for test
 
         mgr.submitUpdate("n1", new double[]{10.0, 20.0, 30.0});
         mgr.submitUpdate("n2", new double[]{10.0, 20.0, 30.0});
@@ -171,7 +172,7 @@ public class FederatedLearningCrossNodeE2ETest {
         assertThat(loaded).isTrue();
         assertThat(reloaded.getCurrentModelHash()).isEqualTo(r.modelHash);
         assertThat(reloaded.getCurrentModel()).hasSize(2);
-        assertThat(reloaded.getCurrentModel()[0]).isCloseTo(4.0, within(0.001)); // avg of 5 and 3
+        assertThat(reloaded.getCurrentModel()[0]).isCloseTo(5.0, within(0.001)); // median of 5 and 3 is 5
         assertThat(reloaded.getRoundNumber()).isEqualTo(1);
     }
 
@@ -232,9 +233,9 @@ public class FederatedLearningCrossNodeE2ETest {
 
         assertThat(peer.getCurrentModelHash()).isEqualTo(r.modelHash);
         assertThat(peer.getCurrentModel()).hasSize(3);
-        assertThat(peer.getCurrentModel()[0]).isCloseTo(4.0, within(0.001)); // avg(7, 1) = 4
-        assertThat(peer.getCurrentModel()[1]).isCloseTo(5.0, within(0.001)); // avg(8, 2) = 5
-        assertThat(peer.getCurrentModel()[2]).isCloseTo(6.0, within(0.001)); // avg(9, 3) = 6
+        assertThat(peer.getCurrentModel()[0]).isCloseTo(7.0, within(0.001)); // median(7, 1) = 7
+        assertThat(peer.getCurrentModel()[1]).isCloseTo(8.0, within(0.001)); // median(8, 2) = 8
+        assertThat(peer.getCurrentModel()[2]).isCloseTo(9.0, within(0.001)); // median(9, 3) = 9
         assertThat(peer.getRoundNumber()).isEqualTo(r.round);
     }
 

@@ -10,6 +10,7 @@ import static org.awaitility.Awaitility.*;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -30,6 +31,9 @@ public class TransactionLifecycleTest {
         tb = new TestBlockchain();
         blockchain = tb.getBlockchain();
         mempool = blockchain.getMempool();
+        
+        // Register a trusted manufacturer for IoT tests
+        blockchain.getAccountState().getLifecycleManager().registerManufacturer("MAN1", new TestKeyPair(999).getPublicKey());
     }
 
     @AfterEach
@@ -812,7 +816,7 @@ public class TransactionLifecycleTest {
     }
 
     @Test
-    @DisplayName("T1.35 — TELEMETRY type: active device")
+    @DisplayName("T1.35 — TELEMETRY type: active PUF device (authenticated)")
     void testTelemetrySuccess() throws Exception {
         testIotActivate();
         String deviceId = "IOT-DEB-001";
@@ -820,10 +824,86 @@ public class TransactionLifecycleTest {
         blockchain.getAccountState().credit(deviceKey.getAddress(), 1000L);
         
         String payload = "temp:23.5";
+        // Create authenticated proof-carrying envelope
+        com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof proof = 
+                com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof.create(deviceKey.getPrivateKey().toByteArray(), deviceKey.getPublicKey(), payload.getBytes(StandardCharsets.UTF_8));
+        proof.setNullifier(blockchain.getAccountState().getLifecycleManager().getDeviceRecord(deviceId).getPufNullifier());
+
         Transaction tx = new Transaction.Builder()
                 .type(Transaction.Type.TELEMETRY)
                 .from(deviceKey.getAddress())
-                .to(deviceId) // Using deviceId as 'to' for telemetry routing
+                .to(deviceId)
+                .data(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsBytes(proof))
+                .fee(10L)
+                .nonce(1L)
+                .sign(deviceKey.getPrivateKey(), deviceKey.getPublicKey());
+        
+        Block block = BlockApplier.createAndApplyBlock(tb, List.of(tx));
+        assertThat(blockchain.getStorage().loadReceipt(tx.getTxId()).getStatus()).isEqualTo(TransactionReceipt.STATUS_SUCCESS);
+        
+        byte[] stored = blockchain.getStorage().loadTelemetry(deviceId, block.getIndex());
+        assertThat(new String(stored, StandardCharsets.UTF_8)).isEqualTo(payload);
+    }
+
+    @Test
+    @DisplayName("T1.35b — TELEMETRY type: active legacy device")
+    void testTelemetryLegacySuccess() throws Exception {
+        // Provision legacy device (no PUF)
+        TestKeyPair manufacturer = new TestKeyPair(1);
+        TestKeyPair deviceKey = new TestKeyPair(312);
+        String deviceId = "LEGACY-DEB-001";
+        
+        Map<String, Object> data = new HashMap<>();
+        data.put("action", "PROVISION");
+        data.put("deviceId", deviceId);
+        data.put("manufacturer", "MAN1");
+        data.put("model", "LEGACY-MOD-X");
+        data.put("devicePublicKey", Crypto.bytesToHex(deviceKey.getPublicKey()));
+        data.put("pufEnabled", false); // Legacy support
+        TestKeyPair registeredManufacturer = new TestKeyPair(999);
+        byte[] message = (deviceId + "MAN1" + "LEGACY-MOD-X").getBytes();
+        byte[] combined = new byte[message.length + deviceKey.getPublicKey().length];
+        System.arraycopy(message, 0, combined, 0, message.length);
+        System.arraycopy(deviceKey.getPublicKey(), 0, combined, message.length, deviceKey.getPublicKey().length);
+        
+        byte[] sig = Crypto.sign(Crypto.hash(combined), registeredManufacturer.getPrivateKey());
+        data.put("manufacturerSignature", Crypto.bytesToHex(sig));
+        
+        Transaction pTx = new Transaction.Builder()
+                .type(Transaction.Type.IOT_MANAGEMENT)
+                .from(manufacturer.getAddress())
+                .data(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsBytes(data))
+                .fee(10L)
+                .nonce(1L)
+                .sign(manufacturer.getPrivateKey(), manufacturer.getPublicKey());
+        
+        blockchain.getAccountState().credit(manufacturer.getAddress(), 1000L);
+        BlockApplier.createAndApplyBlock(tb, List.of(pTx));
+
+        // Activate
+        data.clear();
+        data.put("action", "ACTIVATE");
+        data.put("deviceId", deviceId);
+        data.put("owner", "OWNER1");
+        data.put("devicePublicKey", Crypto.bytesToHex(deviceKey.getPublicKey()));
+        
+        Transaction aTx = new Transaction.Builder()
+                .type(Transaction.Type.IOT_MANAGEMENT)
+                .from(manufacturer.getAddress())
+                .data(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsBytes(data))
+                .fee(10L)
+                .nonce(2L)
+                .sign(manufacturer.getPrivateKey(), manufacturer.getPublicKey());
+        
+        BlockApplier.createAndApplyBlock(tb, List.of(aTx));
+
+        // Telemetry
+        blockchain.getAccountState().credit(deviceKey.getAddress(), 1000L);
+        String payload = "temp:21.0";
+        Transaction tx = new Transaction.Builder()
+                .type(Transaction.Type.TELEMETRY)
+                .from(deviceKey.getAddress())
+                .to(deviceId)
                 .data(payload.getBytes())
                 .fee(10L)
                 .nonce(1L)

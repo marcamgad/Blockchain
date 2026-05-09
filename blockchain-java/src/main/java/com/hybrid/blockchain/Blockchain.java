@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory;
  * Manages the chain state, transaction processing, and consensus integration.
  */
 public class Blockchain {
+    private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Logger log = LoggerFactory.getLogger(Blockchain.class);
 
     protected List<Block> chain;
@@ -53,6 +54,8 @@ public class Blockchain {
         this.transactionRateLimiter = RateLimiter.Presets.transactionLimiter();
         this.tokenRegistry = new TokenRegistry(this.storage);
         this.monitor = com.hybrid.blockchain.monitoring.BlockchainMonitor.getInstance();
+        // AUDIT-FIX: FIX-8 — wire live state into mempool for nonce-gap Sybil protection
+        this.mempool.setStateRef(this.state);
     }
 
     public void setTokenRegistry(TokenRegistry registry) { this.tokenRegistry = registry; }
@@ -69,6 +72,7 @@ public class Blockchain {
     public void setAuditLogger(com.hybrid.blockchain.audit.AuditLogger auditLogger) { this.auditLogger = auditLogger; }
     public com.hybrid.blockchain.audit.AuditLogger getAuditLogger() { return auditLogger; }
     public void setConsensus(Consensus consensus) { this.consensus = consensus; }
+    public long getNonce(String address) { return state.getNonce(address); }
 
     public void init() throws Exception {
         lock.writeLock().lock();
@@ -200,6 +204,8 @@ public class Blockchain {
             tx.getType() != Transaction.Type.FEDERATED_COMMIT &&
             tx.getType() != Transaction.Type.IOT_MANAGEMENT &&
             tx.getType() != Transaction.Type.UTXO &&
+            tx.getType() != Transaction.Type.PRIVATE_TRANSFER &&
+            tx.getType() != Transaction.Type.TELEMETRY_BATCH &&
             tx.getType() != Transaction.Type.MINT) {
             throw new Exception("Missing destination");
         }
@@ -246,8 +252,12 @@ public class Blockchain {
                     throw new Exception("Insufficient funds");
 
                 if (!skipNonce) {
-                    // For adding to mempool, allow nonces up to the max pending nonce + 1
                     long currentNonce = state.getNonce(tx.getFrom());
+                    // [PHASE-0] FIX-8: Mempool Sybil gap check
+                    if (tx.getNonce() > currentNonce + Config.MAX_NONCE_GAP) {
+                        throw new IllegalArgumentException("Nonce too far in future: gap exceeds " + Config.MAX_NONCE_GAP);
+                    }
+                    
                     long expectedNonce = currentNonce + 1;
                     if (this.mempool != null) {
                         for (Transaction ptx : mempool.toArray()) {
@@ -340,6 +350,40 @@ public class Blockchain {
                     throw new Exception("Insufficient funds for burn");
                 break;
 
+            case PRIVATE_TRANSFER:
+                // [PHASE-0] FIX-6: ZKP Private Transfer validation
+                if (tx.getFrom() == null) throw new Exception("PRIVATE_TRANSFER must have a from address");
+                try {
+                    com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof proof = 
+                        MAPPER.readValue(tx.getData(), com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof.class);
+                    if (!com.hybrid.blockchain.privacy.ZKProofSystem.verifyOwnership(state.getCommitment(tx.getFrom()), proof)) {
+                        throw new Exception("ZKP Ownership validation failed");
+                    }
+                    if (state.isNullifierSpent(proof.getNullifier())) {
+                        throw new Exception("ZKP Nullifier already spent");
+                    }
+                } catch (Exception e) {
+                    throw new Exception("Private transfer validation failed: " + e.getMessage());
+                }
+                
+                if (!skipNonce) {
+                    long expectedPriNonce = state.getNonce(tx.getFrom()) + 1;
+                    if (tx.getNonce() != expectedPriNonce) throw new IllegalArgumentException("Invalid nonce: expected " + expectedPriNonce + " got " + tx.getNonce());
+                }
+                if (state.getBalance(tx.getFrom()) < tx.getFee())
+                    throw new Exception("Insufficient funds for private transfer fee");
+                break;
+
+            case TELEMETRY_BATCH:
+                // PAPER-IMPL: P1-B — Maftei et al. Sensors 2025, DOI:10.3390/s25092886
+                // Gateway-aggregated batch of N device telemetry readings in one tx
+                if (tx.getFrom() == null) throw new Exception("TELEMETRY_BATCH must have a gateway from address");
+                if (tx.getData() == null || tx.getData().length == 0)
+                    throw new Exception("TELEMETRY_BATCH data is empty");
+                if (state.getBalance(tx.getFrom()) < tx.getFee())
+                    throw new Exception("Insufficient fee for TELEMETRY_BATCH");
+                break;
+
             case TOKEN_TRANSFER:
                 if (tx.getFrom() == null)
                     throw new Exception("TOKEN_TRANSFER must have a from address");
@@ -391,7 +435,7 @@ public class Blockchain {
                          isOperational = lcm.isDeviceOperational(deviceId);
                         if (isOperational) {
                             com.hybrid.blockchain.lifecycle.DeviceLifecycleManager.DeviceRecord record = lcm.getDeviceRecord(deviceId);
-                            String did = record.getDid();
+                             String did = record.getDid();
                             boolean authorized = false;
                             
                             // Check if sender is owner
@@ -401,16 +445,37 @@ public class Blockchain {
                                 // Check if sender is the device itself (from its DID public key)
                                 try {
                                     com.hybrid.blockchain.identity.DecentralizedIdentifier didDoc = ssi.resolveDID(did);
-                                    if (!didDoc.getVerificationMethods().isEmpty()) {
+                                    if (didDoc != null && !didDoc.getVerificationMethods().isEmpty()) {
                                         String pkHex = didDoc.getVerificationMethods().get(0).getPublicKeyHex();
                                         byte[] pkBytes = com.hybrid.blockchain.HexUtils.decode(pkHex);
-                                        String deviceAddr = com.hybrid.blockchain.Crypto.deriveAddress(pkBytes);
-                                        if (deviceAddr.equals(tx.getFrom())) {
+
+                                        // [PHASE-1] P1-C: PUF-ZKP verification
+                                        if (record.getPufNullifier() != null) {
+                                            com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof proof = 
+                                                MAPPER.readValue(tx.getData(), com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof.class);
+                                            
+                                            if (!com.hybrid.blockchain.privacy.ZKProofSystem.verifyOwnership(pkBytes, proof)) {
+                                                throw new Exception("PUF-ZKP ownership verification failed");
+                                            }
+                                            if (!record.getPufNullifier().equals(proof.getNullifier())) {
+                                                throw new Exception("PUF-ZKP nullifier mismatch");
+                                            }
+                                            // If we reached here, ZKP is valid
                                             authorized = true;
+                                        } else {
+                                            // Non-PUF device: traditional address check
+                                            String deviceAddr = com.hybrid.blockchain.Crypto.deriveAddress(pkBytes);
+                                            if (deviceAddr.equals(tx.getFrom())) {
+                                                authorized = true;
+                                            }
                                         }
                                     }
                                 } catch (Exception e) {
-                                    // DID not found or other SSI error
+                                    if (record.getPufNullifier() != null) {
+                                        // Rethrow specific ZKP failures for PUF devices
+                                        throw new Exception("TELEMETRY rejected: " + e.getMessage());
+                                    }
+                                    // Fallback for missing/corrupt DID docs on non-PUF devices
                                 }
                             }
                             
@@ -549,25 +614,46 @@ public class Blockchain {
     }
 
     private void revertTip() throws Exception {
-        if (chain.size() <= 1) return;
-        chain.remove(chain.size() - 1);
-        Block newTip = getLatestBlock();
-        
-        // Reload state from last snapshot (which is index of newTip)
+        // [PHASE-0] FIX-1: pre-construct objects before acquiring the write lock; swap them atomically.
+        Block newTip;
+        lock.readLock().lock();
+        try {
+            if (chain.size() <= 1) return;
+            newTip = chain.get(chain.size() - 2);
+        } finally {
+            lock.readLock().unlock();
+        }
+
+        // Load snapshot and pre-construct state/utxo OUTSIDE the write lock
         Map<String, Object> snapshot = (Map<String, Object>) storage.get("snapshot:" + newTip.getIndex(), Map.class);
         if (snapshot == null) {
             throw new Exception("Critical: Cannot revert tip, no snapshot found for height " + newTip.getIndex());
         }
-        
-        this.state = AccountState.fromMap((Map<String, Object>) snapshot.get("state"));
-        this.utxo = UTXOSet.fromMap((Map<String, Object>) snapshot.get("utxo"));
-        
-        // Restore global storage pointers
-        storage.saveState(this.state);
-        storage.saveUTXO(this.utxo.toJSON());
-        
-        // Update storage tip
-        storage.put("chain:tip", newTip.getHash()); 
+        AccountState preConstructedState = AccountState.fromMap((Map<String, Object>) snapshot.get("state"));
+        UTXOSet preConstructedUTXO = UTXOSet.fromMap((Map<String, Object>) snapshot.get("utxo"));
+
+        lock.writeLock().lock();
+        try {
+            chain.remove(chain.size() - 1);
+            // AUDIT-FIX: pre-construct then atomic-swap.
+            this.state = preConstructedState;
+            this.utxo = preConstructedUTXO;
+            
+            storage.saveState(this.state);
+            storage.saveUTXO(this.utxo.toJSON());
+            storage.put("chain:tip", newTip.getHash());
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    public void revertTipForTest() throws Exception {
+        lock.writeLock().lock();
+        try {
+            revertTip();
+        } finally {
+            lock.writeLock().unlock();
+        }
     }
 
     private void applyBlockInternal(Block block, Block latest) throws Exception {
@@ -577,7 +663,7 @@ public class Blockchain {
             throw new Exception("Hash mismatch: block " + block.getIndex() + " references " + block.getPrevHash() + " but tip is " + latest.getHash());
         if (block.getTimestamp() > System.currentTimeMillis() + Config.MAX_TIMESTAMP_DRIFT)
             throw new Exception("Block timestamp too far in future");
-        if (block.getTimestamp() < latest.getTimestamp())
+        if (block.getTimestamp() <= latest.getTimestamp())
             throw new Exception("Block timestamp older than previous block");
         if (!calculateTxRoot(block.getTransactions()).equals(block.getTxRoot()))
             throw new Exception("Invalid tx root");
@@ -669,12 +755,14 @@ public class Blockchain {
         // Slashing: Penalize Byzantine validators
         for (String slashedId : consensus.getSlashedValidators()) {
             try {
-                long penalty = 1000; // Fixed penalty for double-signing
-                long validatorBalance = state.getBalance(slashedId);
-                long actualBurn = Math.min(validatorBalance, penalty);
-                if (actualBurn > 0) {
-                    state.debit(slashedId, actualBurn);
-                    log.warn("[BLOCKCHAIN] SLASHED validator {}: burned {} tokens", slashedId, actualBurn);
+                // [PHASE-0] FIX-7: Exponential slashing model
+                int offenseCount = consensus.getSlashCount(slashedId);
+                double rate = Math.min(1.0, 0.10 * Math.pow(3, offenseCount));
+                long penalty = (long)(state.getBalance(slashedId) * rate);
+                
+                if (penalty > 0) {
+                    state.debit(slashedId, penalty);
+                    log.warn("[BLOCKCHAIN] SLASHED validator {}: burned {} tokens", slashedId, penalty);
                 }
                 consensus.clearSlashedValidator(slashedId);
             } catch (Exception e) {
@@ -700,7 +788,7 @@ public class Blockchain {
         long currentBaseFee = feeMarket.getCurrentBaseFee(storage);
         long nextBaseFee = feeMarket.calculateNextBaseFee(currentBaseFee, txCountForFeeMkt, Config.TARGET_GAS_PER_BLOCK);
         feeMarket.saveBaseFee(storage, nextBaseFee);
-        feeMarket.recordFeeDataPoint(txCountForFeeMkt, nextBaseFee);
+        // // AUDIT-FIX: duplicate recordFeeDataPoint removed outside guard.
         // FIX 3: Record fee data point for prediction regression.
         // Gated by FEE_HISTORY_ENABLED so unit tests that call feeMarket.resetHistory()
         // can prevent cross-test contamination.
@@ -1071,7 +1159,19 @@ public class Blockchain {
                     targetState.incrementNonce(tx.getFrom());
                     
                     // Run AI Anomaly Detection
-                    int multiplier = com.hybrid.blockchain.ai.TelemetryAnomalyDetector.getInstance().checkTransaction(tx, timestamp);
+                    // Attempt to extract payload from ZKP envelope if present
+                    byte[] rawData = tx.getData();
+                    byte[] telemetryPayload = rawData;
+                    try {
+                        com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof proof = 
+                            MAPPER.readValue(rawData, com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof.class);
+                        if (proof.getPayload() != null) {
+                            telemetryPayload = proof.getPayload();
+                        }
+                    } catch (Exception ignored) {} // Not a ZKP proof, use raw data
+
+                    int multiplier = com.hybrid.blockchain.ai.TelemetryAnomalyDetector.getInstance().check(tx.getFrom(), telemetryPayload, timestamp);
+                    multiplier = Math.min(5, multiplier);
                     boolean isAnomaly = multiplier > 1;
                     if (isAnomaly) {
                         try {
@@ -1082,8 +1182,7 @@ public class Blockchain {
                     }
 
                     // Store telemetry data; hash large payloads (>= 1024 bytes)
-                    byte[] rawData = tx.getData();
-                    byte[] toStore = rawData.length >= 1024 ? Crypto.hash(rawData) : rawData;
+                    byte[] toStore = telemetryPayload.length >= 1024 ? Crypto.hash(telemetryPayload) : telemetryPayload;
                     try {
                         String targetDeviceId = tx.getTo();
                         if (targetDeviceId == null || targetState.getLifecycleManager().getDeviceRecord(targetDeviceId) == null) {
@@ -1106,7 +1205,7 @@ public class Blockchain {
                     targetState.incrementNonce(tx.getFrom());
                     
                     try {
-                        double[] weights = new ObjectMapper().readValue(tx.getData(), double[].class);
+                        double[] weights = MAPPER.readValue(tx.getData(), double[].class);
                         com.hybrid.blockchain.ai.FederatedLearningManager.getInstance().submitUpdate(tx.getFrom(), weights);
                     } catch (Exception e) {
                         log.warn("[FedLearn] Failed to parse update from {}: {}", tx.getFrom(), e.getMessage());
@@ -1129,7 +1228,7 @@ public class Blockchain {
                         if (rawPayload.startsWith("{")) {
                             try {
                                 @SuppressWarnings("unchecked")
-                                Map<String, Object> payload = new ObjectMapper().readValue(tx.getData(), Map.class);
+                                Map<String, Object> payload = MAPPER.readValue(tx.getData(), Map.class);
                                 Object hashObj = payload.get("modelHash");
                                 if (hashObj == null) hashObj = payload.get("hash");
                                 if (hashObj instanceof String) modelHash = ((String) hashObj).trim();
@@ -1152,6 +1251,10 @@ public class Blockchain {
                         }
                     }
 
+                    if (tx.getData() != null && tx.getData().length > Config.MAX_FL_MODEL_BYTES) {
+                        throw new Exception("FEDERATED_COMMIT model exceeds size limit");
+                    }
+
                     if (modelHash == null || modelHash.isBlank()) {
                         throw new Exception("FEDERATED_COMMIT missing model hash");
                     }
@@ -1171,7 +1274,7 @@ public class Blockchain {
                     targetState.debit(tx.getFrom(), tx.getFee());
                     targetState.incrementNonce(tx.getFrom());
                     if (tokenRegistry != null) {
-                        Map<String, Object> metadata = new ObjectMapper().readValue(tx.getData(), Map.class);
+                        Map<String, Object> metadata = MAPPER.readValue(tx.getData(), Map.class);
                         tokenRegistry.registerToken(
                             (String) metadata.get("tokenId"),
                             (String) metadata.get("name"),
@@ -1206,12 +1309,57 @@ public class Blockchain {
                     }
                 }
                 return new ExecutionResult(0, null, null, transactionEvents);
+            case PRIVATE_TRANSFER:
+                // [PHASE-0] FIX-6: Apply ZKP Private Transfer
+                if (tx.getFrom() != null) {
+                    targetState.debit(tx.getFrom(), tx.getFee());
+                    targetState.incrementNonce(tx.getFrom());
+                }
+                try {
+                    com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof proof = 
+                        MAPPER.readValue(tx.getData(), com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof.class);
+                    targetState.recordNullifier(proof.getNullifier());
+                    // Logic to update private commitments would go here in a full implementation.
+                } catch (Exception e) {
+                    log.error("[ZKP] Failed to apply private transfer: {}", e.getMessage());
+                }
+                return new ExecutionResult(0, null, null, transactionEvents);
+
+            case TELEMETRY_BATCH:
+                // PAPER-IMPL: P1-B — Maftei et al. Sensors 2025, DOI:10.3390/s25092886
+                // Decode JSON array of {deviceId, value, timestamp} tuples and run anomaly detection on each
+                if (tx.getFrom() != null) {
+                    targetState.debit(tx.getFrom(), tx.getFee());
+                    targetState.incrementNonce(tx.getFrom());
+                }
+                try {
+                    @SuppressWarnings("unchecked")
+                    List<Map<String, Object>> tuples = MAPPER.readValue(tx.getData(), List.class);
+                    com.hybrid.blockchain.ai.TelemetryAnomalyDetector detector =
+                            com.hybrid.blockchain.ai.TelemetryAnomalyDetector.getInstance();
+                    int anomalyCount = 0;
+                    for (Map<String, Object> tuple : tuples) {
+                        String deviceId = (String) tuple.get("deviceId");
+                        Object valObj = tuple.get("value");
+                        if (deviceId == null || !(valObj instanceof Number)) continue;
+                        double value = ((Number) valObj).doubleValue();
+                        long ts = tuple.get("timestamp") instanceof Number
+                                ? ((Number) tuple.get("timestamp")).longValue() : timestamp;
+                        if (detector.check(deviceId, value, ts)) anomalyCount++;
+                    }
+                    log.info("[TELEMETRY_BATCH] Gateway {} submitted {} readings, {} anomalies",
+                            tx.getFrom(), tuples.size(), anomalyCount);
+                } catch (Exception e) {
+                    log.warn("[TELEMETRY_BATCH] Decode error: {}", e.getMessage());
+                }
+                return new ExecutionResult(0, null, null, transactionEvents);
         }
+
         return new ExecutionResult(0, null, null, transactionEvents);  // Default return for any unhandled cases
     }
 
     private void processIoTTransactionWithState(AccountState targetState, Transaction tx, long blockHeight, long timestamp) throws Exception {
-        Map<String, Object> data = new ObjectMapper().readValue(tx.getData(), Map.class);
+        Map<String, Object> data = MAPPER.readValue(tx.getData(), Map.class);
         String action = (String) data.get("action");
         DeviceLifecycleManager lifecycle = targetState.getLifecycleManager();
         handleIoTAction(lifecycle, action, data, tx.getFrom(), timestamp);
@@ -1221,7 +1369,8 @@ public class Blockchain {
         switch (action) {
             case "PROVISION":
                 String sig = (String) (data.containsKey("manufacturerSignature") ? data.get("manufacturerSignature") : data.get("signature"));
-                lifecycle.provisionDevice((String) data.get("deviceId"), (String) data.get("manufacturer"), (String) data.get("model"), HexUtils.decode((String) data.get("devicePublicKey")), HexUtils.decode(sig));
+                boolean enablePUF = data.containsKey("pufEnabled") ? (Boolean) data.get("pufEnabled") : true;
+                lifecycle.provisionDevice((String) data.get("deviceId"), (String) data.get("manufacturer"), (String) data.get("model"), HexUtils.decode((String) data.get("devicePublicKey")), HexUtils.decode(sig), enablePUF);
                 break;
             case "ACTIVATE":
                 lifecycle.activateDevice((String) data.get("deviceId"), (String) data.get("owner"), HexUtils.decode((String) data.get("devicePublicKey")), timestamp);
@@ -1269,7 +1418,7 @@ public class Blockchain {
     public void recalculateStateRoot() {
         Block latest = getLatestBlock();
         if (latest != null) {
-            latest.setStateRoot(state.calculateStateRoot());
+                    latest.setStateRoot(state.calculateStateRoot());
         }
     }
 
@@ -1329,16 +1478,16 @@ public class Blockchain {
 
 
     public Transaction deserializeTransaction(byte[] payload) throws Exception {
-        return new ObjectMapper().readValue(payload, Transaction.class);
+        return MAPPER.readValue(payload, Transaction.class);
     }
 
     public Block deserializeBlock(byte[] payload) throws Exception {
-        return new ObjectMapper().readValue(payload, Block.class);
+        return MAPPER.readValue(payload, Block.class);
     }
 
     public byte[] serializeTransaction(Transaction tx) {
         try {
-            return new ObjectMapper().writeValueAsBytes(tx);
+            return MAPPER.writeValueAsBytes(tx);
         } catch (Exception e) {
             throw new RuntimeException("Serialization failed", e);
         }
@@ -1346,7 +1495,7 @@ public class Blockchain {
 
     public byte[] serializeBlock(Block block) {
         try {
-            return new ObjectMapper().writeValueAsBytes(block);
+            return MAPPER.writeValueAsBytes(block);
         } catch (Exception e) {
             throw new RuntimeException("Serialization failed", e);
         }

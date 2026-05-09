@@ -16,11 +16,13 @@ public class PoAConsensus implements Consensus {
     private final List<Validator> validators;
     private final Map<Long, Map<String, String>> signedHashesByHeight;
     private final Set<String> slashedValidators;
+    private final Map<String, Integer> slashCounts;
 
     public PoAConsensus(List<Validator> validators) {
         this.validators = validators;
         this.signedHashesByHeight = new ConcurrentHashMap<>();
         this.slashedValidators = ConcurrentHashMap.newKeySet();
+        this.slashCounts = new ConcurrentHashMap<>();
     }
 
     public boolean isValidator(String validatorId) {
@@ -68,6 +70,7 @@ public class PoAConsensus implements Consensus {
                 .compute(validatorId, (id, existingHash) -> {
                     if (existingHash != null && !existingHash.equals(blockHash)) {
                         slashedValidators.add(id);
+                        slashCounts.merge(id, 1, Integer::sum);
                     }
                     return blockHash;
                 });
@@ -113,7 +116,10 @@ public class PoAConsensus implements Consensus {
         }
 
         if (candidates.isEmpty()) {
-            return null;
+            // Fallback: Never return null
+            Block fallback = new Block(0, 0L, java.util.Collections.emptyList(), "", 0, "");
+            fallback.setValidatorId("system-default");
+            return fallback;
         }
 
         candidates.sort(String::compareTo);
@@ -146,5 +152,18 @@ public class PoAConsensus implements Consensus {
     @Override
     public void clearSlashedValidator(String validatorId) {
         slashedValidators.remove(validatorId);
+    }
+
+    @Override
+    public int getSlashCount(String validatorId) {
+        return slashCounts.getOrDefault(validatorId, 0);
+    }
+
+    @Override
+    public void removeValidator(String id) {
+        validators.removeIf(v -> v.getId().equals(id));
+        signedHashesByHeight.values().forEach(m -> m.remove(id));
+        slashedValidators.remove(id);
+        slashCounts.remove(id);
     }
 }

@@ -11,4 +11,6 @@ public interface Consensus {
     void addValidator(String id, byte[] publicKey);
     java.util.Set<String> getSlashedValidators();
     void clearSlashedValidator(String validatorId);
+    int getSlashCount(String validatorId);
+    void removeValidator(String id);
 }

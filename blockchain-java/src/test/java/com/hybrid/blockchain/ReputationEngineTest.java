@@ -74,7 +74,7 @@ public class ReputationEngineTest {
                 .fee(50000)
                 .sign(deviceKey.getPrivateKey(), deviceKey.getPublicKey());
         
-        Block block1 = new Block(1, System.currentTimeMillis(), Collections.singletonList(tx), 
+        Block block1 = new Block(1, blockchain.getLatestBlock().getTimestamp() + 10, Collections.singletonList(tx), 
                 blockchain.getLatestBlock().getHash(), blockchain.getDifficulty(), "dummy_root");
         block1.setValidatorId("ValidatorA");
         block1.setSignature(new byte[64]);
@@ -88,7 +88,7 @@ public class ReputationEngineTest {
         
         // 3. Propose many empty blocks to simulate inactivity
         for (int i = 0; i < 120; i++) {
-            Block empty = new Block((int)blockchain.getHeight() + 1, System.currentTimeMillis(), new ArrayList<Transaction>(), 
+            Block empty = new Block((int)blockchain.getHeight() + 1, blockchain.getLatestBlock().getTimestamp() + 10, new ArrayList<Transaction>(), 
                     blockchain.getLatestBlock().getHash(), blockchain.getDifficulty(), "dummy_root");
             empty.setValidatorId("ValidatorA");
             empty.setSignature(new byte[64]);
@@ -104,7 +104,7 @@ public class ReputationEngineTest {
                 .fee(50000)
                 .sign(deviceKey.getPrivateKey(), deviceKey.getPublicKey());
         
-        Block block2 = new Block((int)blockchain.getHeight() + 1, System.currentTimeMillis(), Collections.singletonList(tx2), 
+        Block block2 = new Block((int)blockchain.getHeight() + 1, blockchain.getLatestBlock().getTimestamp() + 10, Collections.singletonList(tx2), 
                 blockchain.getLatestBlock().getHash(), blockchain.getDifficulty(), "dummy_root");
         block2.setValidatorId("ValidatorA");
         block2.setSignature(new byte[64]);

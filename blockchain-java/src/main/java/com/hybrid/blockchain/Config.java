@@ -37,7 +37,7 @@ public final class Config {
     // ─── Quantum Security ─────────────────────────────────────────────────────
     // FIX 2: When true, any transaction missing a Dilithium signature is rejected.
     /** Require hybrid ECDSA+Dilithium signatures on every transaction. Default false for backward compat. */
-    public static final boolean REQUIRE_QUANTUM_SIG = getBooleanEnv("REQUIRE_QUANTUM_SIG", false);
+    public static final boolean REQUIRE_QUANTUM_SIG = getBooleanEnv("REQUIRE_QUANTUM_SIG", true);
 
     // ─── Fee Market (EIP-1559 style) ─────────────────────────────────────────
     /** Starting base fee in smallest token units. */
@@ -53,17 +53,21 @@ public final class Config {
     /** Target gas (transactions) per block — alias for TARGET_GAS_PER_BLOCK. */
     public static final int TARGET_BLOCK_GAS = TARGET_GAS_PER_BLOCK;
     /** Maximum allowed timestamp drift in ms — alias for MAX_TIMESTAMP_DRIFT. */
-    public static final long MAX_TIMESTAMP_DRIFT_MS = 300000; // alias
+    public static final long MAX_TIMESTAMP_DRIFT_MS = 15000; // alias
 
     // ─── Network & P2P ───────────────────────────────────────────────────────
     public static final int P2P_PORT = getIntEnv("P2P_PORT", 6001);
     public static final int API_PORT = getIntEnv("API_PORT", 8000);
     public static final long PEER_HEARTBEAT_INTERVAL_MS = 3000;
     public static final int MAX_PEERS = 50;
-    public static final long MAX_TIMESTAMP_DRIFT = 300000; // 5 min
+    public static final long MAX_TIMESTAMP_DRIFT = 15000; // 15 sec
     public static final long MAX_NONCE_ATTEMPTS = Long.MAX_VALUE / 2;
     public static final int NETWORK_ID = getIntEnv("NETWORK_ID", 101);
     public static final String PROTOCOL_VERSION = getEnv("PROTOCOL_VERSION", "1.0.0");
+    public static final int MAX_FL_MODEL_BYTES = 10 * 1024 * 1024; // 10MB
+    public static final int MIN_FL_CONTRIBUTORS = getIntEnv("MIN_FL_CONTRIBUTORS", 3);
+    /** Privacy budget for DP-Enhanced Federated Learning. Lower = more privacy. */
+    public static final double FEDERATED_DP_EPSILON = 1.0;
 
     // ─── Node Identity ────────────────────────────────────────────────────────
     public static final String NODE_NAME = getEnv("NODE_NAME", "HybridJavaNode");
@@ -91,9 +95,16 @@ public final class Config {
     /** UDP port for the CoAP server; only active when NODE_ROLE=GATEWAY. */
     public static final int COAP_PORT = getIntEnv("COAP_PORT", 5683);
 
+    public static int MAX_NONCE_GAP = 100;
+
     // ─── Storage Encryption ───────────────────────────────────────────────────
     public static final byte[] STORAGE_AES_KEY;
     static {
+        // [PHASE-0] FIX-9: Production Guard
+        if (BYPASS_CONTRACT_AUDIT && isProductionProfile()) {
+            throw new RuntimeException("BYPASS_CONTRACT_AUDIT cannot be true in production");
+        }
+
         String keyEnv = System.getProperty("STORAGE_AES_KEY");
         if (keyEnv == null || keyEnv.isEmpty()) {
             keyEnv = System.getenv("STORAGE_AES_KEY");

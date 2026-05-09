@@ -10,6 +10,8 @@ import java.util.Map;
 import java.util.Collections;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * Manages all account state for HybridChain, including multi-token balances, nonces,
@@ -25,6 +27,7 @@ public class AccountState {
     private DeviceLifecycleManager lifecycleManager;
     private PrivateDataManager privateDataManager;
     private MerklePatriciaTrie mpt;
+    private final Set<String> spentNullifiers;
 
     public String calculateRoot() {
         return HexUtils.encode(mpt.getRootHash());
@@ -36,6 +39,7 @@ public class AccountState {
         this.ssiManager = new SSIManager();
         this.lifecycleManager = new DeviceLifecycleManager(ssiManager);
         this.privateDataManager = new PrivateDataManager();
+        this.spentNullifiers = java.util.concurrent.ConcurrentHashMap.newKeySet();
     }
 
     public java.util.Set<String> getAccountAddresses() {
@@ -59,6 +63,7 @@ public class AccountState {
         this.ssiManager = new SSIManager();
         this.lifecycleManager = new DeviceLifecycleManager(ssiManager);
         this.privateDataManager = new PrivateDataManager();
+        this.spentNullifiers = java.util.concurrent.ConcurrentHashMap.newKeySet();
     }
 
     @SuppressWarnings("unchecked")
@@ -90,6 +95,9 @@ public class AccountState {
                     code = HexUtils.decode((String) accMap.get("code"));
                 }
                 Account acc = new Account(tokenBalances, nonce, code);
+                if (accMap.containsKey("commitment")) {
+                    acc.setCommitment(HexUtils.decode((String) accMap.get("commitment")));
+                }
 
                 // Load ABI
                 if (accMap.containsKey("abi")) {
@@ -136,6 +144,11 @@ public class AccountState {
             accountState.privateDataManager.restore(privateData);
         }
 
+        if (raw.containsKey("nullifiers")) {
+            List<String> nl = (List<String>) raw.get("nullifiers");
+            accountState.spentNullifiers.addAll(nl);
+        }
+
         return accountState;
     }
 
@@ -160,6 +173,9 @@ public class AccountState {
             if (acc.getAbi() != null) {
                 accJson.put("abi", new String(acc.getAbi(), java.nio.charset.StandardCharsets.UTF_8));
             }
+            if (acc.getCommitment() != null) {
+                accJson.put("commitment", HexUtils.bytesToHex(acc.getCommitment()));
+            }
 
             Map<String, Long> storage = new HashMap<>();
             for (Map.Entry<Long, Long> se : acc.getStorage().getStorage().entrySet()) {
@@ -182,6 +198,7 @@ public class AccountState {
         json.put("ssi", ssiManager.toJSON());
         json.put("lifecycle", lifecycleManager.toJSON());
         json.put("privateData", privateDataManager.toJSON());
+        json.put("nullifiers", new ArrayList<>(spentNullifiers));
 
         return json;
     }
@@ -409,6 +426,26 @@ public class AccountState {
 
     public PrivateDataManager getPrivateDataManager() { return privateDataManager; }
 
+    public byte[] getCommitment(String addr) {
+        Account acc = state.get(addr);
+        return acc != null ? acc.getCommitment() : null;
+    }
+
+    public void setCommitment(String addr, byte[] commitment) {
+        ensure(addr);
+        Account acc = state.get(addr);
+        acc.setCommitment(commitment);
+        updateMpt(addr, acc);
+    }
+
+    public boolean isNullifierSpent(String nullifier) {
+        return spentNullifiers.contains(nullifier);
+    }
+
+    public void recordNullifier(String nullifier) {
+        spentNullifiers.add(nullifier);
+    }
+
     /**
      * Calculates the Merkle Patricia Trie root hash of the current state.
      *
@@ -424,11 +461,13 @@ public class AccountState {
             byte[] ssiHash     = Crypto.hash(ssiBytes);
             byte[] lcBytes     = objectMapper.writeValueAsBytes(lifecycleManager.toJSON());
             byte[] lcHash      = Crypto.hash(lcBytes);
+            byte[] nulHash     = Crypto.hash(new ObjectMapper().writeValueAsBytes(new ArrayList<>(new TreeSet<>(spentNullifiers))));
 
-            byte[] combined = new byte[96];
+            byte[] combined = new byte[128];
             System.arraycopy(accountRoot, 0, combined,  0, 32);
             System.arraycopy(ssiHash,     0, combined, 32, 32);
             System.arraycopy(lcHash,      0, combined, 64, 32);
+            System.arraycopy(nulHash,     0, combined, 96, 32);
 
             return Crypto.bytesToHex(Crypto.hash(combined));
         } catch (Exception e) {
@@ -593,6 +632,7 @@ public class AccountState {
         private final ContractState storage;
         private final java.util.Set<Capability> capabilities;
         private double reputation = 0.5;
+        private byte[] commitment;
 
         public Account(long balance, long nonce) {
             this(balance, nonce, null);
@@ -619,6 +659,9 @@ public class AccountState {
         public synchronized void setReputation(double r) { 
             this.reputation = r; 
         }
+
+        public synchronized byte[] getCommitment() { return commitment; }
+        public synchronized void setCommitment(byte[] c) { this.commitment = c; }
 
         /** Returns the native token balance. */
         public synchronized long getBalance() {

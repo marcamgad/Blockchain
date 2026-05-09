@@ -30,8 +30,8 @@ public class TelemetryAnomalyDetector {
 
     // ── per-device state ────────────────────────────────────────────────────
 
-    private volatile double globalPhi1 = 0.5;
-    private volatile double globalTheta1 = 0.5;
+    // ── per-device state ────────────────────────────────────────────────────
+
 
     /** Sliding window of recent telemetry values per device. */
     private final Map<String, LinkedList<Double>> windows = new ConcurrentHashMap<>();
@@ -56,6 +56,9 @@ public class TelemetryAnomalyDetector {
         public volatile double arimaPrevValue = Double.NaN;
         public volatile double arimaPrevDiff = 0.0;
         public volatile double arimaPrevError = 0.0;
+        
+        public volatile double phi1 = 0.5;
+        public volatile double theta1 = 0.5;
 
         AnomalyStats(String deviceId) { this.deviceId = deviceId; }
     }
@@ -74,6 +77,10 @@ public class TelemetryAnomalyDetector {
     }
 
     public boolean check(String deviceId, double value, long timestamp) {
+        if (!Double.isFinite(value)) {
+            log.warn("[ANOMALY] Invalid telemetry value (NaN/Infinity) for device {}", deviceId);
+            return true; // Flag as anomaly without corrupting stats
+        }
         AnomalyStats stats = statsMap.computeIfAbsent(deviceId, AnomalyStats::new);
         stats.lastValue = value;
         stats.totalChecked++;
@@ -100,11 +107,8 @@ public class TelemetryAnomalyDetector {
             double zScore = Math.abs((value - mean) / stddev);
             stats.lastZScore = zScore;
 
-            double phi1 = globalPhi1;
-            double theta1 = globalTheta1;
-
-            // [FEATURE B3] ARIMA(1,1,1) approximation
-            double predicted = Double.isNaN(stats.arimaPrevValue) ? value : stats.arimaPrevValue + phi1 * stats.arimaPrevDiff + theta1 * stats.arimaPrevError;
+            // [PHASE-0] FIX-1: per-device ARIMA coefficients
+            double predicted = Double.isNaN(stats.arimaPrevValue) ? value : stats.arimaPrevValue + stats.phi1 * stats.arimaPrevDiff + stats.theta1 * stats.arimaPrevError;
             double error = value - predicted;
             stats.arimaPrevDiff = Double.isNaN(stats.arimaPrevValue) ? 0 : value - stats.arimaPrevValue;
             stats.arimaPrevValue = value;
@@ -149,12 +153,16 @@ public class TelemetryAnomalyDetector {
                 || tx.getData() == null || tx.getData().length == 0) {
             return 1;
         }
+        return check(tx.getFrom(), tx.getData(), timestamp);
+    }
+
+    public int check(String deviceId, byte[] data, long timestamp) {
         try {
-            String raw = new String(tx.getData(), StandardCharsets.UTF_8).trim();
+            String raw = new String(data, StandardCharsets.UTF_8).trim();
             double value = parseValue(raw);
-            return check(tx.getFrom(), value, timestamp) ? 10 : 1;
+            return check(deviceId, value, timestamp) ? 10 : 1;
         } catch (Exception e) {
-            log.debug("[ANOMALY] Cannot parse telemetry for device {}: {}", tx.getFrom(), e.getMessage());
+            log.debug("[ANOMALY] Cannot parse telemetry for device {}: {}", deviceId, e.getMessage());
             return 1;
         }
     }
@@ -183,13 +191,7 @@ public class TelemetryAnomalyDetector {
         return Collections.unmodifiableMap(statsMap);
     }
 
-    public void setArimaCoefficients(double phi1, double theta1) {
-        globalPhi1 = Math.max(0.0, Math.min(0.99, phi1));
-        globalTheta1 = Math.max(0.0, Math.min(0.99, theta1));
-        log.info("[ARIMA] Updated coefficients phi1={} theta1={}",
-                String.format("%.3f", globalPhi1),
-                String.format("%.3f", globalTheta1));
-    }
+
 
     /** Number of values currently in the sliding window for a device. */
     public int getWindowSize(String deviceId) {
@@ -207,6 +209,11 @@ public class TelemetryAnomalyDetector {
     public void clearDevice(String deviceId) {
         windows.remove(deviceId);
         statsMap.remove(deviceId);
+    }
+
+    public List<Double> getWindowSnapshot(String deviceId) {
+        LinkedList<Double> win = windows.get(deviceId);
+        return win == null ? Collections.emptyList() : new ArrayList<>(win);
     }
 
     // ── singleton ────────────────────────────────────────────────────────────

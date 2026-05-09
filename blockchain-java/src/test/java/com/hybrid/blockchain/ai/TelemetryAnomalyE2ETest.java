@@ -60,9 +60,9 @@ public class TelemetryAnomalyE2ETest {
         
         BlockApplier.createAndApplyBlock(tb, List.of(anomalyTx));
         
-        // Fee should be 10x (100)
+        // Fee should be 5x (50) - capped by Math.min(5, multiplier)
         long finalBal = blockchain.getAccountState().getBalance(device.getAddress());
-        assertThat(finalBal).isEqualTo(balAfterNormal - 100);
+        assertThat(finalBal).isEqualTo(balAfterNormal - 50);
         
         // Device reputation should also be penalized (recordDeviceActivity(..., false))
         // In this implementation, reputation starts at 100 and drops by 10 for penalty.

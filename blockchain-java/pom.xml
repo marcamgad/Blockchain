@@ -264,6 +264,13 @@
             <artifactId>wasm</artifactId>
             <version>1.0.0</version>
         </dependency>
+
+        <!-- MessagePack for P1-B -->
+        <dependency>
+            <groupId>org.msgpack</groupId>
+            <artifactId>jackson-dataformat-msgpack</artifactId>
+            <version>0.9.8</version>
+        </dependency>
     </dependencies>
 
     <build>
@@ -277,7 +284,7 @@
                     <!-- Disabled parallel to avoid cross-test state pollution (LevelDB locks, static state) -->
                     <forkCount>1</forkCount>
                     <reuseForks>true</reuseForks>
-                    <argLine>${argLine} -Xmx2g -XX:+UseG1GC -DDEBUG=true -DSTORAGE_AES_KEY=00112233445566778899aabbccddeeff -Dnet.bytebuddy.experimental=true --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.io=ALL-UNNAMED</argLine>
+                    <argLine>${argLine} -Xmx2g -XX:+UseG1GC -DDEBUG=true -DREQUIRE_QUANTUM_SIG=false -DMIN_PEERS=1 -DSTORAGE_AES_KEY=00112233445566778899aabbccddeeff -Dnet.bytebuddy.experimental=true --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.io=ALL-UNNAMED</argLine>
                     <systemPropertyVariables>
                         <NODE_PRIVATE_KEY>1111111111111111111111111111111111111111111111111111111111111111</NODE_PRIVATE_KEY>
                     </systemPropertyVariables>

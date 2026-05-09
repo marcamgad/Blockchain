@@ -26,6 +26,9 @@ public class SSIManager {
     // Revoked DIDs
     private Set<String> revokedDIDs;
 
+    // Delegation: Master DID -> Set of Delegate DIDs
+    private Map<String, Set<String>> delegationMap;
+
     public void restore(SSIManager other) {
         SSIManager copy = SSIManager.fromMap(other.toJSON());
         this.didRegistry.clear();
@@ -43,6 +46,7 @@ public class SSIManager {
         this.credentialStore = new ConcurrentHashMap<>();
         this.deviceToDID = new ConcurrentHashMap<>();
         this.revokedDIDs = ConcurrentHashMap.newKeySet();
+        this.delegationMap = new ConcurrentHashMap<>();
     }
 
     /**
@@ -110,6 +114,27 @@ public class SSIManager {
 
         didDoc.setController(newOwner);
         log.info("[SSI] Transferred ownership of {} to {}", did, newOwner);
+    }
+
+    /**
+     * Add a delegate to a DID. Delegates can perform actions on behalf of the master.
+     */
+    public void addDelegate(String masterDid, String delegateDid, byte[] masterSignature) {
+        DecentralizedIdentifier masterDoc = resolveDID(masterDid);
+        resolveDID(delegateDid);
+
+        byte[] message = ("delegate:" + masterDid + ":" + delegateDid).getBytes();
+        if (!masterDoc.verifySignature(message, masterSignature)) {
+            throw new SecurityException("Invalid delegation signature from master " + masterDid);
+        }
+
+        delegationMap.computeIfAbsent(masterDid, k -> ConcurrentHashMap.newKeySet()).add(delegateDid);
+        log.info("[SSI] Added delegate {} to master {}", delegateDid, masterDid);
+    }
+
+    public boolean isDelegate(String masterDid, String potentialDelegateDid) {
+        Set<String> delegates = delegationMap.get(masterDid);
+        return delegates != null && delegates.contains(potentialDelegateDid);
     }
 
     /**

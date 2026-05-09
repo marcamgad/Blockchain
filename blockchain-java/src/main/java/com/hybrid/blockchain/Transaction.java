@@ -17,7 +17,12 @@ public final class Transaction {
         /** Federated-learning local weight update submitted by a node. */
         FEDERATED_UPDATE,
         /** Aggregated model committed on-chain by the PBFT leader. */
-        FEDERATED_COMMIT
+        FEDERATED_COMMIT,
+        /** Zero-knowledge ownership transfer. */
+        PRIVATE_TRANSFER,
+        /** PAPER-IMPL: P1-B — Maftei et al. Sensors 2025, DOI:10.3390/s25092886
+         *  Gateway aggregates N device TELEMETRY packets into 1 tx (MessagePack-encoded). */
+        TELEMETRY_BATCH
     }
 
     private static final byte[] DOMAIN_PREFIX = "TX\0".getBytes(StandardCharsets.UTF_8);

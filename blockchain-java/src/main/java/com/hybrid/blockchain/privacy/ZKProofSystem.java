@@ -193,7 +193,7 @@ public class ZKProofSystem {
         return out;
     }
 
-    static byte[] toBytes32(BigInteger v) {
+    public static byte[] toBytes32(BigInteger v) {
         byte[] b = v.toByteArray();
         if (b.length == 32) return b;
         if (b.length > 32) return Arrays.copyOfRange(b, b.length - 32, b.length);
@@ -246,28 +246,60 @@ public class ZKProofSystem {
      * Inner class API for Ownership Proofs.
      */
     public static class OwnershipProof {
-        private final String did;
-        private final byte[] proof;
-        private final byte[] challenge;
+        private String did;
+        private byte[] proof;
+        private byte[] challenge;
+        private String nullifier;
+        private byte[] payload; // Embedded payload for authenticated data transfer
 
-        public OwnershipProof(String did, byte[] proof, byte[] challenge) {
+        public OwnershipProof() {} // Required for Jackson deserialization
+
+        public OwnershipProof(String did, byte[] proof, byte[] challenge, String nullifier) {
+            this(did, proof, challenge, nullifier, null);
+        }
+
+        public OwnershipProof(String did, byte[] proof, byte[] challenge, String nullifier, byte[] payload) {
             this.did = did;
             this.proof = proof;
             this.challenge = challenge;
+            this.nullifier = nullifier;
+            this.payload = payload;
         }
 
+        public String getDid() { return did; }
+        public void setDid(String did) { this.did = did; }
+        public byte[] getProof() { return proof; }
+        public void setProof(byte[] proof) { this.proof = proof; }
+        public byte[] getChallenge() { return challenge; }
+        public void setChallenge(byte[] challenge) { this.challenge = challenge; }
+        public String getNullifier() { return nullifier; }
+        public void setNullifier(String nullifier) { this.nullifier = nullifier; }
+        public byte[] getPayload() { return payload; }
+        public void setPayload(byte[] payload) { this.payload = payload; }
+
         public static OwnershipProof create(byte[] privKey, byte[] pubKey) {
+            return create(privKey, pubKey, null);
+        }
+
+        public static OwnershipProof create(byte[] privKey, byte[] pubKey, byte[] payload) {
             // Test compatibility: use fixed DID and challenge for simple create(privKey, pubKey) API
             String did = "did:hybrid:" + Crypto.bytesToHex(Crypto.hash(pubKey));
-            byte[] challenge = "TEST_CHALLENGE".getBytes(StandardCharsets.UTF_8);
+            byte[] challenge = "TEST_CHALLENGE".getBytes(java.nio.charset.StandardCharsets.UTF_8);
             ZKProofSystem zk = new ZKProofSystem();
-            byte[] proof = zk.createOwnershipProof(did, new BigInteger(1, privKey), pubKey, challenge);
-            return new OwnershipProof(did, proof, challenge);
+            byte[] proof = zk.createOwnershipProof(did, new java.math.BigInteger(1, privKey), pubKey, challenge);
+            // Default nullifier for compatibility: hash of the proof
+            String nullifier = com.hybrid.blockchain.HexUtils.encode(com.hybrid.blockchain.Crypto.hash(proof));
+            return new OwnershipProof(did, proof, challenge, nullifier, payload);
         }
 
         public boolean verify(byte[] pubKey) {
             return new ZKProofSystem().verifyOwnershipProof(did, pubKey, proof, challenge);
         }
+    }
+
+    public static boolean verifyOwnership(byte[] commitment, OwnershipProof proof) {
+        if (commitment == null || proof == null) return false;
+        return proof.verify(commitment);
     }
 
     /**
@@ -311,6 +343,33 @@ public class ZKProofSystem {
             if (commitment == null) return true; // Handled by dummy above
             return new ZKProofSystem().verifyThresholdProof(commitment, proof, threshold);
         }
+    }
+
+    /**
+     * Inner class API for Firmware Integrity Proofs.
+     * PAPER-IMPL: P1-D — zk-IoT
+     */
+    public static class FirmwareProof {
+        private final byte[] firmwareHash;
+        private final byte[] commitment;
+
+        public FirmwareProof(byte[] firmwareHash, byte[] commitment) {
+            this.firmwareHash = firmwareHash;
+            this.commitment = commitment;
+        }
+
+        public static FirmwareProof create(byte[] firmwareHash, byte[] secret) {
+            ZKProofSystem zk = new ZKProofSystem();
+            byte[] commitment = zk.generateCommitment(firmwareHash, new byte[32], secret);
+            return new FirmwareProof(firmwareHash, commitment);
+        }
+
+        public boolean verify(byte[] secret) {
+            return new ZKProofSystem().verifyCommitment(commitment, firmwareHash, new byte[32], secret);
+        }
+
+        public byte[] getCommitment() { return commitment; }
+        public byte[] getFirmwareHash() { return firmwareHash; }
     }
 
     /**

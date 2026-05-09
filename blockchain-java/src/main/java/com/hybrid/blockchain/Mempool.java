@@ -33,6 +33,13 @@ public class Mempool {
     private final ReentrantReadWriteLock.ReadLock  readLock  = rwLock.readLock();
     private final ReentrantReadWriteLock.WriteLock writeLock = rwLock.writeLock();
 
+    // AUDIT-FIX: FIX-8 — volatile reference so Blockchain can wire in live state
+    // for nonce-gap Sybil protection. Null-safe; check is skipped when unset.
+    private volatile AccountState stateRef = null;
+
+    /** Wire in the live AccountState so nonce-gap checks can be enforced. */
+    public void setStateRef(AccountState state) { this.stateRef = state; }
+
     public Mempool(int maxSize) {
         this.maxSize = maxSize > 0 ? maxSize : 1000;
         this.map = new TreeMap<>();
@@ -286,6 +293,18 @@ public class Mempool {
             throw new IllegalArgumentException("Transaction too old");
         if (map.containsKey(tx.getId()))
             throw new IllegalArgumentException("tx already in mempool");
+
+        // AUDIT-FIX: FIX-8 — Sybil nonce-gap rejection (prevents mempool flooding)
+        AccountState snap = this.stateRef;
+        if (snap != null && tx.getFrom() != null && tx.getNonce() > 0) {
+            long currentNonce = snap.getNonce(tx.getFrom());
+            if (tx.getNonce() > currentNonce + Config.MAX_NONCE_GAP) {
+                throw new IllegalArgumentException(
+                    "nonce gap exceeds maximum: tx.nonce=" + tx.getNonce()
+                    + " currentNonce=" + currentNonce
+                    + " maxGap=" + Config.MAX_NONCE_GAP);
+            }
+        }
 
         // Nonce replacement: evict same-sender/same-nonce tx only if new fee is higher
         List<String> toRemove = new ArrayList<>();
