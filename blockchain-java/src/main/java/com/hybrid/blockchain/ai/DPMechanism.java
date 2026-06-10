@@ -10,6 +10,22 @@ public class DPMechanism {
     private static final Random random = new Random();
 
     /**
+     * Gaussian mechanism for (epsilon, delta)-DP.
+     * sigma = sensitivity * sqrt(2 * ln(1.25 / delta)) / epsilon
+     *
+     * @paper FL-DABE-BC arXiv:2410.20259
+     */
+    public static double[] gaussianMechanism(double[] values, double epsilon, double delta, double sensitivity) {
+        if (epsilon <= 0) return values;
+        double sigma = sensitivity * Math.sqrt(2.0 * Math.log(1.25 / delta)) / epsilon;
+        double[] noisy = new double[values.length];
+        for (int i = 0; i < values.length; i++) {
+            noisy[i] = values[i] + random.nextGaussian() * sigma;
+        }
+        return noisy;
+    }
+
+    /**
      * Applies Laplace noise to a vector of values.
      *
      * @param values      raw aggregated weights

@@ -51,7 +51,7 @@ public class FederatedLearningE2ETest {
         assertThat(manager.getPendingUpdateCount()).isEqualTo(3);
 
         // Aggregate
-        FederatedLearningManager.AggregationResult result = manager.aggregate("leader", tb.getStorage());
+        FederatedLearningManager.AggregationResult result = manager.aggregate("leader", tb.getStorage(), 3);
         
         assertThat(manager.getRoundNumber()).isEqualTo(1);
         assertThat(result.model[0]).isCloseTo(3.0, offset(0.001));
@@ -81,14 +81,14 @@ public class FederatedLearningE2ETest {
         // Round 1
         manager.submitUpdate("node1", new double[]{1.0, 1.0});
         manager.submitUpdate("node2", new double[]{2.0, 2.0});
-        String hash1 = manager.aggregate(leader, tb.getStorage()).modelHash;
+        String hash1 = manager.aggregate(leader, tb.getStorage(), 3).modelHash;
         assertThat(manager.getRoundNumber()).isEqualTo(1);
         assertThat(manager.getPendingUpdateCount()).isEqualTo(0);
 
         // Round 2
         manager.submitUpdate("node3", new double[]{3.0, 3.0});
         manager.submitUpdate("node4", new double[]{4.0, 4.0});
-        String hash2 = manager.aggregate(leader, tb.getStorage()).modelHash;
+        String hash2 = manager.aggregate(leader, tb.getStorage(), 3).modelHash;
         assertThat(manager.getRoundNumber()).isEqualTo(2);
         assertThat(hash2).isNotEqualTo(hash1);
         assertThat(manager.getPendingUpdateCount()).isEqualTo(0);
@@ -97,7 +97,7 @@ public class FederatedLearningE2ETest {
     @Test
     @DisplayName("C1.3: Federated Empty Aggregate")
     public void testFederatedEmptyAggregate() {
-        assertThat(manager.aggregate("leader", tb.getStorage())).isNull();
+        assertThat(manager.aggregate("leader", tb.getStorage(), 3)).isNull();
     }
 
     @Test
@@ -107,7 +107,7 @@ public class FederatedLearningE2ETest {
         manager.submitUpdate("node2", new double[]{2.0, 2.0, 2.0, 2.0});
         manager.submitUpdate("node3", new double[]{3.0, 3.0, 3.0}); // outlier
 
-        FederatedLearningManager.AggregationResult result = manager.aggregate("leader", tb.getStorage());
+        FederatedLearningManager.AggregationResult result = manager.aggregate("leader", tb.getStorage(), 3);
         assertThat(result.contributors).isEqualTo(2);
         assertThat(result.model.length).isEqualTo(4);
     }
@@ -118,7 +118,7 @@ public class FederatedLearningE2ETest {
         manager.submitUpdate("node1", new double[]{2.0, 4.0});
         manager.submitUpdate("node2", new double[]{4.0, 6.0});
 
-        FederatedLearningManager.AggregationResult result = manager.aggregate("leader", tb.getStorage());
+        FederatedLearningManager.AggregationResult result = manager.aggregate("leader", tb.getStorage(), 3);
 
         assertThat(result).isNotNull();
         assertThat(tb.getStorage().getMeta("federated:latest:hash")).isEqualTo(result.modelHash);

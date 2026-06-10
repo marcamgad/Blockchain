@@ -72,7 +72,7 @@ public class FederatedLearningCrossNodeE2ETest {
         leader.submitUpdate("node-3", new double[]{3.0, 6.0, 9.0});
 
         FederatedLearningManager.AggregationResult result =
-                leader.aggregate("node-1", sharedStorage);
+                leader.aggregate("node-1", sharedStorage, 3);
 
         assertThat(result).isNotNull();
         assertThat(result.contributors).isEqualTo(3);
@@ -104,7 +104,7 @@ public class FederatedLearningCrossNodeE2ETest {
         mgr.submitUpdate("honest-1", new double[]{1.0, 1.0, 1.0});
         mgr.submitUpdate("honest-2", new double[]{1.0, 1.0, 1.0});
         mgr.submitUpdate("honest-3", new double[]{1.0, 1.0, 1.0});
-        FederatedLearningManager.AggregationResult r1 = mgr.aggregate("honest-1", sharedStorage);
+        FederatedLearningManager.AggregationResult r1 = mgr.aggregate("honest-1", sharedStorage, 3);
         assertThat(r1).isNotNull();
         assertThat(r1.contributors).isEqualTo(3);
 
@@ -113,7 +113,7 @@ public class FederatedLearningCrossNodeE2ETest {
         mgr.submitUpdate("honest-2", new double[]{1.0, 1.0, 1.0});
         mgr.submitUpdate("byzantine", new double[]{100.0, 100.0, 100.0}); // dist ≈ 172, >> 3.0
 
-        FederatedLearningManager.AggregationResult r2 = mgr.aggregate("honest-1", sharedStorage);
+        FederatedLearningManager.AggregationResult r2 = mgr.aggregate("honest-1", sharedStorage, 3);
         assertThat(r2).isNotNull();
         // Byzantine node must be excluded
         assertThat(r2.contributors).isEqualTo(2);
@@ -137,7 +137,7 @@ public class FederatedLearningCrossNodeE2ETest {
         mgr.submitUpdate("n2", new double[]{10.0, 20.0, 30.0});
         mgr.submitUpdate("n3", new double[]{10.0, 20.0, 30.0});
 
-        FederatedLearningManager.AggregationResult result = mgr.aggregate("n1", sharedStorage);
+        FederatedLearningManager.AggregationResult result = mgr.aggregate("n1", sharedStorage, 3);
         assertThat(result).isNotNull();
 
         // Plain average is exactly [10, 20, 30]; with DP noise (σ = 0.1/ε) the maximum
@@ -162,7 +162,7 @@ public class FederatedLearningCrossNodeE2ETest {
         leader.submitUpdate("a", new double[]{5.0, 5.0});
         leader.submitUpdate("b", new double[]{3.0, 3.0});
 
-        FederatedLearningManager.AggregationResult r = leader.aggregate("a", sharedStorage);
+        FederatedLearningManager.AggregationResult r = leader.aggregate("a", sharedStorage, 3);
         assertThat(r).isNotNull();
 
         // New manager instance, same Storage
@@ -185,7 +185,7 @@ public class FederatedLearningCrossNodeE2ETest {
     void testEmptyRound() {
         FederatedLearningManager mgr = freshManager();
 
-        FederatedLearningManager.AggregationResult result = mgr.aggregate("leader", sharedStorage);
+        FederatedLearningManager.AggregationResult result = mgr.aggregate("leader", sharedStorage, 3);
         assertThat(result).isNull();
         assertThat(mgr.getCurrentModel()).isEmpty();
         assertThat(mgr.getRoundNumber()).isEqualTo(0);
@@ -204,7 +204,7 @@ public class FederatedLearningCrossNodeE2ETest {
         mgr.submitUpdate("n2", new double[]{1.0, 2.0, 3.0, 4.0}); // dim 4
         mgr.submitUpdate("n3", new double[]{9.0, 9.0, 9.0, 9.0, 9.0}); // dim 5 (minority)
 
-        FederatedLearningManager.AggregationResult r = mgr.aggregate("n1", sharedStorage);
+        FederatedLearningManager.AggregationResult r = mgr.aggregate("n1", sharedStorage, 3);
         assertThat(r).isNotNull();
         assertThat(r.model).hasSize(4);
         assertThat(r.contributors).isEqualTo(2); // n3 excluded
@@ -224,7 +224,7 @@ public class FederatedLearningCrossNodeE2ETest {
         FederatedLearningManager leader = freshManager();
         leader.submitUpdate("x", new double[]{7.0, 8.0, 9.0});
         leader.submitUpdate("y", new double[]{1.0, 2.0, 3.0});
-        FederatedLearningManager.AggregationResult r = leader.aggregate("x", sharedStorage);
+        FederatedLearningManager.AggregationResult r = leader.aggregate("x", sharedStorage, 2);
         assertThat(r).isNotNull();
 
         // Peer receives committed model via gossip (simulated as applyCommittedModel call)

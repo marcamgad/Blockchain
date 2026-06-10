@@ -200,12 +200,18 @@ public class DeviceLifecycleManager {
         private byte[] hash; // SHA-256 hash of firmware
         private long blockHeight;
         private String updatedBy; // Address that initiated update
+        private byte[] commitment; // P1-D: ZK commitment to firmware integrity
 
-        public FirmwareUpdate(String version, byte[] hash, long blockHeight, String updatedBy) {
+        public FirmwareUpdate(String version, byte[] hash, long blockHeight, String updatedBy, byte[] commitment) {
             this.version = version;
             this.hash = hash;
             this.blockHeight = blockHeight;
             this.updatedBy = updatedBy;
+            this.commitment = commitment;
+        }
+
+        public byte[] getCommitment() {
+            return commitment;
         }
 
         public String getVersion() {
@@ -430,8 +436,8 @@ public class DeviceLifecycleManager {
             }
         }
 
-        // Create firmware update record
-        FirmwareUpdate update = new FirmwareUpdate(newVersion, firmwareHash, currentBlockHeight, caller);
+        // Create firmware update record with commitment
+        FirmwareUpdate update = new FirmwareUpdate(newVersion, firmwareHash, currentBlockHeight, caller, proof != null ? proof.getCommitment() : null);
         record.addFirmwareUpdate(update);
         record.setLastActivityBlock(currentBlockHeight);
 

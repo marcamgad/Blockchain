@@ -21,7 +21,7 @@ public class FederatedLearningTest {
         flManager.submitUpdate("node2", new double[]{1.1, 1.9, 3.1});
         flManager.submitUpdate("node3", new double[]{0.9, 2.1, 2.9});
 
-        FederatedLearningManager.AggregationResult res = flManager.aggregate("leader1", null);
+        FederatedLearningManager.AggregationResult res = flManager.aggregate("leader1", null, 3);
         assertNotNull(res);
         assertEquals(3, res.contributors);
         assertEquals(1.0, res.model[0], 0.1);
@@ -33,13 +33,13 @@ public class FederatedLearningTest {
     public void testByzantineRejectionL2Distance() {
         // We set currentModel in the previous round
         flManager.submitUpdate("node1", new double[]{1.0, 1.0, 1.0});
-        flManager.aggregate("leader1", null);
+        flManager.aggregate("leader1", null, 3);
 
         // Next round: node2 sends poison
         flManager.submitUpdate("node1", new double[]{1.1, 0.9, 1.0});
         flManager.submitUpdate("node2", new double[]{10.0, 10.0, 10.0}); // Huge L2 distance -> should be filtered
         
-        FederatedLearningManager.AggregationResult res = flManager.aggregate("leader1", null);
+        FederatedLearningManager.AggregationResult res = flManager.aggregate("leader1", null, 3);
         assertNotNull(res);
         
         // Count should be 1 since node2 was rejected
@@ -54,11 +54,7 @@ public class FederatedLearningTest {
         // node2 tries to send 3 dimensions
         flManager.submitUpdate("node2", new double[]{1.0, 2.0, 3.0});
         
-        FederatedLearningManager.AggregationResult res = flManager.aggregate("leader1", null);
+        FederatedLearningManager.AggregationResult res = flManager.aggregate("leader1", null, 3);
         assertNotNull(res);
-        // Only node1 should be counted if we enforce first submission size
-        // Wait, current implementation uses model[i] = sum[i] / count. 
-        // If node2 has more dimensions, it might cause ArrayIndexOutOfBounds.
-        // I should fix the code if it doesn't handle this.
     }
 }

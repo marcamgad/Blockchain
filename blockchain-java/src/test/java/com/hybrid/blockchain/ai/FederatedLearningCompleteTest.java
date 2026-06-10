@@ -36,7 +36,7 @@ public class FederatedLearningCompleteTest {
         manager.submitUpdate("n2", new double[]{3.0, 4.0, 5.0});
         manager.submitUpdate("n3", new double[]{5.0, 6.0, 7.0});
         
-        double[] avg = manager.aggregate();
+        double[] avg = manager.aggregate(3);
         assertThat(avg).containsExactly(new double[]{3.0, 4.0, 5.0}, within(0.001));
         assertThat(manager.getPendingUpdateCount()).isEqualTo(0);
     }
@@ -48,7 +48,7 @@ public class FederatedLearningCompleteTest {
         manager.submitUpdate("n2", new double[]{3, 4});
         manager.submitUpdate("n3", new double[]{5, 6, 7}); // Wrong dim
         
-        double[] avg = manager.aggregate();
+        double[] avg = manager.aggregate(3);
         assertThat(avg).hasSize(2);
         assertThat(avg).containsExactly(new double[]{3.0, 4.0}, within(0.001));
     }
@@ -60,7 +60,7 @@ public class FederatedLearningCompleteTest {
         int r1 = manager.getRoundNumber();
         
         manager.submitUpdate("n1", new double[]{1.0});
-        manager.aggregate();
+        manager.aggregate(3);
         
         assertThat(manager.getCurrentModelHash()).isNotEqualTo(h1);
         assertThat(manager.getRoundNumber()).isEqualTo(r1 + 1);
@@ -77,7 +77,7 @@ public class FederatedLearningCompleteTest {
         manager.submitUpdate("n1", input);
         manager.submitUpdate("n2", input);
         
-        double[] avg = manager.aggregate();
+        double[] avg = manager.aggregate(3);
         
         // With DP enabled, the average of two [100, 100] inputs should NOT be exactly [100, 100]
         assertThat(avg[0]).isNotEqualTo(100.0);

@@ -72,9 +72,7 @@ public class FederatedLearningManager {
             throw new IllegalArgumentException("Weight array must be non-empty");
         // PAPER-IMPL: P1-E — apply per-update Gaussian noise BEFORE storing
         // (pre-aggregation DP)
-        double[] toStore = differentialPrivacyEnabled
-                ? addGaussianNoise(weights, epsilon, delta, sensitivity)
-                : Arrays.copyOf(weights, weights.length);
+        double[] toStore = Arrays.copyOf(weights, weights.length);
         pendingUpdates.put(nodeId, toStore);
         log.info("[FedLearn] Accepted update from {} ({} weights, round {}, dp={})",
                 nodeId, weights.length, roundNumber + 1, differentialPrivacyEnabled);
@@ -97,12 +95,12 @@ public class FederatedLearningManager {
     }
 
     /** Overload for compatibility with double[] returning tests. */
-    public synchronized double[] aggregate() {
-        AggregationResult res = aggregate("local-leader", null);
+    public synchronized double[] aggregate(int validatorCount) {
+        AggregationResult res = aggregate("local-leader", null, validatorCount);
         return (res != null) ? res.model : null;
     }
 
-    public synchronized AggregationResult aggregate(String leaderId, com.hybrid.blockchain.Storage storage) {
+    public synchronized AggregationResult aggregate(String leaderId, com.hybrid.blockchain.Storage storage, int validatorCount) {
         if (pendingUpdates.isEmpty()) {
             log.debug("[FedLearn] aggregate() called by {} but no pending updates", leaderId);
             return null;
@@ -148,7 +146,7 @@ public class FederatedLearningManager {
             acceptedNodes.add(entry.getKey());
         }
 
-        int minRequired = com.hybrid.blockchain.Config.isDebug() ? 1 : minimumContributors;
+        int minRequired = com.hybrid.blockchain.Config.isDebug() ? 1 : (2 * ((validatorCount - 1) / 3)) + 1;
         if (count < minRequired) {
             log.warn("[FedLearn] aggregate() rejected: insufficient contributors ({} < {})", count, minRequired);
             return null;
@@ -174,10 +172,11 @@ public class FederatedLearningManager {
 
         if (differentialPrivacyEnabled) {
             // PAPER-IMPL: P1-E — DP-Enhanced Federated Learning
-            double sensitivity = 1.0 / count; // L1 sensitivity for mean aggregation
+            double sensitivity = this.sensitivity / count; // L2 sensitivity for mean aggregation
             double epsilon = com.hybrid.blockchain.Config.FEDERATED_DP_EPSILON;
-            aggregated = com.hybrid.blockchain.ai.DPMechanism.laplaceMechanism(aggregated, epsilon, sensitivity);
-            log.info("[FedLearn] Applied DP Laplace noise (eps={}) to aggregated model", epsilon);
+            double delta = 1e-5;
+            aggregated = com.hybrid.blockchain.ai.DPMechanism.gaussianMechanism(aggregated, epsilon, delta, sensitivity);
+            log.info("[FedLearn] Applied DP Gaussian noise (eps={}, delta={}) to aggregated model", epsilon, delta);
         }
 
         this.currentModel = aggregated;
@@ -258,7 +257,7 @@ public class FederatedLearningManager {
         // take over
         // In production, this would be gated by a timeout or view-change trigger.
         log.info("[FedLearn] Recovery triggered by validator {} (rank {})", callerId, callerRank);
-        return aggregate(callerId, storage);
+        return aggregate(callerId, storage, sortedValidators.size());
     }
 
     public synchronized boolean loadLatestModel(com.hybrid.blockchain.Storage storage) {

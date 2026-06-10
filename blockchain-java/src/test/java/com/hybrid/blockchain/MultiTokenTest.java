@@ -107,7 +107,9 @@ public class MultiTokenTest {
         
         // Simulate block application manually
         Block genesis = chain1.getLatestBlock();
-        Block block = new Block(1, System.currentTimeMillis(), java.util.Collections.singletonList(regTx), genesis.getHash(), Config.INITIAL_DIFFICULTY, "");
+        // Ensure timestamp is strictly greater than genesis to avoid "older than previous" error
+        long blockTime = Math.max(System.currentTimeMillis(), genesis.getTimestamp() + 1000);
+        Block block = new Block(1, blockTime, java.util.Collections.singletonList(regTx), genesis.getHash(), Config.INITIAL_DIFFICULTY, "");
         AccountState simState = chain1.getAccountState().cloneState();
         simState.setBlockHeight(1);
         UTXOSet simUTXO = chain1.getUTXOSet().cloneUtxo();
