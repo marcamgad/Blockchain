@@ -23,7 +23,9 @@ public class MQTTAdapter {
     private final String address;
     private MqttClient client;
     
-    private final List<Map<String, Object>> buffer = new CopyOnWriteArrayList<>();
+    private static final int BATCH_SIZE = 50;
+    private final List<Map<String, Object>> buffer = new ArrayList<>();
+    private final Object bufferLock = new Object();
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     private final ObjectMapper msgpackMapper = new ObjectMapper(new MessagePackFactory());
 
@@ -44,8 +46,12 @@ public class MQTTAdapter {
                 try {
                     ObjectMapper mapper = new ObjectMapper();
                     Map<String, Object> data = mapper.readValue(message.getPayload(), Map.class);
-                    buffer.add(data);
-                    if (buffer.size() >= 50) {
+                    boolean full;
+                    synchronized (bufferLock) {
+                        buffer.add(data);
+                        full = buffer.size() >= BATCH_SIZE;
+                    }
+                    if (full) {
                         flush();
                     }
                 } catch (Exception e) {
@@ -64,11 +70,16 @@ public class MQTTAdapter {
     }
 
     private synchronized void flush() {
-        if (buffer.isEmpty()) return;
-        
-        List<Map<String, Object>> batch = new ArrayList<>(buffer);
-        buffer.clear();
-        
+        // Snapshot-and-clear atomically under bufferLock so a reading added between the
+        // copy and the clear is never silently dropped (the old CopyOnWriteArrayList
+        // snapshot+clear had exactly that data-loss window).
+        List<Map<String, Object>> batch;
+        synchronized (bufferLock) {
+            if (buffer.isEmpty()) return;
+            batch = new ArrayList<>(buffer);
+            buffer.clear();
+        }
+
         try {
             byte[] packedData = msgpackMapper.writeValueAsBytes(batch);
             

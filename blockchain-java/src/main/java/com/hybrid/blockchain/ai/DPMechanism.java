@@ -1,13 +1,20 @@
 package com.hybrid.blockchain.ai;
 
-import java.util.Random;
+import java.security.SecureRandom;
 
 /**
  * PAPER-IMPL: P1-E — DP-Enhanced Federated Learning
  * Differential Privacy mechanism for model weight aggregation.
+ *
+ * <p><b>Security:</b> the noise source is a {@link SecureRandom}. Differential-privacy
+ * guarantees depend on the noise being unpredictable — a {@code java.util.Random}
+ * (48-bit LCG, recoverable seed/state) would let an adversary who observes a few
+ * outputs predict subsequent noise and subtract it to recover the true aggregate,
+ * silently voiding the (ε,δ)-DP guarantee. SecureRandom closes that hole.
  */
 public class DPMechanism {
-    private static final Random random = new Random();
+    /** Cryptographically strong shared noise source (thread-safe). */
+    private static final SecureRandom random = new SecureRandom();
 
     /**
      * Gaussian mechanism for (epsilon, delta)-DP.
@@ -35,7 +42,7 @@ public class DPMechanism {
      */
     public static double[] laplaceMechanism(double[] values, double epsilon, double sensitivity) {
         if (epsilon <= 0) return values; // DP disabled
-        
+
         double[] noisyValues = new double[values.length];
         double b = sensitivity / epsilon;
         for (int i = 0; i < values.length; i++) {
@@ -45,7 +52,13 @@ public class DPMechanism {
     }
 
     private static double sampleLaplace(double mu, double b) {
-        double u = random.nextDouble() - 0.5;
+        // Draw u in the OPEN interval (-0.5, 0.5). SecureRandom.nextDouble() returns
+        // [0, 1), so u could hit exactly -0.5, making (1 - 2|u|) == 0 and log(0) == -inf
+        // (infinite noise). Reject the degenerate endpoint so the inverse-CDF stays finite.
+        double u;
+        do {
+            u = random.nextDouble() - 0.5;
+        } while (u <= -0.5);
         // mu - b * sgn(u) * ln(1 - 2|u|)
         return mu - b * Math.signum(u) * Math.log(1 - 2 * Math.abs(u));
     }

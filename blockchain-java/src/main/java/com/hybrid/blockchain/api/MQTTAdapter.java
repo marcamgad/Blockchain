@@ -6,29 +6,28 @@ import com.hybrid.blockchain.Transaction;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.eclipse.paho.client.mqttv3.*;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-import java.util.HashMap;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 /**
- * MQTT Adapter for IoT devices.
- * Bridges MQTT topics to Blockchain transactions.
+ * MQTT Adapter for IoT devices. Bridges MQTT topics to Blockchain transactions
+ * through the shared {@link AbstractIoTMessageAdapter} ingress path (rate-limit,
+ * validate, sign, submit).
  */
-public class MQTTAdapter {
-    private static final Logger log = LoggerFactory.getLogger(MQTTAdapter.class);
-    private final Blockchain blockchain;
+public class MQTTAdapter extends AbstractIoTMessageAdapter {
     private MqttClient client;
     private final String brokerUrl;
     private final String clientId;
 
     public MQTTAdapter(Blockchain blockchain) {
-        this.blockchain = blockchain;
-        this.brokerUrl = System.getenv().getOrDefault("MQTT_BROKER_URL", "tcp://localhost:1883");
+        super(blockchain);
+        this.brokerUrl = System.getProperty("MQTT_BROKER_URL",
+                System.getenv().getOrDefault("MQTT_BROKER_URL", "tcp://localhost:1883"));
         this.clientId = "BlockchainNode_" + Config.NODE_ID;
     }
 
+    @Override
     public void start() throws MqttException {
         client = new MqttClient(brokerUrl, clientId, new MemoryPersistence());
         MqttConnectOptions options = new MqttConnectOptions();
@@ -42,8 +41,8 @@ public class MQTTAdapter {
             }
 
             @Override
-            public void messageArrived(String topic, MqttMessage message) throws Exception {
-                handleMessage(topic, new String(message.getPayload()));
+            public void messageArrived(String topic, MqttMessage message) {
+                handleMessage(topic, new String(message.getPayload(), StandardCharsets.UTF_8));
             }
 
             @Override
@@ -52,14 +51,13 @@ public class MQTTAdapter {
 
         try {
             client.connect(options);
-            // Subscribe to management and telemetry topics
             // Topics: blockchain/iot/<deviceId>/mgmt, blockchain/iot/<deviceId>/telemetry
             client.subscribe("blockchain/iot/+/mgmt");
             client.subscribe("blockchain/iot/+/telemetry");
-
             log.info("MQTT Adapter started, connected to broker: {}", brokerUrl);
         } catch (MqttException e) {
-            log.warn("MQTT Adapter failed to connect to broker at {}. Operating without MQTT: {}", brokerUrl, e.getMessage());
+            log.warn("MQTT Adapter failed to connect to broker at {}. Operating without MQTT: {}",
+                    brokerUrl, e.getMessage());
         }
     }
 
@@ -67,32 +65,34 @@ public class MQTTAdapter {
         try {
             log.info("Received MQTT message on topic: {}", topic);
             ObjectMapper mapper = new ObjectMapper();
+            byte[] rawPayload = payload.getBytes(StandardCharsets.UTF_8);
             @SuppressWarnings("unchecked")
             Map<String, Object> data = mapper.readValue(payload, Map.class);
-            
+
+            String deviceId = extractDeviceId(topic, data);
             if (topic.endsWith("/mgmt")) {
-                submitIOTTransaction(data);
+                submitDeviceTx(Transaction.Type.IOT_MANAGEMENT, deviceId, rawPayload);
             } else if (topic.endsWith("/telemetry")) {
-                submitTelemetryTransaction(data);
+                submitDeviceTx(Transaction.Type.TELEMETRY, deviceId, rawPayload);
             }
         } catch (Exception e) {
-            log.error("Error handling MQTT message: {}", e.getMessage());
+            // Never propagate: a bad/rate-limited/oversized message must not kill the
+            // MQTT callback thread.
+            log.warn("Error handling MQTT message on {}: {}", topic, e.getMessage());
         }
     }
 
-    private void submitIOTTransaction(Map<String, Object> data) throws Exception {
-        // In a real implementation, we would construct a Transaction object
-        // from the MQTT payload and add it to the blockchain.
-        log.info("Processing IoT Management command from MQTT: {}", data.get("action"));
-        
-        //Construction of IOT_MANAGEMENT transaction would go here
+    /** Prefer the device id embedded in the topic (blockchain/iot/&lt;deviceId&gt;/...), fall back to the payload. */
+    private String extractDeviceId(String topic, Map<String, Object> data) {
+        String[] parts = topic.split("/");
+        if (parts.length >= 3 && !parts[2].isEmpty()) {
+            return parts[2];
+        }
+        Object d = data.get("deviceId");
+        return d != null ? String.valueOf(d) : null;
     }
 
-    private void submitTelemetryTransaction(Map<String, Object> data) throws Exception {
-        // Logging telemetry to blockchain
-        log.info("Processing Telemetry data from MQTT for device: {}", data.get("deviceId"));
-    }
-
+    @Override
     public void stop() throws MqttException {
         if (client != null && client.isConnected()) {
             client.disconnect();

@@ -82,11 +82,14 @@ public class TelemetryAnomalyDetector {
             return true; // Flag as anomaly without corrupting stats
         }
         AnomalyStats stats = statsMap.computeIfAbsent(deviceId, AnomalyStats::new);
-        stats.lastValue = value;
-        stats.totalChecked++;
 
         LinkedList<Double> win = windows.computeIfAbsent(deviceId, k -> new LinkedList<>());
         synchronized (win) {
+            // Mutate stats inside the per-device lock: totalChecked++ on a volatile is a
+            // read-modify-write, so concurrent readings from the same device would
+            // otherwise lose counts (and interleave the ARIMA state below).
+            stats.lastValue = value;
+            stats.totalChecked++;
             win.addLast(value);
             if (win.size() > WINDOW_SIZE) win.removeFirst();
 

@@ -7,22 +7,22 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.eclipse.californium.core.CoapResource;
 import org.eclipse.californium.core.CoapServer;
 import org.eclipse.californium.core.config.CoapConfig;
+import org.eclipse.californium.core.coap.CoAP;
 import org.eclipse.californium.core.server.resources.CoapExchange;
 import org.eclipse.californium.elements.config.Configuration;
 import org.eclipse.californium.elements.config.SystemConfig;
 import org.eclipse.californium.elements.config.UdpConfig;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.Map;
 
 /**
- * CoAP API Adapter for lightweight IoT device communication.
+ * CoAP API Adapter for lightweight IoT device communication. Read endpoints
+ * (health/balance) are served directly; write endpoints (tx/telemetry) flow through
+ * the shared {@link AbstractIoTMessageAdapter} ingress path (rate-limit, validate,
+ * sign, submit).
  */
-public class CoAPAdapter {
-    private static final Logger log = LoggerFactory.getLogger(CoAPAdapter.class);
+public class CoAPAdapter extends AbstractIoTMessageAdapter {
     private final CoapServer server;
-    private final Blockchain blockchain;
     private final ObjectMapper mapper = new ObjectMapper();
 
     static {
@@ -36,16 +36,17 @@ public class CoAPAdapter {
     }
 
     public CoAPAdapter(Blockchain blockchain, int port) {
-        this.blockchain = blockchain;
+        super(blockchain);
         Configuration config = Configuration.getStandard();
         this.server = new CoapServer(config, port);
-        
+
         server.add(new HealthResource());
         server.add(new BalanceResource());
         server.add(new TransactionResource());
         server.add(new TelemetryResource());
     }
 
+    @Override
     public void start() {
         start(false);
     }
@@ -59,6 +60,7 @@ public class CoAPAdapter {
         }
     }
 
+    @Override
     public void stop() {
         if (server != null) {
             server.stop();
@@ -84,14 +86,14 @@ public class CoAPAdapter {
         public void handleGET(CoapExchange exchange) {
             String address = exchange.getQueryParameter("address");
             if (address == null || address.isEmpty()) {
-                exchange.respond(org.eclipse.californium.core.coap.CoAP.ResponseCode.BAD_REQUEST, "Missing address");
+                exchange.respond(CoAP.ResponseCode.BAD_REQUEST, "Missing address");
                 return;
             }
             try {
                 long balance = blockchain.getBalance(address);
                 exchange.respond(String.valueOf(balance));
             } catch (Exception e) {
-                exchange.respond(org.eclipse.californium.core.coap.CoAP.ResponseCode.INTERNAL_SERVER_ERROR, e.getMessage());
+                exchange.respond(CoAP.ResponseCode.INTERNAL_SERVER_ERROR, e.getMessage());
             }
         }
     }
@@ -105,14 +107,20 @@ public class CoAPAdapter {
             try {
                 byte[] payload = exchange.getRequestPayload();
                 if (payload == null) {
-                    exchange.respond(org.eclipse.californium.core.coap.CoAP.ResponseCode.BAD_REQUEST, "Empty payload");
+                    exchange.respond(CoAP.ResponseCode.BAD_REQUEST, "Empty payload");
+                    return;
+                }
+                // Rate-limit raw tx ingress (keyed per-endpoint; a real deployment would
+                // key by remote peer identity).
+                if (!allowIngress("coap-tx")) {
+                    exchange.respond(CoAP.ResponseCode.SERVICE_UNAVAILABLE, "Rate limit exceeded");
                     return;
                 }
                 Transaction tx = blockchain.deserializeTransaction(payload);
                 blockchain.addTransaction(tx);
-                exchange.respond(org.eclipse.californium.core.coap.CoAP.ResponseCode.CREATED, tx.getTxid());
+                exchange.respond(CoAP.ResponseCode.CREATED, tx.getTxid());
             } catch (Exception e) {
-                exchange.respond(org.eclipse.californium.core.coap.CoAP.ResponseCode.BAD_REQUEST, e.getMessage());
+                exchange.respond(CoAP.ResponseCode.BAD_REQUEST, e.getMessage());
             }
         }
     }
@@ -123,73 +131,49 @@ public class CoAPAdapter {
         }
 
         /**
-         * Accepts a minimal JSON body: {@code {"deviceId":"<id>","value":<number>}}.
-         * Wraps the raw payload as a signed TELEMETRY transaction using the node key
-         * and pushes it to the blockchain mempool.
+         * Accepts a minimal JSON body: {@code {"deviceId":"<id>","value":<number>}} and
+         * submits it as a signed TELEMETRY transaction via the shared ingress path.
          *
-         * <p>Response codes:
-         * <ul>
-         *   <li>CREATED (2.01) + txid on success</li>
-         *   <li>BAD_REQUEST (4.00) on missing/malformed payload</li>
-         *   <li>INTERNAL_SERVER_ERROR (5.00) on blockchain rejection</li>
-         * </ul>
+         * <p>Response codes: CREATED (2.01)+txid on success; BAD_REQUEST (4.00) on
+         * missing/malformed payload; SERVICE_UNAVAILABLE (5.03) when rate-limited;
+         * INTERNAL_SERVER_ERROR (5.00) on blockchain rejection.
          */
         @Override
         public void handlePOST(CoapExchange exchange) {
             byte[] payload = exchange.getRequestPayload();
             if (payload == null || payload.length == 0) {
-                exchange.respond(org.eclipse.californium.core.coap.CoAP.ResponseCode.BAD_REQUEST, "Empty payload");
+                exchange.respond(CoAP.ResponseCode.BAD_REQUEST, "Empty payload");
                 return;
             }
+            String deviceId;
             try {
-                // Validate the incoming JSON has the required fields
                 @SuppressWarnings("unchecked")
-                java.util.Map<String, Object> body = mapper.readValue(payload, java.util.Map.class);
+                Map<String, Object> body = mapper.readValue(payload, Map.class);
                 if (!body.containsKey("deviceId") || !body.containsKey("value")) {
-                    exchange.respond(org.eclipse.californium.core.coap.CoAP.ResponseCode.BAD_REQUEST,
+                    exchange.respond(CoAP.ResponseCode.BAD_REQUEST,
                             "Missing required fields: deviceId, value");
                     return;
                 }
-
-                String deviceId = String.valueOf(body.get("deviceId"));
-                long   nonce    = System.currentTimeMillis(); // monotonic enough for gateway use
-                String nodeAddr = com.hybrid.blockchain.Config.NODE_ID;
-
-                com.hybrid.blockchain.Transaction tx;
-                try {
-                    java.math.BigInteger privKey = com.hybrid.blockchain.Config.getNodePrivateKey();
-                    byte[] pubKey = com.hybrid.blockchain.Crypto.derivePublicKey(privKey);
-                    tx = new com.hybrid.blockchain.Transaction.Builder()
-                            .type(com.hybrid.blockchain.Transaction.Type.TELEMETRY)
-                            .from(nodeAddr)
-                            .to(deviceId)
-                            .amount(0)
-                            .data(payload)
-                            .nonce(nonce)
-                            .sign(privKey, pubKey)
-                            .build();
-                } catch (RuntimeException noKey) {
-                    // Unsigned gateway mode (no node key configured — debug/test only)
-                    tx = new com.hybrid.blockchain.Transaction.Builder()
-                            .type(com.hybrid.blockchain.Transaction.Type.TELEMETRY)
-                            .from(nodeAddr)
-                            .to(deviceId)
-                            .amount(0)
-                            .data(payload)
-                            .nonce(nonce)
-                            .build();
-                }
-
-                blockchain.addTransaction(tx);
-                exchange.respond(org.eclipse.californium.core.coap.CoAP.ResponseCode.CREATED, tx.getTxid());
-                log.info("[CoAP] Telemetry from device {} submitted as tx {}", deviceId, tx.getTxid());
+                deviceId = String.valueOf(body.get("deviceId"));
             } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-                exchange.respond(org.eclipse.californium.core.coap.CoAP.ResponseCode.BAD_REQUEST,
-                        "Invalid JSON: " + e.getOriginalMessage());
+                exchange.respond(CoAP.ResponseCode.BAD_REQUEST, "Invalid JSON: " + e.getOriginalMessage());
+                return;
+            } catch (Exception e) {
+                exchange.respond(CoAP.ResponseCode.BAD_REQUEST, "Invalid payload");
+                return;
+            }
+
+            try {
+                String txid = submitDeviceTx(Transaction.Type.TELEMETRY, deviceId, payload);
+                exchange.respond(CoAP.ResponseCode.CREATED, txid);
+                log.info("[CoAP] Telemetry from device {} submitted as tx {}", deviceId, txid);
+            } catch (RateLimitedException rle) {
+                exchange.respond(CoAP.ResponseCode.SERVICE_UNAVAILABLE, "Rate limit exceeded");
+            } catch (IllegalArgumentException iae) {
+                exchange.respond(CoAP.ResponseCode.BAD_REQUEST, iae.getMessage());
             } catch (Exception e) {
                 log.warn("[CoAP] Telemetry submission failed: {}", e.getMessage());
-                exchange.respond(org.eclipse.californium.core.coap.CoAP.ResponseCode.INTERNAL_SERVER_ERROR,
-                        e.getMessage());
+                exchange.respond(CoAP.ResponseCode.INTERNAL_SERVER_ERROR, e.getMessage());
             }
         }
     }

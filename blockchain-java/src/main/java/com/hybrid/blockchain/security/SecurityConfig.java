@@ -26,11 +26,21 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 @EnableMethodSecurity // ✅ Updated (replaces deprecated annotation)
 public class SecurityConfig {
 
-    @Autowired
-    private JwtAuthFilter jwtAuthFilter;
-
+    /**
+     * Registers the JWT manager as a bean so {@link JwtAuthFilter} actually receives one.
+     * Without this the filter's {@code @Autowired(required=false)} field stays null and
+     * every token is silently treated as unauthenticated — JWT auth would be a no-op.
+     */
     @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+    public com.hybrid.blockchain.api.JwtManager jwtManager() {
+        return new com.hybrid.blockchain.api.JwtManager();
+    }
+
+    // JwtAuthFilter is injected as a method parameter (not a field) to avoid a
+    // circular reference: the filter depends on the jwtManager bean declared above,
+    // which lives on this same config class.
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http, JwtAuthFilter jwtAuthFilter) throws Exception {
 
         http
             // Disable CSRF (not needed for stateless APIs)

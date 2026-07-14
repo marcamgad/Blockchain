@@ -1,5 +1,6 @@
 package com.hybrid.blockchain.api;
 
+import com.hybrid.blockchain.api.JwtManager;
 import com.hybrid.blockchain.security.SecurityConfig;
 import com.hybrid.blockchain.security.JwtAuthFilter;
 import org.junit.jupiter.api.DisplayName;
@@ -9,7 +10,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
-import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -35,23 +35,36 @@ public class AdminEndpointsTest {
     private MockMvc mockMvc;
 
     @Test
-    @WithMockUser(username = "admin")
-    @DisplayName("Admin: Node pause and resume endpoints")
-    public void testAdminPauseResume() throws Exception {
-        mockMvc.perform(post("/api/v1/admin/node/pause")
-                .contentType(MediaType.APPLICATION_JSON))
-               .andExpect(status().isOk());
-
-        mockMvc.perform(post("/api/v1/admin/node/resume")
-                .contentType(MediaType.APPLICATION_JSON))
-               .andExpect(status().isOk());
+    @DisplayName("Admin endpoints reject requests with no token")
+    public void testAdminEndpointsRejectNoToken() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/status").contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(post("/api/v1/admin/node/pause").contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(post("/api/v1/admin/config/update").contentType(MediaType.APPLICATION_JSON).content("{\"maxTransactionsPerBlock\":500}"))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
-    @WithMockUser(username = "admin")
+    @DisplayName("Admin endpoints reject expired or non-admin tokens")
+    public void testAdminEndpointsRejectExpiredOrNonAdminTokens() throws Exception {
+        JwtManager jwtManager = new JwtManager();
+        String expired = jwtManager.issueToken("device-1", "DEVICE", new java.util.Date(System.currentTimeMillis() - 1000));
+        String nonAdmin = jwtManager.issueToken("device-1", "DEVICE");
+
+        mockMvc.perform(get("/api/v1/admin/status").header("Authorization", "Bearer " + expired))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/api/v1/admin/status").header("Authorization", "Bearer " + nonAdmin))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
     @DisplayName("Admin: Config update endpoint")
     public void testAdminConfigUpdate() throws Exception {
+        JwtManager jwtManager = new JwtManager();
+        String adminToken = jwtManager.issueToken("admin-device", "ADMIN");
         mockMvc.perform(post("/api/v1/admin/config/update")
+                .header("Authorization", "Bearer " + adminToken)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"maxTransactionsPerBlock\":500}"))
                .andExpect(status().isOk());

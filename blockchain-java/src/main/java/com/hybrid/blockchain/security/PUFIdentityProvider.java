@@ -42,6 +42,31 @@ public class PUFIdentityProvider {
     }
 
     /**
+     * Computes a one-way identity anchor from a PUF response, for on-chain anchoring.
+     *
+     * <p>Uses a domain tag <b>distinct</b> from {@link #derivePrivateKey} so the public
+     * anchor can never be used to reconstruct (or brute-check against) the derived private
+     * key. Anchoring {@code computeAnchor(response)} on the ledger at provisioning makes a
+     * device's identity tamper-evident: a cloned or spoofed device presenting a different
+     * silicon fingerprint will produce a different anchor and fail verification.
+     *
+     * @param pufResponse the silicon fingerprint response
+     * @return a 32-byte anchor commitment
+     */
+    public static byte[] computeAnchor(byte[] pufResponse) {
+        if (pufResponse == null || pufResponse.length < 32) {
+            throw new IllegalArgumentException("PUF response must be at least 256 bits");
+        }
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            md.update("PUF_ANCHOR_TAG_V1".getBytes());
+            return md.digest(pufResponse);
+        } catch (Exception e) {
+            throw new RuntimeException("Anchor computation failed", e);
+        }
+    }
+
+    /**
      * Simulated PUF response for a given device hardware ID.
      * In production, this would be a hardware call to the SRAM-PUF/Ring-Oscillator.
      */

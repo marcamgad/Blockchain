@@ -343,6 +343,15 @@ public class ZKProofSystem {
             if (commitment == null) return true; // Handled by dummy above
             return new ZKProofSystem().verifyThresholdProof(commitment, proof, threshold);
         }
+
+        /** The threshold this proof is bound to, so a verifier can confirm it equals the required one. */
+        public long getThreshold() {
+            return threshold;
+        }
+
+        public byte[] getCommitment() {
+            return commitment;
+        }
     }
 
     /**

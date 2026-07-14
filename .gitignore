@@ -81,3 +81,5 @@ Thumbs.db
 integration_test_*/
 test-data-*/
 vm-setup/
+# Claude
+.claude/

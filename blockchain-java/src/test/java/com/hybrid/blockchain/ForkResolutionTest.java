@@ -47,7 +47,10 @@ public class ForkResolutionTest {
         // Establish a funded state in Block 1 so it survives reorganizations
         sender = new TestKeyPair(1);
         Transaction mint = TestTransactionFactory.createMint(sender.getAddress(), 50, 0);
-        Block b1 = new Block(1, System.currentTimeMillis(), java.util.Collections.singletonList(mint), blockchain.getLatestBlock().getHash(), blockchain.getDifficulty(), "");
+        // Deterministic monotonic timestamp (parent + 1): genesis is created in init()
+        // with wall-clock time, so a second wall-clock read here can collide in the same
+        // millisecond and be rejected as "timestamp older than previous block".
+        Block b1 = new Block(1, blockchain.getLatestBlock().getTimestamp() + 1, java.util.Collections.singletonList(mint), blockchain.getLatestBlock().getHash(), blockchain.getDifficulty(), "");
         b1.setValidatorId("ValidatorA");
         b1.setSignature(new byte[64]);
         
@@ -70,7 +73,7 @@ public class ForkResolutionTest {
         Block precursor = blockchain.getLatestBlock();
         AccountState baseState = blockchain.getState().cloneState();
         
-        Block blockLow = new Block(2, System.currentTimeMillis(), new ArrayList<>(), precursor.getHash(), blockchain.getDifficulty(), "");
+        Block blockLow = new Block(2, precursor.getTimestamp() + 1, new ArrayList<>(), precursor.getHash(), blockchain.getDifficulty(), "");
         blockLow.setValidatorId("ValidatorB");
         blockLow.setSignature(new byte[64]);
         
@@ -80,7 +83,7 @@ public class ForkResolutionTest {
         blockLow.setTxRoot(blockLow.calculateTxRoot());
         blockLow.setHash("0000000000000000000000000000000000000000000000000000000000000000");
 
-        Block blockHigh = new Block(2, System.currentTimeMillis() + 1000, new ArrayList<>(), precursor.getHash(), blockchain.getDifficulty(), "");
+        Block blockHigh = new Block(2, precursor.getTimestamp() + 1000, new ArrayList<>(), precursor.getHash(), blockchain.getDifficulty(), "");
         blockHigh.setValidatorId("ValidatorA");
         blockHigh.setSignature(new byte[64]);
 
@@ -127,12 +130,12 @@ public class ForkResolutionTest {
     void testLowerTieBreakIgnored() throws Exception {
         Block precursor = blockchain.getLatestBlock();
         
-        Block blockHigh = new Block(2, System.currentTimeMillis(), new ArrayList<>(), precursor.getHash(), blockchain.getDifficulty(), "");
+        Block blockHigh = new Block(2, precursor.getTimestamp() + 1, new ArrayList<>(), precursor.getHash(), blockchain.getDifficulty(), "");
         blockHigh.setValidatorId("ValidatorA");
         blockHigh.setSignature(new byte[64]);
         blockHigh.setHash("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF");
         
-        Block blockLow = new Block(2, System.currentTimeMillis() + 1000, new ArrayList<>(), precursor.getHash(), blockchain.getDifficulty(), "");
+        Block blockLow = new Block(2, precursor.getTimestamp() + 1000, new ArrayList<>(), precursor.getHash(), blockchain.getDifficulty(), "");
         blockLow.setValidatorId("ValidatorB");
         blockLow.setSignature(new byte[64]);
 

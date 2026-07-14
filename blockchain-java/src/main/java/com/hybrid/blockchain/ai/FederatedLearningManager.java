@@ -5,7 +5,6 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.ByteBuffer;
 import java.security.MessageDigest;
-import java.security.SecureRandom;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -37,6 +36,35 @@ public class FederatedLearningManager {
     private double delta = 1e-5; // failure probability
     private double sensitivity = 1.0; // L2 sensitivity of update
 
+    /**
+     * Byzantine-robust aggregation strategy.
+     *
+     * <ul>
+     *   <li>{@code MEAN_DISTANCE_FILTER} (default) — legacy behaviour: reject updates
+     *       whose L2 distance from the current model exceeds a fixed gate, then average.
+     *       Cheap, but a poisoner who stays just inside the gate still moves the mean.</li>
+     *   <li>{@code COORDINATE_MEDIAN} — per-coordinate median; tolerates up to ⌊(n-1)/2⌋
+     *       arbitrarily-poisoned updates on each coordinate.</li>
+     *   <li>{@code TRIMMED_MEAN} — drop the f highest and f lowest values per coordinate,
+     *       then average the rest (f = ⌊(n-1)/3⌋).</li>
+     *   <li>{@code KRUM} — select the single update closest (sum of squared distances to
+     *       its n-f-2 nearest neighbours) to the honest majority; provably resists f
+     *       Byzantine clients when n ≥ 2f+3 (Blanchard et al., NeurIPS 2017).</li>
+     * </ul>
+     */
+    public enum AggregationStrategy { MEAN_DISTANCE_FILTER, COORDINATE_MEDIAN, TRIMMED_MEAN, KRUM }
+
+    private volatile AggregationStrategy strategy = AggregationStrategy.MEAN_DISTANCE_FILTER;
+
+    /** Selects the Byzantine-robustness strategy used by {@link #aggregate}. */
+    public void setAggregationStrategy(AggregationStrategy strategy) {
+        this.strategy = strategy == null ? AggregationStrategy.MEAN_DISTANCE_FILTER : strategy;
+    }
+
+    public AggregationStrategy getAggregationStrategy() {
+        return strategy;
+    }
+
     public void setDifferentialPrivacyEnabled(boolean enabled) {
         this.differentialPrivacyEnabled = enabled;
     }
@@ -61,6 +89,7 @@ public class FederatedLearningManager {
         epsilon = 1.0;
         delta = 1e-5;
         sensitivity = 1.0;
+        strategy = AggregationStrategy.MEAN_DISTANCE_FILTER;
     }
 
     public synchronized void reset() {
@@ -70,28 +99,26 @@ public class FederatedLearningManager {
     public synchronized void submitUpdate(String nodeId, double[] weights) {
         if (weights == null || weights.length == 0)
             throw new IllegalArgumentException("Weight array must be non-empty");
-        // PAPER-IMPL: P1-E — apply per-update Gaussian noise BEFORE storing
-        // (pre-aggregation DP)
+        // Bound the dimensionality: an unbounded array is a memory-exhaustion vector.
+        int maxDims = com.hybrid.blockchain.Config.MAX_FL_MODEL_BYTES / Double.BYTES;
+        if (weights.length > maxDims)
+            throw new IllegalArgumentException(
+                    "Weight array of " + weights.length + " exceeds max dimensions " + maxDims);
+        // Reject NaN/Infinity. Without this a single non-finite weight silently poisons
+        // EVERY aggregation strategy (mean/median/trimmed-mean/Krum all propagate NaN),
+        // defeating the Byzantine-robustness the strategies are meant to provide.
+        for (int i = 0; i < weights.length; i++) {
+            if (!Double.isFinite(weights[i]))
+                throw new IllegalArgumentException(
+                        "Weight array contains a non-finite value (NaN/Infinity) at index " + i);
+        }
+        // DP noise is applied once, to the aggregate, in aggregate() — not per raw
+        // update. Adding noise here as well would double-count the privacy cost and
+        // needlessly degrade accuracy, so submissions are stored verbatim.
         double[] toStore = Arrays.copyOf(weights, weights.length);
         pendingUpdates.put(nodeId, toStore);
         log.info("[FedLearn] Accepted update from {} ({} weights, round {}, dp={})",
                 nodeId, weights.length, roundNumber + 1, differentialPrivacyEnabled);
-    }
-
-    /**
-     * Gaussian mechanism for (ε,δ)-differential privacy.
-     * σ = sensitivity × √(2 ln(1.25/δ)) / ε
-     *
-     * @paper FL-DABE-BC arXiv:2410.20259, Section IV-B
-     * @paper Blockchain-FL with DP+HE (ResearchGate IIoT paper)
-     */
-    private double[] addGaussianNoise(double[] weights, double epsilon, double delta, double sensitivity) {
-        double sigma = sensitivity * Math.sqrt(2.0 * Math.log(1.25 / delta)) / epsilon;
-        SecureRandom rng = new SecureRandom();
-        double[] noisy = Arrays.copyOf(weights, weights.length);
-        for (int i = 0; i < noisy.length; i++)
-            noisy[i] += rng.nextGaussian() * sigma;
-        return noisy;
     }
 
     /** Overload for compatibility with double[] returning tests. */
@@ -118,65 +145,95 @@ public class FederatedLearningManager {
         if (targetDim == 0)
             return null;
 
-        double[] sum = new double[targetDim];
-        int count = 0;
-        List<String> acceptedNodes = new ArrayList<>();
+        // Collect all dimension-matching updates (the raw input to whichever robust
+        // estimator is selected).
+        List<double[]> sameDim = new ArrayList<>();
+        for (double[] update : pendingUpdates.values()) {
+            if (update.length == targetDim) sameDim.add(update);
+        }
 
-        for (Map.Entry<String, double[]> entry : pendingUpdates.entrySet()) {
-            double[] update = entry.getValue();
-            if (update.length != targetDim)
-                continue;
+        double[] aggregated;
+        int count;
 
-            if (currentModel != null && currentModel.length == targetDim && roundNumber >= 1) {
-                double dist = 0;
-                for (int i = 0; i < targetDim; i++) {
-                    dist += Math.pow(update[i] - currentModel[i], 2);
-                }
-                dist = Math.sqrt(dist);
-                if (dist > 3.0) {
-                    log.warn("[FedLearn] REJECT BYZANTINE node={} dist={}", entry.getKey(),
-                            String.format("%.2f", dist));
+        if (strategy == AggregationStrategy.MEAN_DISTANCE_FILTER) {
+            // ── Legacy path (unchanged): fixed-gate distance filter + round-0 median ──
+            double[] sum = new double[targetDim];
+            count = 0;
+            List<String> acceptedNodes = new ArrayList<>();
+            for (Map.Entry<String, double[]> entry : pendingUpdates.entrySet()) {
+                double[] update = entry.getValue();
+                if (update.length != targetDim)
                     continue;
-                }
-            }
-
-            for (int i = 0; i < targetDim; i++)
-                sum[i] += update[i];
-            count++;
-            acceptedNodes.add(entry.getKey());
-        }
-
-        int minRequired = com.hybrid.blockchain.Config.isDebug() ? 1 : (2 * ((validatorCount - 1) / 3)) + 1;
-        if (count < minRequired) {
-            log.warn("[FedLearn] aggregate() rejected: insufficient contributors ({} < {})", count, minRequired);
-            return null;
-        }
-
-        double[] aggregated = new double[targetDim];
-        if (roundNumber == 0) {
-            // [PHASE-0] FIX-3: Median-based aggregation for round 0
-            for (int i = 0; i < targetDim; i++) {
-                List<Double> values = new ArrayList<>();
-                for (Map.Entry<String, double[]> entry : pendingUpdates.entrySet()) {
-                    if (acceptedNodes.contains(entry.getKey())) {
-                        values.add(entry.getValue()[i]);
+                if (currentModel != null && currentModel.length == targetDim && roundNumber >= 1) {
+                    double dist = 0;
+                    for (int i = 0; i < targetDim; i++) {
+                        dist += Math.pow(update[i] - currentModel[i], 2);
+                    }
+                    dist = Math.sqrt(dist);
+                    if (dist > 3.0) {
+                        log.warn("[FedLearn] REJECT BYZANTINE node={} dist={}", entry.getKey(),
+                                String.format("%.2f", dist));
+                        continue;
                     }
                 }
-                Collections.sort(values);
-                aggregated[i] = values.get(values.size() / 2);
+                for (int i = 0; i < targetDim; i++)
+                    sum[i] += update[i];
+                count++;
+                acceptedNodes.add(entry.getKey());
+            }
+
+            int minRequired = com.hybrid.blockchain.Config.isDebug() ? 1 : (2 * ((validatorCount - 1) / 3)) + 1;
+            if (count < minRequired) {
+                log.warn("[FedLearn] aggregate() rejected: insufficient contributors ({} < {})", count, minRequired);
+                return null;
+            }
+
+            aggregated = new double[targetDim];
+            if (roundNumber == 0) {
+                // [PHASE-0] FIX-3: Median-based aggregation for round 0
+                for (int i = 0; i < targetDim; i++) {
+                    List<Double> values = new ArrayList<>();
+                    for (Map.Entry<String, double[]> entry : pendingUpdates.entrySet()) {
+                        if (acceptedNodes.contains(entry.getKey())) {
+                            values.add(entry.getValue()[i]);
+                        }
+                    }
+                    Collections.sort(values);
+                    aggregated[i] = values.get(values.size() / 2);
+                }
+            } else {
+                for (int i = 0; i < targetDim; i++)
+                    aggregated[i] = sum[i] / count;
             }
         } else {
-            for (int i = 0; i < targetDim; i++)
-                aggregated[i] = sum[i] / count;
+            // ── Byzantine-robust path: estimator resists poisoning without needing a
+            //    reference model or a hand-tuned distance gate. ──
+            count = sameDim.size();
+            int minRequired = com.hybrid.blockchain.Config.isDebug() ? 1 : (2 * ((validatorCount - 1) / 3)) + 1;
+            if (count < minRequired) {
+                log.warn("[FedLearn] aggregate() rejected: insufficient contributors ({} < {})", count, minRequired);
+                return null;
+            }
+            int f = Math.max(0, (count - 1) / 3); // tolerated Byzantine count
+            switch (strategy) {
+                case COORDINATE_MEDIAN: aggregated = coordinateMedian(sameDim, targetDim); break;
+                case TRIMMED_MEAN:      aggregated = trimmedMean(sameDim, targetDim, f);    break;
+                case KRUM:              aggregated = krum(sameDim, f);                       break;
+                default:                aggregated = coordinateMedian(sameDim, targetDim);   break;
+            }
+            log.info("[FedLearn] Robust aggregation via {} over {} updates (f={})", strategy, count, f);
         }
 
         if (differentialPrivacyEnabled) {
-            // PAPER-IMPL: P1-E — DP-Enhanced Federated Learning
-            double sensitivity = this.sensitivity / count; // L2 sensitivity for mean aggregation
-            double epsilon = com.hybrid.blockchain.Config.FEDERATED_DP_EPSILON;
-            double delta = 1e-5;
-            aggregated = com.hybrid.blockchain.ai.DPMechanism.gaussianMechanism(aggregated, epsilon, delta, sensitivity);
-            log.info("[FedLearn] Applied DP Gaussian noise (eps={}, delta={}) to aggregated model", epsilon, delta);
+            // PAPER-IMPL: P1-E — DP-Enhanced Federated Learning.
+            // Honor the (ε,δ,sensitivity) configured via setEpsilon/setDPParameters so
+            // callers can actually tune the privacy/accuracy trade-off. Previously ε was
+            // hardcoded to Config.FEDERATED_DP_EPSILON, silently ignoring setEpsilon().
+            double mechSensitivity = this.sensitivity / count; // L2 sensitivity for mean aggregation
+            double mechEpsilon = this.epsilon > 0 ? this.epsilon : com.hybrid.blockchain.Config.FEDERATED_DP_EPSILON;
+            double mechDelta = this.delta > 0 ? this.delta : 1e-5;
+            aggregated = com.hybrid.blockchain.ai.DPMechanism.gaussianMechanism(aggregated, mechEpsilon, mechDelta, mechSensitivity);
+            log.info("[FedLearn] Applied DP Gaussian noise (eps={}, delta={}) to aggregated model", mechEpsilon, mechDelta);
         }
 
         this.currentModel = aggregated;
@@ -331,6 +388,69 @@ public class FederatedLearningManager {
         } catch (Exception e) {
             log.warn("[FedLearn] Failed to persist model hash={}: {}", modelHash, e.getMessage());
         }
+    }
+
+    /** Per-coordinate median. Robust to up to ⌊(n-1)/2⌋ arbitrary values per coordinate. */
+    private static double[] coordinateMedian(List<double[]> updates, int dim) {
+        double[] out = new double[dim];
+        double[] col = new double[updates.size()];
+        for (int i = 0; i < dim; i++) {
+            for (int j = 0; j < updates.size(); j++) col[j] = updates.get(j)[i];
+            Arrays.sort(col);
+            int n = col.length;
+            out[i] = (n % 2 == 1) ? col[n / 2] : (col[n / 2 - 1] + col[n / 2]) / 2.0;
+        }
+        return out;
+    }
+
+    /** Per-coordinate trimmed mean: drop the f smallest and f largest, average the rest. */
+    private static double[] trimmedMean(List<double[]> updates, int dim, int f) {
+        double[] out = new double[dim];
+        int n = updates.size();
+        int lo = Math.min(f, n / 2);
+        int hi = Math.max(lo, n - f);
+        double[] col = new double[n];
+        for (int i = 0; i < dim; i++) {
+            for (int j = 0; j < n; j++) col[j] = updates.get(j)[i];
+            Arrays.sort(col);
+            double sum = 0; int c = 0;
+            for (int j = lo; j < hi; j++) { sum += col[j]; c++; }
+            out[i] = c > 0 ? sum / c : col[n / 2];
+        }
+        return out;
+    }
+
+    /**
+     * Krum (Blanchard et al., NeurIPS 2017): pick the update whose sum of squared
+     * distances to its n-f-2 nearest neighbours is smallest — i.e. the update most
+     * surrounded by peers, which a Byzantine outlier cannot be. Requires n ≥ 2f+3;
+     * falls back to coordinate-median when there are too few updates.
+     */
+    private static double[] krum(List<double[]> updates, int f) {
+        int n = updates.size();
+        if (n < 2 * f + 3) {
+            return coordinateMedian(updates, updates.get(0).length);
+        }
+        int m = n - f - 2; // neighbours to sum over
+        double bestScore = Double.POSITIVE_INFINITY;
+        int bestIdx = 0;
+        for (int i = 0; i < n; i++) {
+            double[] dists = new double[n];
+            for (int j = 0; j < n; j++) {
+                dists[j] = (i == j) ? 0.0 : squaredDistance(updates.get(i), updates.get(j));
+            }
+            Arrays.sort(dists); // dists[0] == 0 (self)
+            double score = 0;
+            for (int k = 1; k <= m && k < n; k++) score += dists[k];
+            if (score < bestScore) { bestScore = score; bestIdx = i; }
+        }
+        return Arrays.copyOf(updates.get(bestIdx), updates.get(bestIdx).length);
+    }
+
+    private static double squaredDistance(double[] a, double[] b) {
+        double s = 0;
+        for (int i = 0; i < a.length; i++) { double d = a[i] - b[i]; s += d * d; }
+        return s;
     }
 
     private static int readInt(Object value, int fallback) {

@@ -986,7 +986,9 @@ public class Blockchain {
             AccountState clonedState = state.cloneState();
             UTXOSet clonedUtxo = UTXOSet.fromMap(utxo.toJSON());
             clonedState.setBlockHeight(nextIndex);
-            long timestamp = System.currentTimeMillis();
+            // Strictly monotonic: applyBlockInternal rejects timestamp <= previous, so two
+            // blocks produced within the same millisecond must not share a timestamp.
+            long timestamp = Math.max(System.currentTimeMillis(), prev.getTimestamp() + 1);
             String tempHash = "SIMULATION_" + timestamp;
             try {
                 if (simRewardTx != null) {

@@ -66,24 +66,37 @@ public final class Crypto {
     }
 
     public static boolean verify(byte[] message, byte[] signature, byte[] pubKey) {
-        if (signature.length != 64)
+        if (signature == null || pubKey == null || signature.length != 64)
             return false;
 
-        ECDSASigner signer = new ECDSASigner();
-        ECPoint point = CURVE.getCurve().decodePoint(pubKey);
-        ECPublicKeyParameters publicKey = new ECPublicKeyParameters(point, CURVE);
-        signer.init(false, publicKey);
+        try {
+            BigInteger r = new BigInteger(1, Arrays.copyOfRange(signature, 0, 32));
+            BigInteger s = new BigInteger(1, Arrays.copyOfRange(signature, 32, 64));
 
-        BigInteger r = new BigInteger(1, Arrays.copyOfRange(signature, 0, 32));
-        BigInteger s = new BigInteger(1, Arrays.copyOfRange(signature, 32, 64));
+            // Reject non-canonical signatures rather than silently repairing them.
+            // A high-S encoding is a second valid form of the same signature; accepting
+            // it would leave the signature malleable (a distinct byte string that still
+            // verifies for the same message/key). sign() only ever emits low-S.
+            BigInteger n = CURVE.getN();
+            BigInteger halfN = n.shiftRight(1);
+            if (r.signum() <= 0 || s.signum() <= 0 || r.compareTo(n) >= 0 || s.compareTo(halfN) > 0) {
+                return false;
+            }
 
-        // Normalize S to low-S if needed (for signatures created before normalization)
-        BigInteger halfN = CURVE.getN().shiftRight(1);
-        if (s.compareTo(halfN) > 0) {
-            s = CURVE.getN().subtract(s);
+            // decodePoint throws on off-curve / malformed keys; treat that as a failed
+            // verification (network-supplied bytes must not be able to crash the caller).
+            ECPoint point = CURVE.getCurve().decodePoint(pubKey);
+            if (!point.isValid()) {
+                return false;
+            }
+            ECPublicKeyParameters publicKey = new ECPublicKeyParameters(point, CURVE);
+            ECDSASigner signer = new ECDSASigner();
+            signer.init(false, publicKey);
+
+            return signer.verifySignature(message, r, s);
+        } catch (RuntimeException e) {
+            return false;
         }
-
-        return signer.verifySignature(message, r, s);
     }
 
     public static String deriveAddress(byte[] pubKey) {

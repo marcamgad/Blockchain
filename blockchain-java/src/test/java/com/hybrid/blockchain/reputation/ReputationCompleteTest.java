@@ -31,7 +31,9 @@ public class ReputationCompleteTest {
     @Test
     @DisplayName("RE1.9 — Persistence Check")
     void testPersistence() throws Exception {
-        File tempDir = new File("/tmp/rep-test-" + UUID.randomUUID());
+        // Use the JVM temp dir, not a hardcoded "/tmp" — on Windows that resolves to
+        // <current-drive-root>\tmp, which may not exist or be writable.
+        File tempDir = new File(System.getProperty("java.io.tmpdir"), "rep-test-" + UUID.randomUUID());
         tempDir.mkdirs();
         try {
             Storage storage = new Storage(tempDir.getAbsolutePath(), "0123456789abcdef".getBytes());

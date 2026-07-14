@@ -130,6 +130,24 @@ public class IoTRestAPI {
         return ResponseEntity.status(401).body(Map.of("error", "Unauthorized"));
     }
 
+    private ResponseEntity<?> forbidden() {
+        return ResponseEntity.status(403).body(Map.of("error", "Forbidden"));
+    }
+
+    private ResponseEntity<?> requireAdmin(String authorizationHeader) {
+        if (authorizationHeader == null || authorizationHeader.isBlank()) {
+            return unauthorized();
+        }
+        String token = authorizationHeader.replace("Bearer ", "").trim();
+        if (!jwtManager.validateToken(token)) {
+            return unauthorized();
+        }
+        if (!jwtManager.isAdmin(token)) {
+            return forbidden();
+        }
+        return null;
+    }
+
     // ============================================
     // Health Check Endpoints for Docker
     // ============================================
@@ -249,14 +267,13 @@ public class IoTRestAPI {
     public ResponseEntity<?> submitTransaction(@RequestBody SubmitTransactionRequest payload,
             @RequestHeader(value = "Authorization", required = false) String auth) throws Exception {
 
-        if (payload.getFrom() != null) {
-            if (auth == null || auth.isBlank()) {
-                return unauthorized();
-            }
-            String token = auth.replace("Bearer ", "");
-            if (!verifyToken(token, payload.getFrom())) {
-                return unauthorized();
-            }
+        // Anonymous transaction submission is not allowed; device-authenticated submissions only.
+        if (auth == null || auth.isBlank()) {
+            return unauthorized();
+        }
+        String token = auth.replace("Bearer ", "").trim();
+        if (payload.getFrom() != null && !verifyToken(token, payload.getFrom())) {
+            return unauthorized();
         }
 
         blockchainLock.writeLock().lock();
@@ -646,7 +663,11 @@ public class IoTRestAPI {
     // ============================================
 
     @GetMapping("/admin/status")
-    public ResponseEntity<?> adminStatus() {
+    public ResponseEntity<?> adminStatus(@RequestHeader(value = "Authorization", required = false) String auth) {
+        ResponseEntity<?> authCheck = requireAdmin(auth);
+        if (authCheck != null) {
+            return authCheck;
+        }
         blockchainLock.readLock().lock();
         try {
             return ResponseEntity.ok(Map.of(
@@ -664,7 +685,11 @@ public class IoTRestAPI {
     }
 
     @PostMapping("/admin/node/pause")
-    public ResponseEntity<?> adminPauseNode() {
+    public ResponseEntity<?> adminPauseNode(@RequestHeader(value = "Authorization", required = false) String auth) {
+        ResponseEntity<?> authCheck = requireAdmin(auth);
+        if (authCheck != null) {
+            return authCheck;
+        }
         blockchainLock.writeLock().lock();
         try {
             blockchain.setPaused(true);
@@ -676,7 +701,11 @@ public class IoTRestAPI {
     }
 
     @PostMapping("/admin/node/resume")
-    public ResponseEntity<?> adminResumeNode() {
+    public ResponseEntity<?> adminResumeNode(@RequestHeader(value = "Authorization", required = false) String auth) {
+        ResponseEntity<?> authCheck = requireAdmin(auth);
+        if (authCheck != null) {
+            return authCheck;
+        }
         blockchainLock.writeLock().lock();
         try {
             blockchain.setPaused(false);
@@ -688,7 +717,12 @@ public class IoTRestAPI {
     }
 
     @PostMapping("/admin/config/update")
-    public ResponseEntity<?> adminUpdateConfig(@RequestBody Map<String, Object> payload) {
+    public ResponseEntity<?> adminUpdateConfig(@RequestHeader(value = "Authorization", required = false) String auth,
+            @RequestBody Map<String, Object> payload) {
+        ResponseEntity<?> authCheck = requireAdmin(auth);
+        if (authCheck != null) {
+            return authCheck;
+        }
         // Limited dynamic config updates for production
         if (payload.containsKey("maxTransactionsPerBlock")) {
             Config.MAX_TRANSACTIONS_PER_BLOCK = ((Number) payload.get("maxTransactionsPerBlock")).intValue();
@@ -703,7 +737,11 @@ public class IoTRestAPI {
     }
 
    @GetMapping("/admin/peers")
-public ResponseEntity<?> adminPeers() {
+public ResponseEntity<?> adminPeers(@RequestHeader(value = "Authorization", required = false) String auth) {
+    ResponseEntity<?> authCheck = requireAdmin(auth);
+    if (authCheck != null) {
+        return authCheck;
+    }
     if (sharedPeerNode == null) {
         Map<String, Object> resp = new HashMap<>();
         resp.put("peers", Collections.emptyList());
@@ -728,7 +766,12 @@ public ResponseEntity<?> adminPeers() {
 }
 
     @PostMapping("/admin/broadcast-block")
-    public ResponseEntity<?> adminBroadcastBlock(@RequestBody Map<String, Object> payload) {
+    public ResponseEntity<?> adminBroadcastBlock(@RequestHeader(value = "Authorization", required = false) String auth,
+            @RequestBody Map<String, Object> payload) {
+        ResponseEntity<?> authCheck = requireAdmin(auth);
+        if (authCheck != null) {
+            return authCheck;
+        }
         try {
             // This endpoint allows forcing a block broadcast to the network
             // Used for testing consensus recovery scenarios
@@ -754,7 +797,12 @@ public ResponseEntity<?> adminPeers() {
     }
 
     @DeleteMapping("/admin/peers/{peerId}")
-    public ResponseEntity<?> adminDisconnectPeer(@PathVariable("peerId") String peerId) {
+    public ResponseEntity<?> adminDisconnectPeer(@RequestHeader(value = "Authorization", required = false) String auth,
+            @PathVariable("peerId") String peerId) {
+        ResponseEntity<?> authCheck = requireAdmin(auth);
+        if (authCheck != null) {
+            return authCheck;
+        }
         try {
             if (sharedPeerNode == null) {
                 return ResponseEntity.status(400).body(Map.of("error", "PeerNode not initialized"));
@@ -773,7 +821,11 @@ public ResponseEntity<?> adminPeers() {
     }
 
     @GetMapping("/admin/metrics")
-public ResponseEntity<?> adminMetrics() {
+public ResponseEntity<?> adminMetrics(@RequestHeader(value = "Authorization", required = false) String auth) {
+    ResponseEntity<?> authCheck = requireAdmin(auth);
+    if (authCheck != null) {
+        return authCheck;
+    }
     blockchainLock.readLock().lock();
     try {
         com.hybrid.blockchain.monitoring.BlockchainMonitor monitor = blockchain.getMonitor();

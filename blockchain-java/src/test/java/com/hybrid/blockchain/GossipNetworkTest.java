@@ -27,7 +27,9 @@ public class GossipNetworkTest {
 
         nodes = new ArrayList<>();
         nodeKeys = new ArrayList<>();
-        runDataRoot = new File("/tmp/gossip-test-" + UUID.randomUUID());
+        // Use the JVM temp dir, not a hardcoded "/tmp" — on Windows that resolves to
+        // <current-drive-root>\tmp, which may not exist or be writable.
+        runDataRoot = new File(System.getProperty("java.io.tmpdir"), "gossip-test-" + UUID.randomUUID());
         runDataRoot.mkdirs();
 
         // PBFT requires 4 validators

@@ -26,7 +26,9 @@ public class CoAPAdapter extends CoapServer {
     private final byte[] privateKey;
     private final String address;
     
-    private final List<Map<String, Object>> buffer = new CopyOnWriteArrayList<>();
+    private static final int BATCH_SIZE = 50;
+    private final List<Map<String, Object>> buffer = new ArrayList<>();
+    private final Object bufferLock = new Object();
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     private final ObjectMapper msgpackMapper = new ObjectMapper(new MessagePackFactory());
 
@@ -52,12 +54,16 @@ public class CoAPAdapter extends CoapServer {
                 byte[] payload = exchange.getRequestPayload();
                 ObjectMapper mapper = new ObjectMapper();
                 Map<String, Object> data = mapper.readValue(payload, Map.class);
-                
-                buffer.add(data);
-                if (buffer.size() >= 50) {
+
+                boolean full;
+                synchronized (bufferLock) {
+                    buffer.add(data);
+                    full = buffer.size() >= BATCH_SIZE;
+                }
+                if (full) {
                     flush();
                 }
-                
+
                 exchange.respond(CoAP.ResponseCode.CREATED);
             } catch (Exception e) {
                 log.warn("[CoAP] Failed to process telemetry: {}", e.getMessage());
@@ -67,11 +73,15 @@ public class CoAPAdapter extends CoapServer {
     }
 
     private synchronized void flush() {
-        if (buffer.isEmpty()) return;
-        
-        List<Map<String, Object>> batch = new ArrayList<>(buffer);
-        buffer.clear();
-        
+        // Snapshot-and-clear atomically under bufferLock so a reading added between the
+        // copy and the clear is never silently dropped.
+        List<Map<String, Object>> batch;
+        synchronized (bufferLock) {
+            if (buffer.isEmpty()) return;
+            batch = new ArrayList<>(buffer);
+            buffer.clear();
+        }
+
         try {
             byte[] packedData = msgpackMapper.writeValueAsBytes(batch);
             
@@ -88,6 +98,29 @@ public class CoAPAdapter extends CoapServer {
             log.info("[CoAP] Flushed batch of {} readings ({} bytes)", batch.size(), packedData.length);
         } catch (Exception e) {
             log.error("[CoAP] Failed to flush batch: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Flushes any buffered readings, stops the CoAP server, and shuts down the batch
+     * scheduler. Overrides {@link CoapServer#stop()}, which previously left the
+     * scheduled flush thread running (a resource leak on redeploy/restart).
+     */
+    @Override
+    public void stop() {
+        try {
+            flush();
+        } finally {
+            scheduler.shutdown();
+            try {
+                if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                    scheduler.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                scheduler.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+            super.stop();
         }
     }
 }
