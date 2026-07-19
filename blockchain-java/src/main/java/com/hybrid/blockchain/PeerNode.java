@@ -744,6 +744,17 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
             Block block = pbft.removePendingBlock(seq);
             if (block != null) {
                 try {
+                    // [S7-01] The commit certificate must be for THIS block. hasQuorum()
+                    // tells us *a* quorum exists; it does not tell us it was for the block
+                    // sitting in pendingBlocks[seq]. Without this check a node could apply a
+                    // block that no quorum ever voted for.
+                    String quorumHash = pbft.getQuorumHash(seq, PBFTConsensus.Phase.COMMIT);
+                    if (quorumHash != null && !quorumHash.equals(block.getHash())) {
+                        log.error("[CONSENSUS] REJECTED block {} at seq {}: commit quorum was for {}",
+                                block.getHash(), seq, quorumHash);
+                        appliedSequences.get(seq).set(false); // allow the correct block later
+                        return;
+                    }
                     // Bug 1 fix: mark committed BEFORE applyBlock so that
                     // Blockchain.verifyBlock() finds the block in committedBlocks
                     pbft.markCommitted(block.getHash(), seq, block.getValidatorId());

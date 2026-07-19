@@ -127,26 +127,63 @@ public class Blockchain {
             com.hybrid.blockchain.Checkpoint latestCp = storage.loadLatestCheckpoint();
             if (latestCp != null) {
                 log.info("[INIT] Fast sync from checkpoint at height {}", latestCp.getBlockHeight());
-                Block cpBlock = storage.loadBlockByHash(latestCp.getBlockHash());
-                if (cpBlock != null) {
-                    // Load snapshot instead of tip state if tip state is missing or outdated
-                    Map<String, Object> snap = storage.get("snapshot:" + latestCp.getBlockHeight(), Map.class);
-                    if (snap != null) {
-                        state = AccountState.fromMap((Map<String, Object>) snap.get("state"));
-                        utxo = UTXOSet.fromMap((Map<String, Object>) snap.get("utxo"));
-                    } else {
-                        state = storage.loadState();
-                        utxo = UTXOSet.fromMap(storage.loadUTXO());
-                    }
-                    if (state == null) state = new AccountState();
+                
+                int n = consensus.getValidators().size();
+                int f = (n - 1) / 3;
+                int requiredSignatures = 2 * f + 1;
+                
+                int validSignatureCount = 0;
+                String cpHashHex = latestCp.computeCheckpointHash();
+                byte[] messageBytes = Crypto.hexToBytes(cpHashHex);
+                
+                for (Map.Entry<String, String> entry : latestCp.getValidatorSignatures().entrySet()) {
+                    String valId = entry.getKey();
+                    String hexSig = entry.getValue();
                     
-                    chain.add(cpBlock);
-                    if (state.calculateStateRoot().equals(latestCp.getStateRoot())) {
-                        log.info("[INIT] Fast sync successful at height {}", latestCp.getBlockHeight());
-                        return;
-                    } else {
-                        log.warn("[INIT] Checkpoint state root mismatch! Falling back to genesis.");
+                    Validator validator = null;
+                    for (Validator v : consensus.getValidators()) {
+                        if (v.getId().equals(valId)) {
+                            validator = v;
+                            break;
+                        }
                     }
+                    if (validator != null) {
+                        try {
+                            byte[] sigBytes = Crypto.hexToBytes(hexSig);
+                            byte[] pubKey = validator.getPublicKey();
+                            if (Crypto.verify(messageBytes, sigBytes, pubKey)) {
+                                validSignatureCount++;
+                            }
+                        } catch (Exception e) {
+                            log.warn("[INIT] Failed to verify signature for validator {}", valId, e);
+                        }
+                    }
+                }
+                
+                if (validSignatureCount >= requiredSignatures) {
+                    Block cpBlock = storage.loadBlockByHash(latestCp.getBlockHash());
+                    if (cpBlock != null) {
+                        // Load snapshot instead of tip state if tip state is missing or outdated
+                        Map<String, Object> snap = storage.get("snapshot:" + latestCp.getBlockHeight(), Map.class);
+                        if (snap != null) {
+                            state = AccountState.fromMap((Map<String, Object>) snap.get("state"));
+                            utxo = UTXOSet.fromMap((Map<String, Object>) snap.get("utxo"));
+                        } else {
+                            state = storage.loadState();
+                            utxo = UTXOSet.fromMap(storage.loadUTXO());
+                        }
+                        if (state == null) state = new AccountState();
+                        
+                        chain.add(cpBlock);
+                        if (state.calculateStateRoot().equals(latestCp.getStateRoot())) {
+                            log.info("[INIT] Fast sync successful at height {}", latestCp.getBlockHeight());
+                            return;
+                        } else {
+                            log.warn("[INIT] Checkpoint state root mismatch! Falling back to genesis.");
+                        }
+                    }
+                } else {
+                    log.warn("[INIT] Checkpoint has insufficient valid signatures: got {}, expected {}", validSignatureCount, requiredSignatures);
                 }
             }
 
@@ -700,10 +737,24 @@ public class Blockchain {
             validateTransaction(tx, true);
         }
 
+        // [S1-01] Rollback guard. Everything below mutates the LIVE state/utxo, but the
+        // state-root check happens only after all transactions are applied. Without a
+        // snapshot, a state-root mismatch (or any mid-apply exception) left the node with
+        // a partially-applied block — silent state corruption. handleFork() re-enters this
+        // same method after revertTip(), so the corrupting path is reachable during
+        // ordinary fork resolution, not just as an edge case.
+        AccountState stateBackup = state.cloneState();
+        UTXOSet utxoBackup = UTXOSet.fromMap(utxo.toJSON());
+        long totalMintedBackup = totalMinted;
+
+        try {
         state.setBlockHeight(block.getIndex());
 
         long totalFees = 0;
         int txCountForFeeMkt = 0;
+        // Mempool eviction is deferred until the block is known-good; otherwise a block
+        // rejected at the state-root check would have already dropped its transactions.
+        java.util.List<String> appliedTxIds = new java.util.ArrayList<>();
         // Apply transactions and create receipts
         for (Transaction tx : sortedTxs) {
             txCountForFeeMkt++;
@@ -744,7 +795,7 @@ public class Blockchain {
                     storage.indexAddressTx(tx.getTo(), tx.getId(), block.getTimestamp());
                 }
             } catch (Exception ignored) {}
-            mempool.remove(tx.getId());
+            appliedTxIds.add(tx.getId());
         }
 
         // Credit validator with fees
@@ -783,6 +834,11 @@ public class Blockchain {
         }
 
         chain.add(block);
+
+        // Block is now accepted — safe to evict its transactions from the mempool.
+        for (String appliedId : appliedTxIds) {
+            mempool.remove(appliedId);
+        }
 
         // Update base fee for next block
         long currentBaseFee = feeMarket.getCurrentBaseFee(storage);
@@ -854,6 +910,16 @@ public class Blockchain {
             int newDiff = Difficulty.adjustDifficulty(chain, difficulty);
             difficulty = newDiff;
             storage.putMeta("difficulty", difficulty);
+        }
+        } catch (Exception e) {
+            // [S1-01] Atomic-swap rollback: restore the pre-block snapshot so a rejected
+            // block leaves no partial mutations behind, then propagate the rejection.
+            this.state = stateBackup;
+            this.utxo = utxoBackup;
+            this.totalMinted = totalMintedBackup;
+            log.error("[BLOCKCHAIN] Block {} at height {} rejected — rolled back to pre-block state: {}",
+                    block.getHash(), block.getIndex(), e.getMessage());
+            throw e;
         }
     }
 

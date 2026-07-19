@@ -78,3 +78,7 @@ bin/
 .cache/
 temp/
 
+
+# TLA+ model checker (auto-downloaded by docs/formal/run_tlc.sh)
+tla2tools.jar
+docs/formal/states/

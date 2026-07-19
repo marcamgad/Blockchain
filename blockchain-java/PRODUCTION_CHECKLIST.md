@@ -3,7 +3,7 @@
 Before deploying HybridChain to production validator nodes (AWS/GCP/Azure) or running the private 20-node deployment, verify the following configuration and environmental criteria are satisfied.
 
 ## 1. Network & System Configuration
-- [ ] **Firewall Ports:** Ensure `TCP 8545` (REST API), `TCP 8546` (WebSocket), and `TCP/UDP 3000-3050` (P2P Discovery) are open between allowed nodes.
+- [ ] **Firewall Ports:** Ensure `TCP 8000` (REST API + WebSocket, `API_PORT`), `TCP 6001` (P2P, `P2P_PORT`), and — only on GATEWAY-role nodes — `UDP 5683` (CoAP, `COAP_PORT`) are open between allowed nodes. These are the defaults in `Config.java`; override via the matching environment variables. The WebSocket stream is served on the REST port at `ws://{node}/api/v1/ws/events` — it does **not** need a separate port.
 - [ ] **File Descriptors:** Increase `ulimit -n` on Linux nodes to at least `65535` to prevent "Too many open files" errors over prolonged P2P connections.
 - [ ] **Docker Compose:** Utilize the updated `/docker/docker-compose-validator.yml` to spin up node deployments with restart-always policies.
 

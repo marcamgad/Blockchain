@@ -9,6 +9,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 public class PoAConsensus implements Consensus {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(PoAConsensus.class);
+
     @Override
     public void shutdown() {} // No background resources to clean up in PoA
 
@@ -168,8 +170,8 @@ public class PoAConsensus implements Consensus {
             // No eligible validator (all removed or slashed): surface this loudly.
             // The "system-default" descriptor never matches a real validator, so block
             // production will stall — an operator needs a clear signal why.
-            System.err.println("[PoAConsensus] SEVERE: no eligible validators for round " + round
-                    + " (all removed or slashed) — block production is stalled.");
+            log.error("[PoAConsensus] No eligible validators for round {} (all removed or slashed)"
+                    + " — block production is stalled.", round);
             Block fallback = new Block(0, 0L, java.util.Collections.emptyList(), "", 0, "");
             fallback.setValidatorId("system-default");
             return fallback;

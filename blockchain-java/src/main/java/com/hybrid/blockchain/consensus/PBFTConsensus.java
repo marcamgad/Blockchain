@@ -97,8 +97,20 @@ public class PBFTConsensus implements Consensus {
 
     /** Validator set: address → compressed public key. */
     private final Map<String, byte[]>  validators;
-    /** Reputation scores: address → score (≥ REP_MIN). */
-    private final Map<String, Double>  validatorReputation = new ConcurrentHashMap<>();
+    /**
+     * Reputation scores as EXACT fixed-point integers, address → score × {@link #REP_SCALE}.
+     * [E3] Stored as scaled longs rather than doubles so that accumulating reputation is
+     * associative: see docs/formal/pbft_leader_model.md Remark 7.1.
+     */
+    private final Map<String, Long>    validatorReputation = new ConcurrentHashMap<>();
+
+    /** Fixed-point scale: a reputation of 1.0 is stored as REP_SCALE. */
+    public static final long REP_SCALE     = 1_000_000L;
+    /** REP_MIN expressed in the fixed-point scale. */
+    public static final long REP_MIN_SCALED = (long) (REP_MIN * REP_SCALE);
+
+    private static long toScaled(double v)   { return Math.round(v * REP_SCALE); }
+    private static double fromScaled(long v) { return (double) v / REP_SCALE; }
 
     private final int    f;            // max faulty nodes
     private       long   viewNumber;
@@ -153,6 +165,62 @@ public class PBFTConsensus implements Consensus {
         resetTimer();
     }
 
+    // ── ZK-gated leader eligibility ──────────────────────────────────────────
+    // A validator proves reputation ≥ minEligibleReputation via a Pedersen threshold
+    // proof (ZkEligibilityGate) instead of publishing its plaintext score. Verified
+    // proofs mark the validator eligible; ineligible validators get zero selection
+    // weight. This keeps the *predicate* verifiable while hiding the *value*.
+    //
+    // Determinism note: selection stays deterministic across honest nodes as long as
+    // every node has seen the same set of eligibility proofs (they are gossiped /
+    // anchored like other consensus messages). Disabled by default so existing
+    // deployments and tests are unaffected.
+    private volatile boolean zkEligibilityRequired = false;
+    private volatile double  minEligibleReputation = 0.5;
+    private final Map<String, Boolean> zkEligible = new ConcurrentHashMap<>();
+
+    /** Enables/disables the ZK eligibility gate for leader selection. */
+    public void setZkEligibilityRequired(boolean required) { this.zkEligibilityRequired = required; }
+
+    public boolean isZkEligibilityRequired() { return zkEligibilityRequired; }
+
+    /** Sets the reputation bar a validator must prove it meets to be leader-eligible. */
+    public void setMinEligibleReputation(double minReputation) { this.minEligibleReputation = minReputation; }
+
+    public double getMinEligibleReputation() { return minEligibleReputation; }
+
+    /**
+     * Submits a zero-knowledge proof that {@code validatorId}'s reputation meets the
+     * eligibility bar, without revealing the score. The proof is bound to the required
+     * threshold and rejected outright for slashed validators.
+     *
+     * @return true if the proof verified and the validator is now leader-eligible
+     */
+    public boolean submitEligibilityProof(String validatorId,
+            com.hybrid.blockchain.privacy.ZKProofSystem.ThresholdProof proof) {
+        if (!validators.containsKey(validatorId)) return false;
+        boolean ok = com.hybrid.blockchain.reputation.ZkEligibilityGate.verify(
+                proof, minEligibleReputation, slashedValidators.contains(validatorId));
+        if (ok) {
+            zkEligible.put(validatorId, Boolean.TRUE);
+            log.info("[PBFT] Validator {} proved leader eligibility (score hidden)", validatorId);
+        } else {
+            zkEligible.remove(validatorId);
+            log.warn("[PBFT] Validator {} failed ZK eligibility verification", validatorId);
+        }
+        return ok;
+    }
+
+    /** True when the validator currently holds a verified eligibility proof. */
+    public boolean isZkEligible(String validatorId) {
+        return Boolean.TRUE.equals(zkEligible.get(validatorId));
+    }
+
+    /** Clears a validator's eligibility (e.g. after slashing or a new epoch). */
+    public void revokeEligibility(String validatorId) {
+        zkEligible.remove(validatorId);
+    }
+
     // PAPER-IMPL: P1-A — RWA-BFT (Sensors 2025, DOI:10.3390/s25020413)
     // Two-layer async BFT: high-rep committee can skip PREPARE (optimistic fast path)
     private volatile boolean asyncEnabled = false;
@@ -172,7 +240,7 @@ public class PBFTConsensus implements Consensus {
         List<String> sorted = new ArrayList<>(validators.keySet());
         Collections.sort(sorted);
         for (String id : sorted) {
-            double rep = validatorReputation.getOrDefault(id, 1.0);
+            double rep = fromScaled(validatorReputation.getOrDefault(id, REP_SCALE));
             if (rep >= minRepThreshold) {
                 committee.put(id, validators.get(id));
             }
@@ -236,14 +304,15 @@ public class PBFTConsensus implements Consensus {
 
     private void initReputation() {
         for (String id : validators.keySet()) {
-            validatorReputation.put(id, 1.0);
+            validatorReputation.put(id, REP_SCALE);
         }
     }
 
     public void penalizeValidator(String validatorId, double delta) {
+        long scaledDelta = toScaled(delta);
         validatorReputation.compute(validatorId, (k, v) -> {
-            double current = (v == null) ? 1.0 : v;
-            return Math.max(REP_MIN, current + delta);
+            long current = (v == null) ? REP_SCALE : v;
+            return Math.max(REP_MIN_SCALED, current + scaledDelta);
         });
     }
 
@@ -357,7 +426,7 @@ public class PBFTConsensus implements Consensus {
     @Override
     public void addValidator(String id, byte[] publicKey) {
         validators.put(id, publicKey);
-        validatorReputation.put(id, 1.0);
+        validatorReputation.put(id, REP_SCALE);
         log.info("[CONSENSUS] Added new validator: {}", id);
     }
 
@@ -384,28 +453,49 @@ public class PBFTConsensus implements Consensus {
         if (sorted.isEmpty()) return null;
         if (sorted.size() == 1) return sorted.get(0);
 
-        // Compute cumulative reputation weights
-        double total = 0;
-        double[] weights = new double[sorted.size()];
+        // [E3] Weights are EXACT scaled integers, and the running sum is integer
+        // addition — which is associative. Accumulating `double` weights was not:
+        // two correct nodes applying the same event multiset in different orders could
+        // differ in the last ulp and tip the `cumulative >= target` comparison, electing
+        // different leaders (docs/formal/pbft_leader_model.md Remark 7.1 / defect E3).
+        long total = 0;
+        long[] weights = new long[sorted.size()];
         for (int i = 0; i < sorted.size(); i++) {
             String valId = sorted.get(i);
-            // [FEATURE B1] Exclude highly threatening validators
-            if (com.hybrid.blockchain.ai.PredictiveThreatScorer.getInstance().predictThreatScore(valId) > 0.7) {
-                weights[i] = 0.0;
+            // [E2] PredictiveThreatScorer is deliberately NOT consulted here. Its score is
+            // derived from node-local wall-clock observations (E_ℓ); letting it zero a
+            // weight reintroduces the divergence of Theorem 1 through a second channel
+            // (Remark 6.3). The scorer remains available for monitoring/alerting.
+            // Re-admitting it into selection requires the commit-then-use construction.
+            if (zkEligibilityRequired && !isZkEligible(valId)) {
+                // No verified zero-knowledge eligibility proof → not leader-eligible.
+                // (Eligibility proofs are consensus-visible artifacts, not local state.)
+                weights[i] = 0L;
             } else {
-                weights[i] = Math.max(REP_MIN, validatorReputation.getOrDefault(valId, 1.0));
+                weights[i] = Math.max(REP_MIN_SCALED, validatorReputation.getOrDefault(valId, REP_SCALE));
             }
             total += weights[i];
         }
 
-        // LCG hash of view for deterministic, uniform-ish target in [0, total)
-        long h = view * 6364136223846793005L + 1442695040888963407L;
-        double target = ((h & Long.MAX_VALUE) / (double) Long.MAX_VALUE) * total;
+        if (total <= 0L) {
+            if (zkEligibilityRequired) {
+                log.warn("[PBFT] No ZK-eligible validators for view {} — cannot select a leader", view);
+            }
+            return null;
+        }
 
-        double cumulative = 0;
+        // LCG hash of view for deterministic, uniform-ish target in [0, total).
+        // phi depends ONLY on the view, so it is identical at every correct node; the one
+        // remaining floating-point operation is a single deterministic multiply (a single
+        // IEEE-754 op is order-independent, so it does not reintroduce the E3 defect).
+        long h = view * 6364136223846793005L + 1442695040888963407L;
+        double phi = (h & Long.MAX_VALUE) / (double) Long.MAX_VALUE;
+        double target = phi * (double) total;
+
+        long cumulative = 0;
         for (int i = 0; i < sorted.size(); i++) {
             cumulative += weights[i];
-            if (cumulative >= target) return sorted.get(i);
+            if ((double) cumulative >= target) return sorted.get(i);
         }
         return sorted.get((int)(Math.abs(view) % sorted.size()));
     }
@@ -414,22 +504,35 @@ public class PBFTConsensus implements Consensus {
 
     /**
      * Adjusts a validator's reputation by {@code delta}, clamped to ≥ {@value #REP_MIN}.
-     * This must only be called at CONSENSUS BOUNDARIES (block commit, view change)
-     * to ensure all nodes update reputation identically.
+     *
+     * <p><b>Contract (enforced as of E1):</b> this must only be called for
+     * CONSENSUS-ORDERED events — a committed block, a quorum-certified view change, or
+     * message-evidenced slashing — so that every correct node applies the same multiset of
+     * updates. Calling it from a node-local trigger (e.g. a wall-clock timeout that has not
+     * yet been certified by 2f+1) breaks Leader Agreement; see
+     * docs/formal/pbft_leader_model.md Theorem 1.
+     *
+     * <p>[E4] Because the clamp {@code max(REP_MIN, ·)} is order-dependent (unlike the
+     * addition itself, which E3 made associative), correct nodes must also apply these
+     * events in the canonical committed order. That holds automatically once every input is
+     * chain-derived.
      */
     public void updateReputation(String validatorId, double delta) {
         if (!validators.containsKey(validatorId)) return;
-        validatorReputation.merge(validatorId, delta,
-                (old, d) -> Math.max(REP_MIN, old + d));
-        // [FEATURE B1] Record activity for AI threat model
+        long scaledDelta = toScaled(delta);
+        validatorReputation.merge(validatorId, scaledDelta,
+                (old, d) -> Math.max(REP_MIN_SCALED, old + d));
+        // Threat model is fed for MONITORING only — it no longer influences selectLeader (E2).
         com.hybrid.blockchain.ai.PredictiveThreatScorer.getInstance().recordActivity(validatorId, delta, viewNumber);
         log.debug("[PBFT] Reputation {} → {}", validatorId,
-                String.format("%.4f", validatorReputation.get(validatorId)));
+                String.format("%.4f", fromScaled(validatorReputation.get(validatorId))));
     }
 
-    /** Read-only view of all validator reputation scores. */
+    /** Read-only view of all validator reputation scores (converted from fixed-point). */
     public Map<String, Double> getReputationMap() {
-        return Collections.unmodifiableMap(new LinkedHashMap<>(validatorReputation));
+        Map<String, Double> out = new LinkedHashMap<>();
+        validatorReputation.forEach((k, v) -> out.put(k, fromScaled(v)));
+        return Collections.unmodifiableMap(out);
     }
 
     // ── Vote collection ──────────────────────────────────────────────────────
@@ -517,13 +620,43 @@ public class PBFTConsensus implements Consensus {
         return asyncEnabled && lastFastPathSeq == seq - 1;
     }
 
-    /** Checks whether phase has reached 2f+1 votes. */
+    /**
+     * Checks whether phase has reached 2f+1 votes <b>for a single block hash</b>.
+     *
+     * <p>[S7-01] Previously this counted distinct <i>voters</i> irrespective of which block
+     * they voted for, so 2f+1 validators voting for 2f+1 DIFFERENT blocks satisfied it.
+     * That is not a commit certificate: classical PBFT requires 2f+1 messages for the same
+     * (view, seq, digest). Because {@code PeerNode.applyBlockAtSequence} applies the locally
+     * pending block once this returns true, the old behaviour could apply a block that no
+     * quorum had actually voted for. Found by randomized fault injection
+     * (ByzantineFaultInjectionTest).
+     */
     public boolean hasQuorum(long sequenceNumber, Phase phase) {
+        return getQuorumHash(sequenceNumber, phase) != null;
+    }
+
+    /**
+     * Returns the block hash that has reached 2f+1 votes in this phase, or {@code null}
+     * if no single hash has. Callers that act on a quorum MUST check the block they are
+     * about to apply matches this hash.
+     */
+    public String getQuorumHash(long sequenceNumber, Phase phase) {
         Map<Phase, Map<String, PBFTMessage>> seqLog = messageLog.get(sequenceNumber);
-        if (seqLog == null) return false;
+        if (seqLog == null) return null;
         Map<String, PBFTMessage> votes = seqLog.get(phase);
-        if (votes == null) return false;
-        return votes.size() >= (2 * f + 1);
+        if (votes == null) return null;
+
+        Map<String, Integer> byHash = new HashMap<>();
+        for (PBFTMessage m : votes.values()) {
+            if (m != null && m.blockHash != null) {
+                byHash.merge(m.blockHash, 1, Integer::sum);
+            }
+        }
+        int needed = 2 * f + 1;
+        for (Map.Entry<String, Integer> e : byHash.entrySet()) {
+            if (e.getValue() >= needed) return e.getKey();
+        }
+        return null;
     }
 
     // ── Bug 1: markCommitted ─────────────────────────────────────────────────
@@ -567,6 +700,16 @@ public class PBFTConsensus implements Consensus {
 
     private void processViewChange(long newView) {
         if (viewNumber >= newView) return;
+        // [E1] Penalise the leader of the view being abandoned HERE, at the 2f+1
+        // quorum boundary — this is a consensus-ordered event, so every correct node
+        // that reaches it applies the identical update. Applying it in
+        // triggerViewChange() (on the local timer) is what broke Leader Agreement:
+        // see docs/formal/pbft_leader_model.md Theorem 1 and §9 item E1.
+        String faultyLeader = selectLeader(viewNumber);
+        if (faultyLeader != null) {
+            updateReputation(faultyLeader, REP_MISSED_SLOT);
+            log.info("[PBFT] View-change quorum for {} — penalised abandoned leader {}", newView, faultyLeader);
+        }
         String nextLeader = selectLeader(newView);
         log.info("[PBFT] View {} quorum reached. Next leader: {}", newView, nextLeader);
         this.viewNumber = newView;
@@ -574,10 +717,12 @@ public class PBFTConsensus implements Consensus {
 
     public void triggerViewChange() {
         long nextView = viewNumber + 1;
-        // Penalise the leader that caused the timeout (Bug 2 protocol requirement)
-        String faultyLeader = selectLeader(viewNumber);
-        updateReputation(faultyLeader, REP_MISSED_SLOT);
-        log.info("[PBFT] Triggering view change {} → {}. Penalised leader: {}", viewNumber, nextView, faultyLeader);
+        // [E1] NO reputation penalty here. A local timer expiry is a locally-observed
+        // event (E_ℓ): correct nodes time out at different moments under partial
+        // synchrony, so penalising here makes their reputation maps — and therefore
+        // their elected leaders — diverge. The penalty is applied in processViewChange()
+        // once 2f+1 VIEW_CHANGE messages certify the change.
+        log.info("[PBFT] Triggering view change {} → {} (penalty deferred to quorum)", viewNumber, nextView);
 
         PBFTMessage vcMsg = new PBFTMessage(Phase.VIEW_CHANGE, nextView, lastCommittedSeq, "VIEW_CHANGE_PROOF", localValidatorId); // [FIX A4]
         if (localPrivateKey != null) {
@@ -621,7 +766,7 @@ public class PBFTConsensus implements Consensus {
         stats.put("viewNumber",       viewNumber);
         stats.put("currentLeader",    getCurrentLeader());
         stats.put("committedBlocks",  committedBlocks.size());
-        stats.put("reputation",       new HashMap<>(validatorReputation));
+        stats.put("reputation",       new HashMap<>(getReputationMap()));
         return stats;
     }
 

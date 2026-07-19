@@ -17,7 +17,19 @@ Exposed a comprehensive set of RESTful endpoints under `/api/v1/admin/` secured 
 - `POST /api/v1/admin/config/update`: Modify `MAX_TRANSACTIONS_PER_BLOCK` and `TARGET_BLOCK_TIME_MS` on the fly.
 
 ## 4. Device Reputation Scoring Engine
-Introduced the `ReputationEngine.java` to act as an automated QoS (Quality of Service) and Trust system for IoT edge devices. The engine evaluates devices based on successful telemetry submission frequency, uptime, and validation ratios. Malicious or compromised devices emitting spam or invalid signatures receive penalties and can face automatic ban enforcement via the Peer network.
+Introduced `ReputationEngine.java` as a trust-scoring component for IoT edge devices. It
+computes and persists a per-device score: anomaly-free telemetry raises it
+(`SUCCESS_INCREMENT`), anomalous telemetry lowers it (`FAILURE_DECREMENT`), inactivity
+applies a decay penalty, and `slashToMin()` floors it. Scores are updated from the
+TELEMETRY apply path via `DeviceLifecycleManager.recordDeviceActivity()` and persisted to
+storage.
+
+> **Scope / limitation (accurate as of this revision):** the reputation score is
+> *recorded and readable, but not yet enforced*. There is no code that bans, disconnects,
+> rate-limits, or de-peers a device based on its score — `ReputationEngine` is invoked
+> only by `DeviceLifecycleManager` to read/write the value. Automatic ban enforcement via
+> the peer network is **not implemented**; treat the score as telemetry for operators and
+> for the ZK eligibility gate, not as an active security control.
 
 ## 5. WebSocket Event Streaming
 Implemented a high-performance `EventBus.java` subsystem bound to an active WebSocket connection handler (`EventBusWebSocketHandler.java`). Web clients and dApps can subscribe to real-time asynchronous data streams via `ws://{node}/api/v1/ws/events`.

@@ -41,6 +41,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class JwtManager {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(JwtManager.class);
+
     /** Development-only fallback secret. Used only outside a production profile. */
     private static final String DEV_SECRET =
             "dev-only-insecure-jwt-secret-change-me-via-JWT_SECRET-env-variable";
@@ -79,7 +81,7 @@ public class JwtManager {
             throw new IllegalStateException(
                     "JWT_SECRET must be set in production; refusing to start with a default key.");
         }
-        System.err.println("[JwtManager] WARNING: JWT_SECRET not set — using insecure development secret. "
+        log.warn("JWT_SECRET not set — using insecure development secret. "
                 + "Set JWT_SECRET for any non-local deployment.");
         return DEV_SECRET;
     }

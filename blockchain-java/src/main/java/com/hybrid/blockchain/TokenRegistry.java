@@ -174,6 +174,13 @@ public class TokenRegistry {
      * @param tokenId the token identifier
      * @return the balance, or 0 if the address or token is not found
      */
+    /**
+     * <p>Deliberately NOT synchronized on this registry's monitor: token balances live in
+     * {@link AccountState}, a different object with its own concurrency control. Taking
+     * the TokenRegistry lock here would guarantee nothing about AccountState's data while
+     * adding lock coupling (and a lock-ordering hazard against the mint/burn/transfer
+     * methods, which hold this monitor while calling into AccountState).
+     */
     public long getBalance(AccountState state, String address, String tokenId) {
         return state.getTokenBalance(address, tokenId);
     }
@@ -184,7 +191,13 @@ public class TokenRegistry {
      * @param tokenId the token identifier
      * @return the TokenInfo, or null if not found
      */
-    public TokenInfo getTokenInfo(String tokenId) {
+    /**
+     * <p>Synchronized on the same monitor as the mutating methods so the
+     * check-cache → load-from-storage → populate-cache sequence is atomic with respect
+     * to concurrent registration, and readers share a happens-before edge with writers.
+     * (Reentrant: the mutating methods call this via {@code requireToken}.)
+     */
+    public synchronized TokenInfo getTokenInfo(String tokenId) {
         TokenInfo cached = tokenCache.get(tokenId);
         if (cached != null) return cached;
         try {
@@ -206,7 +219,7 @@ public class TokenRegistry {
      * @param tokenId the token identifier
      * @return true if the token exists
      */
-    public boolean tokenExists(String tokenId) {
+    public synchronized boolean tokenExists(String tokenId) {
         return getTokenInfo(tokenId) != null;
     }
 

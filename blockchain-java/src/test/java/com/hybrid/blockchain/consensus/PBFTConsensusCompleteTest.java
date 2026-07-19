@@ -71,19 +71,52 @@ public class PBFTConsensusCompleteTest {
     }
 
     @Test
-    @DisplayName("P1.4b — High-threat validator excluded from leader selection")
-    void testThreatScoreAffectsLeaderSelection() {
+    @DisplayName("P1.4b — [E2] Local threat score must NOT influence leader selection")
+    void testThreatScoreDoesNotAffectLeaderSelection() {
+        // SEMANTIC CHANGE (E2, 2026-07-19). This test previously asserted the OPPOSITE:
+        // that a high local threat score excludes a validator from leader selection.
+        // That behaviour is unsound and was removed. PredictiveThreatScorer derives its
+        // score from node-local wall-clock observations (an E_ℓ event); letting it zero a
+        // validator's selection weight lets two CORRECT nodes elect different leaders for
+        // the same view, violating Leader Agreement.
+        // See docs/formal/pbft_leader_model.md Theorem 1 and Remark 6.3.
+        //
+        // An unsound exclusion mechanism is worse than none: it partitions the validator
+        // set on timing alone, and an adversary able to influence message timing could
+        // induce the split deliberately. The legitimate capability (keeping bad validators
+        // out of leadership) is now served by CONSENSUS-ORDERED mechanisms instead —
+        // slashing for double-signing, reputation weighting from committed events, and the
+        // ZK eligibility gate — none of which depend on node-local inference.
         String risky = validators.keySet().iterator().next();
-        com.hybrid.blockchain.ai.PredictiveThreatScorer scorer = com.hybrid.blockchain.ai.PredictiveThreatScorer.getInstance();
+        com.hybrid.blockchain.ai.PredictiveThreatScorer scorer =
+                com.hybrid.blockchain.ai.PredictiveThreatScorer.getInstance();
+
+        // Baseline: which views elect `risky` before the threat model is poisoned?
+        List<Long> leadsBefore = new ArrayList<>();
+        for (long view = 1; view <= 200; view++) {
+            if (risky.equals(pbft.selectLeader(view))) leadsBefore.add(view);
+        }
 
         for (int i = 0; i < 8; i++) {
             scorer.recordActivity(risky, -0.5, i);
         }
-        assertThat(scorer.predictThreatScore(risky)).isGreaterThan(0.7);
+        // The scorer still works — it remains available for monitoring and alerting.
+        assertThat(scorer.predictThreatScore(risky))
+                .as("threat scoring itself must still function (monitoring)")
+                .isGreaterThan(0.7);
 
+        // ...but selection must be completely unchanged by it.
+        List<Long> leadsAfter = new ArrayList<>();
         for (long view = 1; view <= 200; view++) {
-            assertThat(pbft.selectLeader(view)).isNotEqualTo(risky);
+            if (risky.equals(pbft.selectLeader(view))) leadsAfter.add(view);
         }
+
+        assertThat(leadsAfter)
+                .as("a purely local threat score must not change leader selection (E2)")
+                .isEqualTo(leadsBefore);
+        assertThat(leadsAfter)
+                .as("sanity: the validator should still win some views, i.e. it was not excluded")
+                .isNotEmpty();
     }
 
     @Test

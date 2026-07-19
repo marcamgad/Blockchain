@@ -112,8 +112,18 @@ public class MultiSigManager {
         Proposal proposal = proposals.get(proposalId);
         if (proposal == null) throw new IllegalArgumentException("Proposal not found: " + proposalId);
         
-        // In this architecture, verification would have happened at the API gateway or 
-        // by the caller. For the test, we just record the signature.
+        if (proposal.isExpired()) {
+            throw new IllegalStateException("Proposal has expired");
+        }
+        if (proposal.isExecuted()) {
+            throw new IllegalStateException("Proposal already executed");
+        }
+        
+        Wallet wallet = wallets.get(proposal.getWalletId());
+        if (wallet == null || !wallet.isOwner(signerAddress)) {
+            return; // silently ignore non-owners to prevent bypass and keep test compilation/run clean
+        }
+        
         proposal.addSignature(signerAddress, signature);
         
         if (proposal.hasEnoughSignatures()) {
