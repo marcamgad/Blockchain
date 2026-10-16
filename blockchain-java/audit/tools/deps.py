@@ -22,7 +22,7 @@ NS = {"m": "http://maven.apache.org/POM/4.0.0"}
 def parse_list(path):
     deps = []
     for line in open(path, encoding="utf-8"):
-        line = line.strip()
+        line = re.sub(r"\[[0-9;]*m", "", line).strip()      # Maven colour codes
         if not line or line.startswith("The following") or ":" not in line:
             continue
         line = re.sub(r"\s+--.*$", "", line)            # strip " -- module x" suffixes

@@ -335,4 +335,437 @@ public class HybridChainAuditPoCTest {
                         + "no MQTT/CoAP telemetry can ever be accepted", tx.getFrom())
                 .isTrue();
     }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // BATCH 2 — LEDGER (Blockchain.java). Real Blockchain + real PBFTConsensus, no mocks.
+    // Blocks are built by LedgerPoCFixture.build(), which computes the state root exactly
+    // as an honest re-executing node does, so every block below is one a single
+    // signing proposer can get accepted by every honest node.
+    // ═════════════════════════════════════════════════════════════════════════
+
+    private static Transaction mintN(String to, long amount, long nonce) {
+        return new Transaction.Builder().type(Transaction.Type.MINT).to(to).amount(amount).nonce(nonce).build();
+    }
+
+    @Test
+    @DisplayName("HC-016: a block must not be able to carry more than one MINT")
+    void hc016_multipleMintsPerBlock() throws Exception {
+        try (LedgerPoCFixture f = new LedgerPoCFixture()) {
+            long reward = f.scheduledReward();
+            String attacker = new TestKeyPair(7701).getAddress();
+            List<Transaction> txs = new ArrayList<>();
+            for (int i = 0; i < 10; i++) txs.add(mintN(attacker, reward, i));
+            boolean accepted;
+            try { f.commitAndApply(f.build(txs, 0)); accepted = true; }
+            catch (Exception e) { accepted = false; System.out.println("[HC-016] rejected: " + e.getMessage()); }
+            long bal = f.chain.getState().getBalance(attacker);
+            System.out.printf("[HC-016] reward=%d accepted=%s attackerBalance=%d totalMinted=%d%n",
+                    reward, accepted, bal, f.chain.getTotalMinted());
+            assertThat(bal).as("HC-016: one block minted %d (= %dx the scheduled reward %d) to one address",
+                    bal, reward == 0 ? 0 : bal / reward, reward).isLessThanOrEqualTo(reward);
+        }
+    }
+
+    @Test
+    @DisplayName("HC-016b: an externally submitted MINT must never be included by an HONEST proposer")
+    void hc016b_honestProposerIncludesForeignMint() throws Exception {
+        try (LedgerPoCFixture f = new LedgerPoCFixture()) {
+            String attacker = new TestKeyPair(7721).getAddress();
+            long reward = f.scheduledReward();
+            String admit;
+            try { f.chain.addTransaction(mintN(attacker, reward, 42)); admit = "ACCEPTED into mempool"; }
+            catch (Exception e) { admit = "rejected: " + e.getMessage(); }
+            // Honest block production exactly as App.java:130/233 does it.
+            com.hybrid.blockchain.Block b = f.chain.createBlock(LedgerPoCFixture.VALIDATORS[0].getAddress(), 100);
+            b.setValidatorId(LedgerPoCFixture.VALIDATORS[0].getAddress());
+            b.setHash(b.calculateHash());
+            b.setSignature(Crypto.sign(Crypto.hash(b.serializeCanonical()), LedgerPoCFixture.VALIDATORS[0].getPrivateKey()));
+            long mints = b.getTransactions().stream().filter(t -> t.getType() == Transaction.Type.MINT).count();
+            String err = null;
+            try { f.commitAndApply(b); } catch (Exception e) { err = e.getMessage(); }
+            System.out.printf("[HC-016b] foreign MINT %s; honest block has %d MINT txs; apply=%s; attacker balance=%d%n",
+                    admit, mints, err == null ? "ok" : err, f.chain.getState().getBalance(attacker));
+            assertThat(f.chain.getState().getBalance(attacker))
+                    .as("HC-016b: any mempool submitter receives a block reward").isZero();
+        }
+    }
+
+    @Test
+    @DisplayName("HC-017: fees of transactions that FAIL during apply must not be credited (supply conservation)")
+    void hc017_failedTxFeeCreditedToProposer() throws Exception {
+        try (LedgerPoCFixture f = new LedgerPoCFixture()) {
+            TestKeyPair sender = new TestKeyPair(7702);
+            long r = f.scheduledReward();
+            f.commitAndApply(f.build(List.of(mintN(sender.getAddress(), r, 0)), 0));
+            long half = r / 2;
+            String sink = new TestKeyPair(7703).getAddress();
+            // Both validate against the PRE-block balance r (validation is not cumulative);
+            // tx#2 then fails in apply with 'Insufficient balance', but its fee is still paid out.
+            Transaction t1 = LedgerPoCFixture.transfer(sender, sink, half, half, 1);
+            Transaction t2 = LedgerPoCFixture.transfer(sender, sink, half, half, 2);
+            long before = LedgerPoCFixture.totalSupply(f.chain);
+            f.commitAndApply(f.build(List.of(t1, t2), 0));
+            long after = LedgerPoCFixture.totalSupply(f.chain);
+            System.out.printf("[HC-017] supply before=%d after=%d (created from nothing: %d); proposer balance=%d%n",
+                    before, after, after - before,
+                    f.chain.getState().getBalance(LedgerPoCFixture.VALIDATORS[0].getAddress()));
+            assertThat(after).as("HC-017: total supply changed with no MINT in the block").isEqualTo(before);
+        }
+    }
+
+    @Test
+    @DisplayName("HC-018: an UNSIGNED UTXO tx with a negative output must be rejected (mempool and block)")
+    void hc018_unsignedUtxoNegativeOutputPrintsMoney() throws Exception {
+        try (LedgerPoCFixture f = new LedgerPoCFixture()) {
+            String attacker = new TestKeyPair(7704).getAddress();
+            String victim = new TestKeyPair(7705).getAddress();
+            long amt = 1_000_000_000L;
+            Transaction forged = new Transaction.Builder().type(Transaction.Type.UTXO)
+                    .addOutput(victim, -amt).addOutput(attacker, amt).build();   // from=null: no signature at all
+            boolean mempoolAccepted;
+            try { f.chain.addTransaction(forged); mempoolAccepted = true; }
+            catch (Exception e) { mempoolAccepted = false; System.out.println("[HC-018] mempool rejected: " + e.getMessage()); }
+            boolean blockAccepted;
+            try { f.commitAndApply(f.build(List.of(forged), 0)); blockAccepted = true; }
+            catch (Exception e) { blockAccepted = false; System.out.println("[HC-018] block rejected: " + e.getMessage()); }
+            System.out.printf("[HC-018] mempoolAccepted=%s blockAccepted=%s attacker getBalance=%d utxoTotal=%d%n",
+                    mempoolAccepted, blockAccepted, f.chain.getBalance(attacker), LedgerPoCFixture.utxoTotal(f.chain));
+            assertThat(mempoolAccepted).as("HC-018: unsigned UTXO tx admitted to the mempool (gossip/REST ingress)").isFalse();
+            assertThat(f.chain.getBalance(attacker)).as("HC-018: attacker spendable balance created from nothing").isZero();
+        }
+    }
+
+    @Test
+    @DisplayName("HC-019: node-local equivocation evidence must not change the state transition")
+    void hc019_localSlashingDivergesStateRoot() throws Exception {
+        try (LedgerPoCFixture f = new LedgerPoCFixture()) {
+            TestKeyPair v2 = LedgerPoCFixture.VALIDATORS[1];
+            f.commitAndApply(f.build(List.of(mintN(v2.getAddress(), f.scheduledReward(), 0)), 0));
+            // Block 2 as built (and validated) by every node that did NOT see v2 equivocate.
+            com.hybrid.blockchain.Block b2 = f.build(List.of(), 0);
+            // This node alone receives two conflicting PREPAREs from v2 for some sequence.
+            long seq = 99;
+            for (String h : List.of("aa", "bb")) {
+                PBFTConsensus.PBFTMessage m = new PBFTConsensus.PBFTMessage(
+                        PBFTConsensus.Phase.PREPARE, f.consensus.getViewNumber(), seq, h, v2.getAddress());
+                m.sign(v2.getPrivateKey());
+                f.consensus.addPrepareVote(seq, h, v2.getAddress(), m.signature);
+            }
+            System.out.println("[HC-019] locally slashed set = " + f.consensus.getSlashedValidators());
+            String err = null;
+            try { f.commitAndApply(b2); } catch (Exception e) { err = e.getMessage(); }
+            System.out.println("[HC-019] apply of the network's committed block 2: "
+                    + (err == null ? "accepted" : "REJECTED: " + err));
+            assertThat(err).as("HC-019: this node rejects a committed block every other node accepts -> fork/halt").isNull();
+        }
+    }
+
+    @Test
+    @DisplayName("HC-020: two independently initialised nodes must share one genesis block")
+    void hc020_genesisDependsOnWallClock() throws Exception {
+        try (LedgerPoCFixture a = new LedgerPoCFixture()) {
+            Thread.sleep(25);
+            try (LedgerPoCFixture b = new LedgerPoCFixture()) {
+                String ga = a.chain.getChain().get(0).getHash(), gb = b.chain.getChain().get(0).getHash();
+                String err = null;
+                try {
+                    b.commitAndApply(a.build(List.of(mintN(new TestKeyPair(7706).getAddress(), a.scheduledReward(), 0)), 0));
+                } catch (Exception e) { err = e.getMessage(); }
+                System.out.printf("[HC-020] genesis A=%s B=%s; B applying A's block 1: %s%n", ga, gb, err == null ? "ok" : err);
+                assertThat(gb).as("HC-020: genesis hash depends on System.currentTimeMillis() at init").isEqualTo(ga);
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("HC-021: an invalid same-height block must not revert the current tip")
+    void hc021_forkPathRevertsBeforeValidating() throws Exception {
+        try (LedgerPoCFixture f = new LedgerPoCFixture()) {
+            String to = new TestKeyPair(7707).getAddress();
+            f.commitAndApply(f.build(List.of(mintN(to, f.scheduledReward(), 0)), 0));
+            f.commitAndApply(f.build(List.of(mintN(to, f.scheduledReward(), 1)), 0));
+            com.hybrid.blockchain.Block tip = f.chain.getLatestBlock();
+            com.hybrid.blockchain.Block junk = new com.hybrid.blockchain.Block(tip.getIndex(), tip.getTimestamp(),
+                    new ArrayList<>(), tip.getPrevHash(), 0, "00");
+            junk.setHash("z".repeat(64));             // any string that sorts above the real tip hash
+            junk.setValidatorId("not-a-validator");   // no signature, unknown validator, wrong hash
+            String err = null;
+            try { f.chain.applyBlock(junk); } catch (Exception e) { err = e.getMessage(); }
+            System.out.printf("[HC-021] before: height=%d hash=%s | after junk: height=%d hash=%s | error=%s%n",
+                    tip.getIndex(), tip.getHash(), f.chain.getHeight(), f.chain.getLatestBlock().getHash(), err);
+            assertThat(f.chain.getLatestBlock().getHash())
+                    .as("HC-021: committed tip was reverted by an unvalidated block").isEqualTo(tip.getHash());
+        }
+    }
+
+    @Test
+    @DisplayName("HC-025: a valid pending ACCOUNT transfer must be included by the block producer")
+    void hc025_createBlockNeverIncludesTransfers() throws Exception {
+        try (LedgerPoCFixture f = new LedgerPoCFixture()) {
+            TestKeyPair sender = new TestKeyPair(7710);
+            f.commitAndApply(f.build(List.of(mintN(sender.getAddress(), f.scheduledReward(), 0)), 0));
+            Transaction t = LedgerPoCFixture.transfer(sender, new TestKeyPair(7711).getAddress(), 10, 1, 1);
+            f.chain.addTransaction(t);
+            com.hybrid.blockchain.Block b = f.chain.createBlock(LedgerPoCFixture.VALIDATORS[0].getAddress(), 100);
+            boolean included = b.getTransactions().stream().anyMatch(x -> x.getId().equals(t.getId()));
+            String why = null;
+            try { f.chain.validateTransaction(t); } catch (Exception e) { why = e.getMessage(); }
+            System.out.printf("[HC-025] mempool=%d blockTxs=%d includedTransfer=%s; validateTransaction(pending tx) -> %s%n",
+                    f.chain.getMempool().size(), b.getTransactions().size(), included, why);
+            assertThat(included).as("HC-025: createBlock dropped a valid pending transfer").isTrue();
+        }
+    }
+
+    @Test
+    @DisplayName("HC-026: the TELEMETRY state transition must not depend on node-local detector history")
+    void hc026_telemetryApplyDependsOnProcessLocalHistory() throws Exception {
+        try (LedgerPoCFixture f = new LedgerPoCFixture()) {
+            com.hybrid.blockchain.ai.TelemetryAnomalyDetector det =
+                    com.hybrid.blockchain.ai.TelemetryAnomalyDetector.getInstance();
+            TestKeyPair dev = new TestKeyPair(7715);
+            Transaction tx = new Transaction.Builder().type(Transaction.Type.TELEMETRY).from(dev.getAddress())
+                    .to(dev.getAddress()).fee(1000).nonce(1).data("500.0".getBytes(StandardCharsets.UTF_8))
+                    .sign(dev.getPrivateKey(), dev.getPublicKey());
+            String[] roots = new String[2];
+            for (int run = 0; run < 2; run++) {
+                det.clearDevice(dev.getAddress());
+                // run 1 = a node that has seen 20 earlier readings from this device (e.g. it was
+                // up longer, or its REST/MQTT ingress observed them); run 0 = a freshly restarted node.
+                if (run == 1) for (int i = 0; i < 20; i++) det.check(dev.getAddress(), 10.0 + (i % 3), 0L);
+                com.hybrid.blockchain.AccountState s = f.chain.getState().cloneState();
+                s.credit(dev.getAddress(), 1_000_000);
+                LedgerPoCFixture.applyTx(f.chain, s, com.hybrid.blockchain.UTXOSet.fromMap(new java.util.HashMap<>()),
+                        tx, 1, 1L, "H");
+                roots[run] = s.calculateStateRoot();
+                System.out.printf("[HC-026] node %s: device balance after the SAME tx = %d, stateRoot=%s%n",
+                        run == 0 ? "fresh" : "warm ", s.getBalance(dev.getAddress()), roots[run]);
+            }
+            det.clearDevice(dev.getAddress());
+            assertThat(roots[1]).as("HC-026: identical tx + identical pre-state -> different post-state").isEqualTo(roots[0]);
+        }
+    }
+
+    @Test
+    @DisplayName("HC-027: after a restart the mempool must judge nonce gaps against the LIVE state")
+    void hc027_mempoolStateRefGoesStale() throws Exception {
+        try (LedgerPoCFixture f = new LedgerPoCFixture()) {
+            TestKeyPair s = new TestKeyPair(7716);
+            String sink = new TestKeyPair(7717).getAddress();
+            for (int m = 0; m < 5; m++) f.commitAndApply(f.build(List.of(mintN(s.getAddress(), f.scheduledReward(), m)), 0));
+            List<Transaction> txs = new ArrayList<>();
+            for (int n = 1; n <= com.hybrid.blockchain.Config.MAX_NONCE_GAP + 1; n++)
+                txs.add(LedgerPoCFixture.transfer(s, sink, 0, 2, n));
+            f.commitAndApply(f.build(txs, 0));
+            Blockchain restarted = new Blockchain(f.storage, new com.hybrid.blockchain.Mempool(1000), f.consensus);
+            restarted.init();
+            long next = restarted.getNonce(s.getAddress()) + 1;
+            String err = null;
+            try { restarted.addTransaction(LedgerPoCFixture.transfer(s, sink, 0, 2, next)); }
+            catch (Exception e) { err = e.getMessage(); }
+            System.out.printf("[HC-027] live nonce=%d, submitting nonce %d after restart -> %s%n",
+                    restarted.getNonce(s.getAddress()), next, err == null ? "accepted" : "REJECTED: " + err);
+            assertThat(err).as("HC-027: correctly-nonced tx rejected by a stale mempool stateRef").isNull();
+        }
+    }
+
+    @Test
+    @DisplayName("HC-028: the state root must commit to every consensus-relevant account field")
+    void hc028_stateRootOmitsTokenBalancesAndCommitments() {
+        String a = new TestKeyPair(7718).getAddress();
+        com.hybrid.blockchain.AccountState s1 = new com.hybrid.blockchain.AccountState();
+        s1.credit(a, 100);
+        com.hybrid.blockchain.AccountState s2 = s1.cloneState();
+        s2.creditToken(a, "USDX", 1_000_000_000L);            // custom-token balance
+        com.hybrid.blockchain.AccountState s3 = s1.cloneState();
+        s3.setCommitment(a, new byte[]{1, 2, 3});                // ZK ownership commitment
+        System.out.printf("[HC-028] root(base)=%s%n[HC-028] root(+1e9 USDX)=%s%n[HC-028] root(+commitment)=%s%n",
+                s1.calculateStateRoot(), s2.calculateStateRoot(), s3.calculateStateRoot());
+        assertThat(s2.calculateStateRoot()).as("HC-028: token balances are not part of the state root")
+                .isNotEqualTo(s1.calculateStateRoot());
+        assertThat(s3.calculateStateRoot()).as("HC-028: ZK commitments are not part of the state root")
+                .isNotEqualTo(s1.calculateStateRoot());
+    }
+
+    @Test
+    @DisplayName("HC-029: a tx id must be derived from content, never taken from the wire")
+    void hc029_peerSuppliedTxidIsTrusted() throws Exception {
+        try (LedgerPoCFixture f = new LedgerPoCFixture()) {
+            TestKeyPair s = new TestKeyPair(7719);
+            Transaction honest = LedgerPoCFixture.transfer(s, new TestKeyPair(7720).getAddress(), 5, 1, 1);
+            com.fasterxml.jackson.databind.node.ObjectNode json = (com.fasterxml.jackson.databind.node.ObjectNode)
+                    new com.fasterxml.jackson.databind.ObjectMapper().readTree(f.chain.serializeTransaction(honest));
+            String victimId = "00".repeat(32);
+            json.put("txid", victimId);
+            Transaction wire = f.chain.deserializeTransaction(json.toString().getBytes(StandardCharsets.UTF_8));
+            String recomputed = Crypto.bytesToHex(Crypto.hash(wire.serializeCanonical()));
+            System.out.printf("[HC-029] content hash=%s, getId() after deserialize=%s, verify()=%s%n",
+                    recomputed, wire.getId(), wire.verify());
+            assertThat(wire.getId()).as("HC-029: txid taken from attacker JSON").isEqualTo(recomputed);
+        }
+    }
+
+    @Test
+    @DisplayName("HC-030: two different transaction lists must never share a block hash")
+    void hc030_merkleDuplicateLeafMalleability() {
+        Transaction a = mintN(new TestKeyPair(7722).getAddress(), 50, 0);
+        Transaction b = new Transaction.Builder().type(Transaction.Type.UTXO).addOutput("x", 0).nonce(1).build();
+        Transaction c = new Transaction.Builder().type(Transaction.Type.UTXO).addOutput("y", 0).nonce(2).build();
+        com.hybrid.blockchain.Block b3 = new com.hybrid.blockchain.Block(1, 1000L, new ArrayList<>(List.of(a, b, c)), "00".repeat(32), 1, "00".repeat(32));
+        com.hybrid.blockchain.Block b4 = new com.hybrid.blockchain.Block(1, 1000L, new ArrayList<>(List.of(a, b, c, c)), "00".repeat(32), 1, "00".repeat(32));
+        System.out.printf("[HC-030] 3 txs: txRoot=%s hash=%s%n[HC-030] 4 txs (last duplicated): txRoot=%s hash=%s%n",
+                b3.getTxRoot(), b3.getHash(), b4.getTxRoot(), b4.getHash());
+        assertThat(b4.getHash()).as("HC-030: MerkleTree duplicates the odd leaf (CVE-2012-2459 pattern)")
+                .isNotEqualTo(b3.getHash());
+    }
+
+    @Test
+    @DisplayName("HC-031: PrunedBlockchain must actually delete pruned blocks (and storage must stay bounded)")
+    void hc031_pruningDeletesNothing() throws Exception {
+        try (LedgerPoCFixture f = new LedgerPoCFixture(2)) {
+            String to = new TestKeyPair(7724).getAddress();
+            List<String> hashes = new ArrayList<>();
+            for (int i = 0; i < 6; i++) {
+                com.hybrid.blockchain.Block b = f.build(List.of(mintN(to, f.scheduledReward(), i)), 0);
+                f.commitAndApply(b);
+                hashes.add(b.getHash());
+            }
+            boolean oldBlockStillStored = f.storage.loadBlockByHash(hashes.get(0)) != null;
+            boolean heightIndexGone = f.storage.loadBlockByHeight(1) == null;
+            int snapshots = 0;
+            for (int h = 0; h <= 6; h++) if (f.storage.get("snapshot:" + h, java.util.Map.class) != null) snapshots++;
+            System.out.printf("[HC-031] maxBlocks=2 after 6 blocks: block#1 body still on disk=%s, height index for #1 deleted=%s, "
+                    + "full-state snapshots kept=%d%n", oldBlockStillStored, heightIndexGone, snapshots);
+            assertThat(oldBlockStillStored).as("HC-031: prune deletes 'block:'+hash but blocks live under 'block:'+H('block:'+hash)")
+                    .isFalse();
+        }
+    }
+
+    @Test
+    @DisplayName("HC-023: a node restarted from its own storage must restore totalMinted")
+    void hc023_restartLosesTotalMinted() throws Exception {
+        try (LedgerPoCFixture f = new LedgerPoCFixture()) {
+            String to = new TestKeyPair(7712).getAddress();
+            f.commitAndApply(f.build(List.of(mintN(to, f.scheduledReward(), 0)), 0));
+            f.commitAndApply(f.build(List.of(mintN(to, f.scheduledReward(), 1)), 0));
+            Blockchain restarted = new Blockchain(f.storage, new com.hybrid.blockchain.Mempool(10), f.consensus);
+            restarted.init();
+            System.out.printf("[HC-023] before restart: height=%d totalMinted=%d | after restart: height=%d "
+                            + "totalMinted=%d chainInMemory=%d blocks%n", f.chain.getHeight(), f.chain.getTotalMinted(),
+                    restarted.getHeight(), restarted.getTotalMinted(), restarted.getChain().size());
+            assertThat(restarted.getTotalMinted()).as("HC-023: snapshot init path never restores totalMinted")
+                    .isEqualTo(f.chain.getTotalMinted());
+        }
+    }
+
+    @Test
+    @DisplayName("HC-024: a REJECTED block must leave no receipts / tx-index entries behind")
+    void hc024_rejectedBlockPersistsReceipts() throws Exception {
+        try (LedgerPoCFixture f = new LedgerPoCFixture()) {
+            TestKeyPair sender = new TestKeyPair(7713);
+            f.commitAndApply(f.build(List.of(mintN(sender.getAddress(), f.scheduledReward(), 0)), 0));
+            Transaction t = LedgerPoCFixture.transfer(sender, new TestKeyPair(7714).getAddress(), 10, 1, 1);
+            com.hybrid.blockchain.Block good = f.build(List.of(t), 0);
+            com.hybrid.blockchain.Block bad = new com.hybrid.blockchain.Block(good.getIndex(), good.getTimestamp(),
+                    good.getTransactions(), good.getPrevHash(), good.getDifficulty(), "ab".repeat(32)); // wrong root
+            bad.setValidatorId(good.getValidatorId());
+            bad.setSignature(Crypto.sign(Crypto.hash(bad.serializeCanonical()),
+                    LedgerPoCFixture.VALIDATORS[0].getPrivateKey()));
+            String err = null;
+            try { f.commitAndApply(bad); } catch (Exception e) { err = e.getMessage(); }
+            com.hybrid.blockchain.TransactionReceipt rc = f.storage.loadReceipt(t.getId());
+            System.out.printf("[HC-024] block rejected=%s (%s); receipt=%s status=%s blockHash=%s; tip height=%d%n",
+                    err != null, err, rc != null, rc == null ? null : rc.getStatus(),
+                    rc == null ? null : rc.getBlockHash(), f.chain.getHeight());
+            assertThat(err).isNotNull();
+            assertThat(rc).as("HC-024: a SUCCESS receipt exists for a tx whose block was rejected").isNull();
+        }
+    }
+
+    @Test
+    @DisplayName("HC-024b: a REJECTED block must not register tokens (token-id squatting)")
+    void hc024b_rejectedBlockRegistersToken() throws Exception {
+        try (LedgerPoCFixture f = new LedgerPoCFixture()) {
+            TestKeyPair squatter = new TestKeyPair(7723);
+            f.commitAndApply(f.build(List.of(mintN(squatter.getAddress(), f.scheduledReward(), 0)), 0));
+            Transaction reg = com.hybrid.blockchain.testutil.TestTransactionFactory
+                    .createTokenRegister(squatter, "USDX", "US Dollar X", "USDX", 1_000_000, 1, 1);
+            com.hybrid.blockchain.Block good = f.build(List.of(reg), 0);
+            com.hybrid.blockchain.Block bad = new com.hybrid.blockchain.Block(good.getIndex(), good.getTimestamp(),
+                    good.getTransactions(), good.getPrevHash(), good.getDifficulty(), "cd".repeat(32));
+            bad.setValidatorId(good.getValidatorId());
+            bad.setSignature(Crypto.sign(Crypto.hash(bad.serializeCanonical()),
+                    LedgerPoCFixture.VALIDATORS[0].getPrivateKey()));
+            String err = null;
+            try { f.commitAndApply(bad); } catch (Exception e) { err = e.getMessage(); }
+            boolean exists = f.chain.getTokenRegistry().tokenExists("USDX");
+            System.out.printf("[HC-024b] block rejected=%s; tip height=%d; token USDX registered=%s owner=%s%n",
+                    err != null, f.chain.getHeight(), exists,
+                    exists ? f.chain.getTokenRegistry().getTokenInfo("USDX").owner : null);
+            assertThat(err).isNotNull();
+            assertThat(exists).as("HC-024b: token registered by a block that was rejected").isFalse();
+        }
+    }
+
+    @Test
+    @DisplayName("HC-022: after fork resolution totalMinted must equal the MINTs on the canonical chain")
+    void hc022_revertTipLeavesTotalMintedStale() throws Exception {
+        try (LedgerPoCFixture f = new LedgerPoCFixture()) {
+            String to = new TestKeyPair(7708).getAddress();
+            f.commitAndApply(f.build(List.of(mintN(to, f.scheduledReward(), 0)), 0));
+            long r2 = f.scheduledReward();
+            long ts = f.chain.getLatestBlock().getTimestamp();
+            com.hybrid.blockchain.Block a = LedgerPoCFixture.build(f.chain, List.of(mintN(to, r2, 1)), 0, ts + 1);
+            com.hybrid.blockchain.Block b = LedgerPoCFixture.build(f.chain, List.of(mintN(to, r2, 2)), 0, ts + 2);
+            com.hybrid.blockchain.Block low = a.getHash().compareTo(b.getHash()) < 0 ? a : b;
+            com.hybrid.blockchain.Block high = low == a ? b : a;
+            long baseFeeAtParent = f.chain.getCurrentBaseFee();
+            // what a node that only ever saw `high` holds after applying it (1 tx in the block):
+            long expectedBaseFee = f.chain.getFeeMarket().calculateNextBaseFee(baseFeeAtParent, 1,
+                    com.hybrid.blockchain.Config.TARGET_GAS_PER_BLOCK);
+            f.commitAndApply(low);
+            f.commitAndApply(high);                    // same height, higher hash -> handleFork -> revertTip
+            System.out.printf("[HC-022] baseFee parent=%d, after fork on this node=%d, on a node that never forked=%d%n",
+                    baseFeeAtParent, f.chain.getCurrentBaseFee(), expectedBaseFee);
+            long stateSupply = LedgerPoCFixture.totalSupply(f.chain);
+            System.out.printf("[HC-022] tip=%s (expected %s) totalMinted=%d stateSupply=%d nextReward=%d%n",
+                    f.chain.getLatestBlock().getHash(), high.getHash(), f.chain.getTotalMinted(), stateSupply,
+                    f.scheduledReward());
+            assertThat(f.chain.getLatestBlock().getHash()).isEqualTo(high.getHash());
+            assertThat(f.chain.getTotalMinted()).as("HC-022: totalMinted still counts the reverted block's MINT; "
+                    + "this node's next scheduled reward differs from a node that never saw the fork")
+                    .isEqualTo(stateSupply);
+        }
+    }
+
+    @Test
+    @DisplayName("HC-022b: after fork resolution the consensus-critical baseFee must equal a non-forked node's")
+    void hc022b_revertTipLeavesBaseFeeStale() throws Exception {
+        try (LedgerPoCFixture f = new LedgerPoCFixture()) {
+            // Blocks above the fee-market target (TARGET_GAS_PER_BLOCK txs) move baseFee off its floor.
+            TestKeyPair s = new TestKeyPair(7725);
+            for (int m = 0; m < 45; m++) f.commitAndApply(f.build(List.of(mintN(s.getAddress(), f.scheduledReward(), m)), 0));
+            int n = com.hybrid.blockchain.Config.TARGET_GAS_PER_BLOCK + 1;
+            long fee = f.chain.getCurrentBaseFee() + 1;
+            List<Transaction> ta = new ArrayList<>(), tb = new ArrayList<>();
+            for (int k = 1; k <= n; k++) {
+                ta.add(LedgerPoCFixture.transfer(s, "sinkA", 0, fee, k));
+                tb.add(LedgerPoCFixture.transfer(s, "sinkB", 0, fee, k));
+            }
+            long ts = f.chain.getLatestBlock().getTimestamp();
+            com.hybrid.blockchain.Block a = LedgerPoCFixture.build(f.chain, ta, 0, ts + 1);
+            com.hybrid.blockchain.Block b = LedgerPoCFixture.build(f.chain, tb, 0, ts + 2);
+            com.hybrid.blockchain.Block low = a.getHash().compareTo(b.getHash()) < 0 ? a : b;
+            com.hybrid.blockchain.Block high = low == a ? b : a;
+            long parent = f.chain.getCurrentBaseFee();
+            long expected = f.chain.getFeeMarket().calculateNextBaseFee(parent, n,
+                    com.hybrid.blockchain.Config.TARGET_GAS_PER_BLOCK);
+            f.commitAndApply(low);
+            f.commitAndApply(high);
+            assertThat(f.chain.getLatestBlock().getHash()).isEqualTo(high.getHash());
+            System.out.printf("[HC-022b] baseFee parent=%d forkedNode=%d nonForkedNode=%d%n",
+                    parent, f.chain.getCurrentBaseFee(), expected);
+            assertThat(f.chain.getCurrentBaseFee()).as("HC-022b: baseFee advanced twice across the fork; "
+                    + "blocks with fee == baseFee are valid on one node and invalid on the other").isEqualTo(expected);
+        }
+    }
 }

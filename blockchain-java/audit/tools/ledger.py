@@ -140,6 +140,40 @@ def gate():
     return 0
 
 
+SHORT = {"CLEAN": "REVIEWED-CLEAN", "FINDING": "REVIEWED-FINDING", "DEAD": "DEAD-CODE", "NV": "NOT-VERIFIED"}
+
+
+def ingest(tsv_path):
+    """Resolve 'ID<TAB>STATUS<TAB>notes[<TAB>findings[<TAB>evidence]]' lines to stable keys.
+
+    IDs (M-xxxx / T-xxxx) are only valid for the CURRENT inventory, so they are converted
+    to keys immediately; the written audit/reviews/<name>.csv survives regeneration.
+    """
+    by_id = {i["id"]: i["key"] for i in items()}
+    out, bad = [], []
+    for n, line in enumerate(open(tsv_path, encoding="utf-8"), 1):
+        line = line.rstrip(chr(10))
+        if not line.strip() or line.startswith("#"):
+            continue
+        parts = line.split(chr(9))
+        while len(parts) < 5:
+            parts.append("")
+        rid, st, notes, findings, evidence = (x.strip() for x in parts[:5])
+        if rid not in by_id:
+            bad.append(f"line {n}: unknown id {rid}"); continue
+        out.append({"key": by_id[rid], "status": SHORT.get(st, st), "notes": notes,
+                    "findings": findings, "evidence": evidence})
+    name = os.path.splitext(os.path.basename(tsv_path))[0]
+    dest = f"audit/reviews/{name}.csv"
+    with open(dest, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["key", "status", "notes", "findings", "evidence"])
+        w.writeheader(); w.writerows(out)
+    print(f"ingested {len(out)} rows -> {dest}" + (f"; {len(bad)} errors" if bad else ""))
+    for b in bad:
+        print("  ", b)
+    return 1 if bad else 0
+
+
 def todo(pattern):
     rows, _, _ = build()
     rx = re.compile(pattern)
@@ -154,6 +188,8 @@ if __name__ == "__main__":
         rows, inv, orph = build(); print(f"built {len(rows)} rows, {len(inv)} invalid, {len(orph)} orphaned")
     elif cmd == "gate":
         sys.exit(gate())
+    elif cmd == "ingest":
+        sys.exit(ingest(sys.argv[2]))
     elif cmd == "todo":
         todo(sys.argv[2] if len(sys.argv) > 2 else ".")
     else:
