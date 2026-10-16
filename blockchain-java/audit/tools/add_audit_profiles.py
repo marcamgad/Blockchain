@@ -138,6 +138,8 @@ PROFILES = """
                             <showWarnings>true</showWarnings>
                             <compilerArgs>
                                 <arg>-XDcompilePolicy=simple</arg>
+                                <arg>-Xmaxwarns</arg>
+                                <arg>100000</arg>
                                 <arg>-Xplugin:ErrorProne -XepDisableWarningsInGeneratedCode -XepAllErrorsAsWarnings</arg>
                                 <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED</arg>
                                 <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED</arg>
