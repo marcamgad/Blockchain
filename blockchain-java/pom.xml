@@ -13,6 +13,9 @@
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- Audit PoC tests (docs/audit) FAIL by design until each finding is fixed. Excluded from
+             the default build; run with: mvn -o test -Dtest=HybridChainAuditPoCTest -Daudit.excluded=none -->
+        <audit.excluded>audit-poc</audit.excluded>
     </properties>
 
     <dependencies>
@@ -292,6 +295,7 @@
                         <include>**/*Test.java</include>
                         <include>**/*Tests.java</include>
                     </includes>
+                    <excludedGroups>${audit.excluded}</excludedGroups>
                     <excludes>
                         <exclude>**/NetworkHardeningScanner.java</exclude>
                         <exclude>**/SeedCheck.java</exclude>
