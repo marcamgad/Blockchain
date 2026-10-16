@@ -768,4 +768,56 @@ public class HybridChainAuditPoCTest {
                     + "blocks with fee == baseFee are valid on one node and invalid on the other").isEqualTo(expected);
         }
     }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // BATCH 2 — CRYPTO / ZK / STORAGE
+    // ═════════════════════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("HC-040: an ownership-transfer signature must bind the NEW owner")
+    void hc040_rawMessageSigningCoversOnly32Bytes() {
+        TestKeyPair owner = new TestKeyPair(7801);
+        com.hybrid.blockchain.identity.SSIManager ssi = new com.hybrid.blockchain.identity.SSIManager();
+        String did = ssi.registerDID("thermostat-0001", owner.getPublicKey(), owner.getAddress());
+        // The owner signs exactly the message SSIManager.transferOwnership verifies.
+        byte[] intended = ("transfer:" + did + ":" + "alice").getBytes(StandardCharsets.UTF_8);
+        byte[] sig = Crypto.sign(intended, owner.getPrivateKey());
+        byte[] altered = ("transfer:" + did + ":" + "mallory").getBytes(StandardCharsets.UTF_8);
+        boolean reusable = Crypto.verify(altered, sig, owner.getPublicKey());
+        String err = null;
+        try { ssi.transferOwnership(did, "mallory", sig); } catch (Exception e) { err = e.getMessage(); }
+        System.out.printf("[HC-040] message length=%d bytes; signature for 'alice' verifies for 'mallory'=%s; "
+                + "transferOwnership(did,'mallory',sig) -> %s%n", intended.length, reusable, err == null ? "ACCEPTED" : err);
+        assertThat(reusable).as("HC-040: Crypto.sign/verify use only the first 32 bytes of an unhashed message")
+                .isFalse();
+    }
+
+    @Test
+    @DisplayName("HC-041: an encrypted value must not decrypt successfully under a different storage key")
+    void hc041_storageCiphertextNotBoundToKey() throws Exception {
+        java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("audit-storage-");
+        com.hybrid.blockchain.Storage st = new com.hybrid.blockchain.Storage(dir.toString(),
+                com.hybrid.blockchain.HexUtils.decode("00112233445566778899001122334455"));
+        try {
+            st.putMeta("totalMinted", 1_000L);
+            st.putMeta("baseFee", 999_999L);
+            java.lang.reflect.Field f = com.hybrid.blockchain.Storage.class.getDeclaredField("db");
+            f.setAccessible(true);
+            org.iq80.leveldb.DB db = (org.iq80.leveldb.DB) f.get(st);
+            byte[] fromKey = "meta:baseFee".getBytes(StandardCharsets.UTF_8);
+            byte[] toKey = "meta:totalMinted".getBytes(StandardCharsets.UTF_8);
+            db.put(toKey, db.get(fromKey));     // offline copy of one record over another, no key material used
+            st.close();
+            com.hybrid.blockchain.Storage reopened = new com.hybrid.blockchain.Storage(dir.toString(),
+                    com.hybrid.blockchain.HexUtils.decode("00112233445566778899001122334455"));
+            Object v;
+            try { v = reopened.getMeta("totalMinted"); } finally { reopened.close(); }
+            boolean plaintextKeys = new String(fromKey, StandardCharsets.UTF_8).startsWith("meta:");
+            System.out.printf("[HC-041] after moving the 'meta:baseFee' record onto 'meta:totalMinted': totalMinted=%s "
+                    + "(no authentication error); keys stored in plaintext=%s%n", v, plaintextKeys);
+            assertThat(v).as("HC-041: AES-GCM record accepted under a different key (no AAD binding)").isNotEqualTo(999_999L);
+        } finally {
+            org.apache.commons.io.FileUtils.deleteDirectory(dir.toFile());
+        }
+    }
 }
