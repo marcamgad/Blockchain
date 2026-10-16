@@ -779,17 +779,19 @@ public class HybridChainAuditPoCTest {
         TestKeyPair owner = new TestKeyPair(7801);
         com.hybrid.blockchain.identity.SSIManager ssi = new com.hybrid.blockchain.identity.SSIManager();
         String did = ssi.registerDID("thermostat-0001", owner.getPublicKey(), owner.getAddress());
-        // The owner signs exactly the message SSIManager.transferOwnership verifies.
-        byte[] intended = ("transfer:" + did + ":" + "alice").getBytes(StandardCharsets.UTF_8);
-        byte[] sig = Crypto.sign(intended, owner.getPrivateKey());
-        byte[] altered = ("transfer:" + did + ":" + "mallory").getBytes(StandardCharsets.UTF_8);
-        boolean reusable = Crypto.verify(altered, sig, owner.getPublicKey());
+        // (1) The owner signs the transfer to alice exactly as a wallet would.
+        byte[] sig = Crypto.sign(com.hybrid.blockchain.identity.SSIManager.transferOwnershipDigest(did, "alice"),
+                owner.getPrivateKey());
         String err = null;
         try { ssi.transferOwnership(did, "mallory", sig); } catch (Exception e) { err = e.getMessage(); }
-        System.out.printf("[HC-040] message length=%d bytes; signature for 'alice' verifies for 'mallory'=%s; "
-                + "transferOwnership(did,'mallory',sig) -> %s%n", intended.length, reusable, err == null ? "ACCEPTED" : err);
-        assertThat(reusable).as("HC-040: Crypto.sign/verify use only the first 32 bytes of an unhashed message")
-                .isFalse();
+        // (2) A long message must never verify (truncation) — no API may sign/verify a non-digest.
+        byte[] longMsg = ("transfer:" + did + ":" + "alice").getBytes(StandardCharsets.UTF_8);
+        boolean longVerifies = Crypto.verify(longMsg, sig, owner.getPublicKey());
+        System.out.printf("[HC-040] alice-signature replayed for mallory -> %s; verify(%d-byte raw message)=%s%n",
+                err == null ? "ACCEPTED" : "rejected (" + err + ")", longMsg.length, longVerifies);
+        assertThat(err).as("HC-040: signature for 'alice' moved ownership to 'mallory'").isNotNull();
+        assertThat(ssi.resolveDID(did).getController()).isNotEqualTo("mallory");
+        assertThat(longVerifies).as("HC-040: a non-digest message verified").isFalse();
     }
 
     @Test
@@ -819,5 +821,20 @@ public class HybridChainAuditPoCTest {
         } finally {
             org.apache.commons.io.FileUtils.deleteDirectory(dir.toFile());
         }
+    }
+
+    @Test
+    @DisplayName("HC-042: a handshake signature must not be valid for the raw peer-chosen 32-byte value")
+    void hc042_handshakeIsNotASigningOracle() throws Exception {
+        TestKeyPair node = new TestKeyPair(7802);
+        // A peer-chosen "nonce" that happens to be a transaction signing digest.
+        byte[] chosen = Crypto.hash("TX  any 32-byte protocol digest".getBytes(StandardCharsets.UTF_8));
+        Method m = com.hybrid.blockchain.PeerNode.class.getDeclaredMethod("handshakeDigest", byte[].class, String.class, int.class);
+        m.setAccessible(true);
+        byte[] digest = (byte[]) m.invoke(null, chosen, node.getAddress(), com.hybrid.blockchain.Config.NETWORK_ID);
+        byte[] handshakeSig = Crypto.sign(digest, node.getPrivateKey());   // what the node now returns to the peer
+        boolean reusable = Crypto.verify(chosen, handshakeSig, node.getPublicKey());
+        System.out.printf("[HC-042] handshake signature valid for the peer-chosen digest itself = %s%n", reusable);
+        assertThat(reusable).as("HC-042: handshake acts as a signing oracle for 32-byte digests").isFalse();
     }
 }

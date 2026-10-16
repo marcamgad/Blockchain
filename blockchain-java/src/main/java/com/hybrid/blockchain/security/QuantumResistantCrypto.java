@@ -98,6 +98,11 @@ public class QuantumResistantCrypto {
             this.dilithiumSignature = dilithiumSignature;
         }
 
+        /** [HC-040] Digest the ECDSA half of a hybrid signature is computed over. */
+        static byte[] ecdsaDigest(byte[] message) {
+            return Crypto.hashWithDomain("HC-HYBRID-SIG-v1", message);
+        }
+
         /**
          * Create hybrid signature
          */
@@ -106,7 +111,9 @@ public class QuantumResistantCrypto {
                 java.math.BigInteger ecdsaPrivateKey,
                 PrivateKey dilithiumPrivateKey) throws Exception {
             // Classical ECDSA signature
-            byte[] ecdsaSig = Crypto.sign(message, ecdsaPrivateKey);
+            // [HC-040] ECDSA signs a domain-separated digest of the WHOLE message (Dilithium below
+            // signs the message itself); previously ECDSA silently covered only its first 32 bytes.
+            byte[] ecdsaSig = Crypto.sign(ecdsaDigest(message), ecdsaPrivateKey);
 
             // Quantum-resistant Dilithium signature
             byte[] dilithiumSig = signDilithium(message, dilithiumPrivateKey);
@@ -119,7 +126,7 @@ public class QuantumResistantCrypto {
          */
         public boolean verify(byte[] message, byte[] ecdsaPublicKey, PublicKey dilithiumPublicKey) throws Exception {
             // Verify ECDSA
-            boolean ecdsaValid = Crypto.verify(message, ecdsaSignature, ecdsaPublicKey);
+            boolean ecdsaValid = Crypto.verify(ecdsaDigest(message), ecdsaSignature, ecdsaPublicKey);
 
             // Verify Dilithium
             boolean dilithiumValid = verifyDilithium(message, dilithiumSignature, dilithiumPublicKey);

@@ -43,7 +43,8 @@ public class HardwareSecurityModule {
         // [SIMULATION ONLY] We use the wrapped key to perform the operation
         // In a real HSM, this BigInteger would never exist in JVM memory.
         BigInteger priv = unwrapKey();
-        byte[] sig = Crypto.sign(data, priv);
+        // [HC-040] sign a digest of the whole payload (ECDSA only covers 32 bytes of its input)
+        byte[] sig = Crypto.sign(signingDigest(data), priv);
         // Clear the stack immediately
         priv = BigInteger.ZERO; 
         
@@ -62,5 +63,10 @@ public class HardwareSecurityModule {
         // Logic to simulate internal unwrapping
         // In reality, this would be a JNI call to a native library.
         return new BigInteger(1, encryptedKey); // Simplified for simulation
+    }
+
+    /** [HC-040] The digest {@link #sign} actually signs; verifiers use the same function. */
+    public static byte[] signingDigest(byte[] data) {
+        return Crypto.hashWithDomain("HC-HSM-SIGN-v1", data);
     }
 }

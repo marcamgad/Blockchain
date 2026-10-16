@@ -40,7 +40,55 @@ public final class Crypto {
         }
     }
 
+    /** Length of the only input {@link #sign} and {@link #verify} accept: a SHA-256 digest. */
+    public static final int DIGEST_LENGTH = 32;
+
+    /**
+     * Domain-separated digest: SHA-256(domain || 0x00 || len(p1) || p1 || len(p2) || p2 ...).
+     *
+     * <p>[HC-040/HC-042] Every signed message in the system must be produced by this method (or
+     * by an equivalent, already domain-prefixed hash such as {@code Transaction.signingPayload}).
+     * The domain tag stops a signature made for one purpose from verifying for another, and the
+     * length prefixes stop two different field lists from encoding to the same bytes.
+     */
+    public static byte[] hashWithDomain(String domain, byte[]... parts) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            digest.update(domain.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            digest.update((byte) 0);
+            for (byte[] p : parts) {
+                byte[] part = p == null ? new byte[0] : p;
+                digest.update(java.nio.ByteBuffer.allocate(4).putInt(part.length).array());
+                digest.update(part);
+            }
+            return digest.digest();
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException("SHA-256 not available", e);
+        }
+    }
+
+    /** UTF-8 convenience overload of {@link #hashWithDomain(String, byte[]...)}. */
+    public static byte[] hashWithDomain(String domain, String... parts) {
+        byte[][] bytes = new byte[parts.length][];
+        for (int i = 0; i < parts.length; i++) {
+            bytes[i] = parts[i] == null ? new byte[0] : parts[i].getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        }
+        return hashWithDomain(domain, bytes);
+    }
+
+    /**
+     * Signs a 32-byte digest.
+     *
+     * <p>[HC-040] ECDSA consumes only the leftmost 256 bits of its input, so passing a longer
+     * message silently signed just its first 32 bytes. The input must now be exactly a digest;
+     * anything else is a programming error and is rejected.
+     */
     public static byte[] sign(byte[] message, BigInteger privateKey) {
+        if (message == null || message.length != DIGEST_LENGTH) {
+            throw new IllegalArgumentException("Crypto.sign expects a " + DIGEST_LENGTH
+                    + "-byte digest, got " + (message == null ? "null" : message.length + " bytes")
+                    + "; hash the message first (Crypto.hashWithDomain)");
+        }
         ECDSASigner signer = new ECDSASigner(new HMacDSAKCalculator(new SHA256Digest()));
         ECPrivateKeyParameters privKey = new ECPrivateKeyParameters(privateKey, CURVE);
         signer.init(true, privKey);
@@ -67,6 +115,10 @@ public final class Crypto {
 
     public static boolean verify(byte[] message, byte[] signature, byte[] pubKey) {
         if (signature == null || pubKey == null || signature.length != 64)
+            return false;
+        // [HC-040] Only a 32-byte digest is a well-defined ECDSA input; a longer message would be
+        // truncated to its first 32 bytes and verify for every message sharing that prefix.
+        if (message == null || message.length != DIGEST_LENGTH)
             return false;
 
         try {

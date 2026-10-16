@@ -27,7 +27,7 @@ public class DIDDelegationTest {
     @Test
     @DisplayName("DEL.1: Should authorize delegate with master signature")
     void testDelegation() {
-        byte[] msg = ("delegate:" + masterDid + ":" + delegateDid).getBytes();
+        byte[] msg = SSIManager.delegationDigest(masterDid, delegateDid);
         byte[] sig = Crypto.sign(msg, masterKey);
         
         ssi.addDelegate(masterDid, delegateDid, sig);
@@ -39,7 +39,7 @@ public class DIDDelegationTest {
     @Test
     @DisplayName("DEL.2: Should reject delegation with invalid signature")
     void testInvalidDelegation() {
-        byte[] msg = ("delegate:" + masterDid + ":" + delegateDid).getBytes();
+        byte[] msg = SSIManager.delegationDigest(masterDid, delegateDid);
         byte[] invalidSig = Crypto.sign(msg, BigInteger.valueOf(9999));
         
         assertThatThrownBy(() -> ssi.addDelegate(masterDid, delegateDid, invalidSig))

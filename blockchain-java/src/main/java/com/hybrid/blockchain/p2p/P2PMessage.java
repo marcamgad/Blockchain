@@ -75,12 +75,23 @@ public class P2PMessage {
     }
 
     public static P2PMessage create(String senderId, java.math.BigInteger privateKey, Type type, byte[] payload) {
-        byte[] sig = Crypto.sign(payload, privateKey);
+        byte[] sig = Crypto.sign(signingDigest(senderId, type, payload), privateKey);   // [HC-040]
         return new P2PMessage(senderId, type, payload, sig);
     }
 
     public boolean verify(byte[] publicKey) {
-        return Crypto.verify(payload, signature, publicKey);
+        return Crypto.verify(signingDigest(senderId, type, payload), signature, publicKey);   // [HC-040]
+    }
+
+    /**
+     * [HC-040] The message signature covers sender, type and the WHOLE payload. Previously the raw
+     * payload was handed to ECDSA, which signs only its first 32 bytes.
+     */
+    static byte[] signingDigest(String senderId, Type type, byte[] payload) {
+        return Crypto.hashWithDomain("HC-P2P-MSG-v1",
+                senderId == null ? new byte[0] : senderId.getBytes(StandardCharsets.UTF_8),
+                type.name().getBytes(StandardCharsets.UTF_8),
+                payload);
     }
 
     // Getters

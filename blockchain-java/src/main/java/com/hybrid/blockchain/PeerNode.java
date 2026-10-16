@@ -65,7 +65,23 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
         REQUEST_BLOCKS, BLOCKS_RESPONSE, CHECKPOINT
     }
 
-    private static final int PROTOCOL_VERSION = 1;
+    // [HC-042] v2: handshake signatures are domain-separated (see handshakeDigest).
+    private static final int PROTOCOL_VERSION = 2;
+
+    /**
+     * [HC-042] Digest a node signs to prove key possession during the handshake.
+     *
+     * <p>Previously the node signed the peer-chosen 32-byte nonce directly with its consensus key.
+     * Because transaction payloads and block hashes are also 32-byte digests, a peer could send one
+     * of those as its "nonce" and receive a valid transaction or block signature. The domain tag
+     * makes a handshake signature unusable for anything else, and binding both identities and the
+     * network id stops it being relayed to a third party.
+     */
+    static byte[] handshakeDigest(byte[] nonce, String signerAddress, int networkId) {
+        return Crypto.hashWithDomain("HC-P2P-HANDSHAKE-v2", nonce,
+                signerAddress.getBytes(StandardCharsets.UTF_8),
+                java.nio.ByteBuffer.allocate(4).putInt(networkId).array());
+    }
 
     public PeerNode(int port, Blockchain blockchain, Consensus consensus) {
         this(port, blockchain, consensus, Config.getNodePrivateKey(), new ArrayList<>());
@@ -624,7 +640,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
         in.readFully(remoteNonce);
 
         sendHello(out, localNonce);
-        sendChallenge(out, localPubKey, Crypto.sign(remoteNonce, privateKey));
+        sendChallenge(out, localPubKey, Crypto.sign(handshakeDigest(remoteNonce, localAddress, Config.NETWORK_ID), privateKey));
 
         if (in.readInt() != MsgType.CHALLENGE.ordinal())
             throw new IOException("Expected CHALLENGE");
@@ -634,7 +650,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
         byte[] remoteSig = new byte[challengeLen - 33];
         in.readFully(remoteSig);
 
-        if (!Crypto.verify(localNonce, remoteSig, remotePubKey))
+        if (!Crypto.verify(handshakeDigest(localNonce, Crypto.deriveAddress(remotePubKey), Config.NETWORK_ID), remoteSig, remotePubKey))
             throw new IOException("Identity verification failed");
 
         out.writeInt(MsgType.HANDSHAKE_OK.ordinal());
@@ -663,10 +679,10 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
         byte[] remoteSig = new byte[challengeLen - 33];
         in.readFully(remoteSig);
 
-        if (!Crypto.verify(localNonce, remoteSig, remotePubKey))
+        if (!Crypto.verify(handshakeDigest(localNonce, Crypto.deriveAddress(remotePubKey), Config.NETWORK_ID), remoteSig, remotePubKey))
             throw new IOException("Identity verification failed");
 
-        sendChallenge(out, localPubKey, Crypto.sign(remoteNonce, privateKey));
+        sendChallenge(out, localPubKey, Crypto.sign(handshakeDigest(remoteNonce, localAddress, Config.NETWORK_ID), privateKey));
 
         if (in.readInt() != MsgType.HANDSHAKE_OK.ordinal())
             throw new IOException("Peer rejected handshake");
