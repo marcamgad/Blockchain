@@ -439,7 +439,7 @@ public class HybridChainAuditPoCTest {
     void hc019_localSlashingDivergesStateRoot() throws Exception {
         try (LedgerPoCFixture f = new LedgerPoCFixture()) {
             TestKeyPair v2 = LedgerPoCFixture.VALIDATORS[1];
-            f.commitAndApply(f.build(List.of(mintN(v2.getAddress(), f.scheduledReward(), 0)), 0));
+            f.fund(v2.getAddress());
             // Block 2 as built (and validated) by every node that did NOT see v2 equivocate.
             com.hybrid.blockchain.Block b2 = f.build(List.of(), 0);
             // This node alone receives two conflicting PREPAREs from v2 for some sequence.

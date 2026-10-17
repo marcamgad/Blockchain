@@ -835,23 +835,12 @@ public class Blockchain {
             state.credit(validator.getId(), totalFees);
         }
 
-        // Slashing: Penalize Byzantine validators
-        for (String slashedId : consensus.getSlashedValidators()) {
-            try {
-                // [PHASE-0] FIX-7: Exponential slashing model
-                int offenseCount = consensus.getSlashCount(slashedId);
-                double rate = Math.min(1.0, 0.10 * Math.pow(3, offenseCount));
-                long penalty = (long)(state.getBalance(slashedId) * rate);
-                
-                if (penalty > 0) {
-                    state.debit(slashedId, penalty);
-                    log.warn("[BLOCKCHAIN] SLASHED validator {}: burned {} tokens", slashedId, penalty);
-                }
-                consensus.clearSlashedValidator(slashedId);
-            } catch (Exception e) {
-                log.error("[ERROR] Failed to slash validator {}: {}", slashedId, e.getMessage());
-            }
-        }
+        // [HC-019] No slashing inside the state transition. The previous loop debited validators
+        // listed in consensus.getSlashedValidators() — evidence only THIS node had observed — so
+        // a node that saw an equivocation computed a different state root from every node that
+        // did not, and rejected blocks the rest of the network committed. Equivocation is still
+        // detected and logged by the consensus engine; economic slashing must come back as an
+        // on-chain evidence transaction that every node applies identically.
 
         // Finality Check: Commit deferred actions for blocks that reached 6
         // confirmations (chain size >= 7 means block at index 0 has 6 confirmations)
