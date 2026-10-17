@@ -274,11 +274,12 @@ public class HybridChainAuditPoCTest {
         java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
         java.io.DataOutputStream d = new java.io.DataOutputStream(bos);
         d.writeInt(0);                                   // MsgType.HELLO.ordinal()
-        d.writeInt(40);                                  // len (discarded by the node)
+        d.writeInt(44);                                  // HELLO length (version, network, rule flags, nonce)
         java.lang.reflect.Field pv = com.hybrid.blockchain.PeerNode.class.getDeclaredField("PROTOCOL_VERSION");
         pv.setAccessible(true);
         d.writeInt(pv.getInt(null));                     // current PROTOCOL_VERSION (2 since HC-042)
         d.writeInt(com.hybrid.blockchain.Config.NETWORK_ID);
+        d.writeInt(com.hybrid.blockchain.Config.REQUIRE_QUANTUM_SIG ? 1 : 0);   // rule flags (HC-008)
         d.write(new byte[32]);                           // remote nonce
         d.writeInt(1);                                   // MsgType.CHALLENGE.ordinal()
         d.writeInt(challengeLen);                        // attacker-controlled length

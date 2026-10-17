@@ -83,6 +83,24 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
 
     // [HC-042] v2: handshake signatures are domain-separated (see handshakeDigest).
     private static final int PROTOCOL_VERSION = 2;
+    /** HELLO body: version (4) + network id (4) + rule flags (4) + nonce (32). */
+    private static final int HELLO_LENGTH = 4 + 4 + 4 + 32;
+
+    /**
+     * [HC-008] Consensus-rule flags a node must agree on with its peers. REQUIRE_QUANTUM_SIG is read
+     * per node from the environment and changes which transactions are valid; two nodes configured
+     * differently would fork on the first EC-only transaction. Now they refuse to connect instead.
+     */
+    static int ruleFlags() {
+        return Config.REQUIRE_QUANTUM_SIG ? 1 : 0;
+    }
+
+    private static void checkRuleFlags(int remote) throws IOException {
+        if (remote != ruleFlags())
+            throw new IOException("Consensus rule mismatch (REQUIRE_QUANTUM_SIG local=" + Config.REQUIRE_QUANTUM_SIG
+                    + ", remote=" + ((remote & 1) == 1) + ")");
+    }
+
     /** [HC-007] fixed CHALLENGE payload size: compressed secp256k1 key (33) + signature (64). */
     private static final int CHALLENGE_LENGTH = 33 + 64;
 
@@ -677,9 +695,11 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
     private String performInboundHandshake(DataInputStream in, DataOutputStream out, byte[] localNonce) throws Exception {
         if (in.readInt() != MsgType.HELLO.ordinal())
             throw new IOException("Expected HELLO");
-        in.readInt(); // discard len
+        if (in.readInt() != HELLO_LENGTH)
+            throw new IOException("Bad HELLO length");
         if (in.readInt() != PROTOCOL_VERSION || in.readInt() != Config.NETWORK_ID)
             throw new IOException("Mismatch");
+        checkRuleFlags(in.readInt());
         byte[] remoteNonce = new byte[32];
         in.readFully(remoteNonce);
 
@@ -713,9 +733,11 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
 
         if (in.readInt() != MsgType.HELLO.ordinal())
             throw new IOException("Expected HELLO");
-        in.readInt();
+        if (in.readInt() != HELLO_LENGTH)
+            throw new IOException("Bad HELLO length");
         if (in.readInt() != PROTOCOL_VERSION || in.readInt() != Config.NETWORK_ID)
             throw new IOException("Mismatch");
+        checkRuleFlags(in.readInt());
         byte[] remoteNonce = new byte[32];
         in.readFully(remoteNonce);
 
@@ -744,9 +766,10 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
 
     private void sendHello(DataOutputStream out, byte[] nonce) throws IOException {
         out.writeInt(MsgType.HELLO.ordinal());
-        out.writeInt(40);
+        out.writeInt(HELLO_LENGTH);
         out.writeInt(PROTOCOL_VERSION);
         out.writeInt(Config.NETWORK_ID);
+        out.writeInt(ruleFlags());   // [HC-008]
         out.write(nonce);
         out.flush();
     }

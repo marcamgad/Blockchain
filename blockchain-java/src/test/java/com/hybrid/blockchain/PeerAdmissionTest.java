@@ -43,6 +43,18 @@ class PeerAdmissionTest {
     }
 
     @Test
+    @DisplayName("HC-008: a peer with different consensus-rule flags is refused at HELLO")
+    void ruleFlagMismatchRefused() throws Exception {
+        java.lang.reflect.Method check = PeerNode.class.getDeclaredMethod("checkRuleFlags", int.class);
+        check.setAccessible(true);
+        check.invoke(null, PeerNode.ruleFlags());                       // same rules: accepted
+        Throwable t = null;
+        try { check.invoke(null, PeerNode.ruleFlags() ^ 1); }           // REQUIRE_QUANTUM_SIG differs
+        catch (java.lang.reflect.InvocationTargetException e) { t = e.getCause(); }
+        assertThat(t).isInstanceOf(java.io.IOException.class).hasMessageContaining("REQUIRE_QUANTUM_SIG");
+    }
+
+    @Test
     @DisplayName("HC-012: a peer that connects and sends nothing is dropped after the handshake timeout")
     void silentPeerIsDropped() throws Exception {
         TestKeyPair a = new TestKeyPair(5201), b = new TestKeyPair(5202), c = new TestKeyPair(5203), d = new TestKeyPair(5204);
