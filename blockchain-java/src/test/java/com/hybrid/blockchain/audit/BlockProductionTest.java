@@ -41,6 +41,33 @@ class BlockProductionTest {
         }
     }
 
+    /** [HC-021] signed competitor that fails full validation must leave the original tip in place. */
+    @Test
+    void invalidForkCandidateRestoresTip() throws Exception {
+        try (LedgerPoCFixture f = new LedgerPoCFixture()) {
+            String v0 = LedgerPoCFixture.VALIDATORS[0].getAddress();
+            f.commitAndApply(f.build(java.util.List.of(LedgerPoCFixture.mint(v0, f.scheduledReward())), 0));
+            Block good = f.build(java.util.List.of(), 0);
+            f.commitAndApply(good);
+            String rootBefore = f.chain.getState().calculateStateRoot();
+            // same parent, valid signature, WRONG state root, and a hash that sorts above the tip
+            Block bad = null;
+            for (long ts = good.getTimestamp() + 1; bad == null; ts++) {
+                Block c = new Block(good.getIndex(), ts, new java.util.ArrayList<>(), good.getPrevHash(),
+                        good.getDifficulty(), "ab".repeat(32));
+                if (c.getHash().compareTo(good.getHash()) > 0) bad = c;
+            }
+            bad.setValidatorId(v0);
+            bad.setSignature(Crypto.sign(Crypto.hash(bad.serializeCanonical()), LedgerPoCFixture.VALIDATORS[0].getPrivateKey()));
+            f.consensus.markCommitted(bad.getHash(), bad.getIndex(), v0);
+            Block badFinal = bad;
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> f.chain.applyBlock(badFinal))
+                    .hasMessageContaining("Invalid state root");
+            assertThat(f.chain.getLatestBlock().getHash()).isEqualTo(good.getHash());
+            assertThat(f.chain.getState().calculateStateRoot()).isEqualTo(rootBefore);
+        }
+    }
+
     @Test
     void producerSkipsTransferThatOverspendsCumulatively() throws Exception {
         try (LedgerPoCFixture f = new LedgerPoCFixture()) {

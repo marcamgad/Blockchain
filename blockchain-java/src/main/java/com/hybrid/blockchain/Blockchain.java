@@ -656,11 +656,33 @@ public class Blockchain {
         // stateRoot, timestamp), all of which are committed in the hash. Validator-ID hashing
         // (the previous approach) was biased toward specific validator identities.
         if (block.getHash().compareTo(tip.getHash()) > 0) {
+            // [HC-021] Check the competitor BEFORE touching the tip. Previously the tip was reverted
+            // first and the competitor validated afterwards, so any block carrying a large hash
+            // string (even unsigned, from an unknown validator) undid the committed tip.
+            if (!block.getHash().equals(block.calculateHash()))
+                throw new BlockValidationException("Fork candidate hash mismatch", block.getHash(), block.getIndex());
+            if (!tip.getPrevHash().equals(block.getPrevHash()))
+                throw new BlockValidationException("Fork candidate does not share the tip's parent", block.getHash(), block.getIndex());
+            if (block.getValidatorId() == null || !consensus.isValidator(block.getValidatorId()))
+                throw new BlockValidationException("Fork candidate from unknown validator", block.getHash(), block.getIndex());
+            Validator proposer = consensus.getValidators().stream()
+                    .filter(v -> v.getId().equals(block.getValidatorId())).findFirst()
+                    .orElseThrow(() -> new BlockValidationException("Fork candidate validator not found", block.getHash(), block.getIndex()));
+            if (block.getSignature() == null || !consensus.verifyBlock(block, proposer))
+                throw new BlockValidationException("Fork candidate signature invalid", block.getHash(), block.getIndex());
+
             log.info("[FORK] Block {} wins fork at height {} (lexicographically higher hash)", block.getHash(), block.getIndex());
             // Capture losing tip transactions BEFORE reverting, so we can return them to mempool
             List<Transaction> evictedTxs = new ArrayList<>(tip.getTransactions());
             revertTip();
-            applyBlockInternal(block, getLatestBlock());
+            try {
+                applyBlockInternal(block, getLatestBlock());
+            } catch (Exception e) {
+                // [HC-021] the competitor failed full validation: put the previous tip back
+                log.warn("[FORK] Candidate {} rejected after revert ({}); restoring tip {}", block.getHash(), e.getMessage(), tip.getHash());
+                applyBlockInternal(tip, getLatestBlock());
+                throw e;
+            }
             // Return all non-MINT losing transactions to the mempool
             for (Transaction evicted : evictedTxs) {
                 if (evicted.getType() != Transaction.Type.MINT) {
