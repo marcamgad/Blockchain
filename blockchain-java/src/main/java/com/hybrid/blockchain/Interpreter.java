@@ -292,13 +292,19 @@ public class Interpreter {
                     stack.push(gtA > gtB ? 1L : 0L);
                     break;
 
-                case AND:
-                    stack.push(stack.pop() & stack.pop());
+                case AND: {
+                    long andB = stack.pop();   // named operands, like LT/GT (Error Prone IdentityBinaryExpression)
+                    long andA = stack.pop();
+                    stack.push(andA & andB);
                     break;
+                }
 
-                case OR:
-                    stack.push(stack.pop() | stack.pop());
+                case OR: {
+                    long orB = stack.pop();
+                    long orA = stack.pop();
+                    stack.push(orA | orB);
                     break;
+                }
 
                 case NOT:
                     stack.push(~stack.pop());
