@@ -20,6 +20,28 @@
         <pit.name>default</pit.name>
     </properties>
 
+    <!-- Security patch pins (audit Ops/Deps, OSV): Spring Boot 3.2.1 ships Tomcat 10.1.17, which has
+         7 CRITICAL / 16 HIGH advisories. 10.1.44 is the same Servlet 6.0 line (drop-in). -->
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.apache.tomcat.embed</groupId>
+                <artifactId>tomcat-embed-core</artifactId>
+                <version>10.1.44</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.tomcat.embed</groupId>
+                <artifactId>tomcat-embed-websocket</artifactId>
+                <version>10.1.44</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.tomcat.embed</groupId>
+                <artifactId>tomcat-embed-el</artifactId>
+                <version>10.1.44</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
     <dependencies>
 
         <!-- ========================================================= -->
