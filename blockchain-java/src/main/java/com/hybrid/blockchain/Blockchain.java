@@ -253,26 +253,37 @@ public class Blockchain {
             throw new Exception("Transaction expired");
 
         switch (tx.getType()) {
-            case UTXO:
-                if (tx.getInputs() == null || tx.getOutputs() == null)
+            case UTXO: {
+                // [HC-018] A UTXO spend must be signed, every input must belong to the signer and
+                // appear once, and every output must be positive. Before, an unsigned tx with no
+                // inputs and outputs [-X, +X] passed "0 >= 0" and created X from nothing.
+                if (tx.getFrom() == null || !tx.verify())
+                    throw new Exception("UTXO transaction must be signed by the owner of its inputs");
+                if (tx.getInputs() == null || tx.getInputs().isEmpty()
+                        || tx.getOutputs() == null || tx.getOutputs().isEmpty())
                     throw new Exception("UTXO transaction missing inputs/outputs");
+                java.util.Set<String> seenInputs = new java.util.HashSet<>();
                 long totalInput = 0;
                 for (UTXOInput inp : tx.getInputs()) {
+                    String key = inp.getTxid() + ":" + inp.getIndex();
+                    if (!seenInputs.add(key))
+                        throw new Exception("Duplicate UTXO input " + key);
                     if (!utxo.isUnspent(inp.getTxid(), inp.getIndex()))
                         throw new Exception("UTXO input not available");
-                    long inputAmount = utxo.getAmount(inp.getTxid(), inp.getIndex());
-                    if (inputAmount < 0) {
-                        throw new Exception("UTXO input amount unavailable");
-                    }
-                    totalInput += inputAmount;
+                    if (!tx.getFrom().equals(utxo.getOwner(inp.getTxid(), inp.getIndex())))
+                        throw new Exception("UTXO input " + key + " is not owned by the signer");
+                    totalInput = Math.addExact(totalInput, utxo.getAmount(inp.getTxid(), inp.getIndex()));
                 }
                 long totalOutput = 0;
                 for (UTXOOutput out : tx.getOutputs()) {
-                    totalOutput += out.getAmount();
+                    if (out.getAmount() <= 0 || out.getAddress() == null || out.getAddress().isBlank())
+                        throw new Exception("UTXO outputs must be positive and addressed");
+                    totalOutput = Math.addExact(totalOutput, out.getAmount());
                 }
-                if (totalInput < (totalOutput + tx.getFee()))
+                if (totalInput < Math.addExact(totalOutput, tx.getFee()))
                     throw new Exception("Insufficient UTXO input sum");
                 break;
+            }
 
             case ACCOUNT:
                 if (tx.getFrom() == null)

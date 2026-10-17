@@ -42,8 +42,17 @@ public class UTXOSet {
     }
 
     public void addOutput(String txid, int index, String address, long amount) {
+        // [HC-018] a UTXO is always a positive amount and is created exactly once
+        if (amount <= 0) throw new IllegalArgumentException("UTXO amount must be positive, got " + amount);
         String key = txid + ":" + index;
+        if (map.containsKey(key)) throw new IllegalStateException("UTXO already exists: " + key);
         map.put(key, new UTXO(address, amount));
+    }
+
+    /** [HC-018] Owner address of an unspent output, or null if it does not exist. */
+    public String getOwner(String txid, int index) {
+        UTXO u = map.get(txid + ":" + index);
+        return u == null ? null : u.getAddress();
     }
 
     /** Overload for UTXOSetCompleteTest compat. */
