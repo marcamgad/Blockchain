@@ -188,6 +188,17 @@ public class Storage implements AutoCloseable {
         return get("block:" + hash, Block.class);
     }
 
+    /**
+     * [HC-031] Deletes a block body under the key it is actually stored under (plus the legacy
+     * "block:"+hash key). PrunedBlockchain used to delete only "block:"+hash, which never matched
+     * blockStorageKey(hash), so pruning freed nothing.
+     */
+    public void deleteBlock(String hash) {
+        if (hash == null) return;
+        del(blockStorageKey(hash));
+        del("block:" + hash);
+    }
+
     public Block loadBlockByHeight(int height) {
         String hash = get("height:" + height, String.class);
         return hash != null ? loadBlockByHash(hash) : null;

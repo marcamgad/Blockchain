@@ -69,6 +69,11 @@ public final class Config {
      * environment — a per-node value would give each node its own chain.
      */
     public static final long GENESIS_TIMESTAMP = 1_767_225_600_000L;
+    /**
+     * [HC-031] Number of most recent per-block state snapshots kept on disk. revertTip needs only
+     * the parent's; older ones were never deleted and grew storage by a full state copy per block.
+     */
+    public static final int SNAPSHOT_RETENTION = 16;
     public static final String PROTOCOL_VERSION = getEnv("PROTOCOL_VERSION", "1.0.0");
     public static final int MAX_FL_MODEL_BYTES = 10 * 1024 * 1024; // 10MB
     public static final int MIN_FL_CONTRIBUTORS = getIntEnv("MIN_FL_CONTRIBUTORS", 3);

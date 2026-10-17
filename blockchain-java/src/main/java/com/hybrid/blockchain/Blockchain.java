@@ -950,6 +950,9 @@ public class Blockchain {
         snapState.put(SNAP_TOTAL_MINTED, totalMinted);
         snapState.put(SNAP_BASE_FEE, nextBaseFee);
         storage.saveSnapshot((int)block.getIndex(), snapState, utxo.toJSON());
+        // [HC-031] bounded retention: drop the snapshot that just fell out of the window
+        long expired = block.getIndex() - Config.SNAPSHOT_RETENTION;
+        if (expired > 0) storage.del("snapshot:" + expired);
         
         pruneBlock(block);
         
