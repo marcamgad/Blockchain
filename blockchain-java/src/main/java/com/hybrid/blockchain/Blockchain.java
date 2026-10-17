@@ -317,7 +317,8 @@ public class Blockchain {
                     long expectedNonce = currentNonce + 1;
                     if (this.mempool != null) {
                         for (Transaction ptx : mempool.toArray()) {
-                            if (tx.getFrom().equals(ptx.getFrom())) {
+                            // [HC-025] a pending tx must not count itself
+                            if (tx.getFrom().equals(ptx.getFrom()) && !ptx.getId().equals(tx.getId())) {
                                 expectedNonce = Math.max(expectedNonce, ptx.getNonce() + 1);
                             }
                         }
@@ -1119,7 +1120,16 @@ public class Blockchain {
             int blockBytesUsed = 0;
             for (Transaction tx : candidateTxs) {
                 try {
-                    validateTransaction(tx);
+                    // [HC-025] Block semantics, not mempool semantics. validateTransaction(tx)
+                    // computed the expected nonce from the mempool, which contains this very tx, so
+                    // every pending ACCOUNT transfer failed with "expected n+1 got n" and was dropped.
+                    // Here the nonce must follow the evolving simulated state (so a sender's txs
+                    // n, n+1, ... chain within one block), and applying to the clone below catches
+                    // insufficient balance cumulatively.
+                    validateTransaction(tx, true);
+                    if (tx.getFrom() != null && tx.getType() != Transaction.Type.UTXO
+                            && tx.getNonce() != clonedState.getNonce(tx.getFrom()) + 1)
+                        throw new Exception("nonce " + tx.getNonce() + " is not next for " + tx.getFrom());
                     byte[] serializedTx = tx.serializeCanonical();
                     int txSize = serializedTx.length;
                     
