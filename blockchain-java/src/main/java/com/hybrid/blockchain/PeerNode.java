@@ -56,6 +56,25 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
     private final Map<Long, AtomicBoolean> sentCommits = new ConcurrentHashMap<>();
     private final Map<Integer, Checkpoint> pendingCheckpoints = new ConcurrentHashMap<>();
 
+    /** [HC-045] bounded list of discovered (unconnected) peers; never used as gossip targets */
+    static final int MAX_DISCOVERED_PEERS = 64;
+    private final Map<String, String> discoveredPeers = java.util.Collections.synchronizedMap(
+            new java.util.LinkedHashMap<String, String>(16, 0.75f, false) {
+                @Override protected boolean removeEldestEntry(Map.Entry<String, String> e) {
+                    return size() > MAX_DISCOVERED_PEERS;
+                }
+            });
+
+    void recordCandidate(String id, String address, int port) {
+        if (address == null || port <= 0 || port > 65535) return;
+        discoveredPeers.put(id, address + ":" + port);
+    }
+
+    /** Discovered peer candidates (id -> host:port), e.g. for an operator or a future dialer. */
+    public Map<String, String> getDiscoveredPeers() {
+        synchronized (discoveredPeers) { return new java.util.HashMap<>(discoveredPeers); }
+    }
+
     /** [HC-012] unauthenticated-phase bounds */
     static final int HANDSHAKE_TIMEOUT_MS = 10_000;
     static final int MAX_PENDING_HANDSHAKES = 16;
@@ -320,9 +339,13 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                 for (Map<String, Object> p : peerList) {
                     String id = (String) p.get("id");
                     String addr = (String) p.get("address");
-                    int port = (int) p.get("port");
-                    if (!id.equals(localAddress)) {
-                        peerManager.addPeer(id, addr, port);
+                    int port = ((Number) p.get("port")).intValue();
+                    // [HC-045] Discovered peers are only CANDIDATES. They used to be inserted into the
+                    // gossip peer table without any connection: they filled its 50 slots (so real
+                    // authenticated peers could no longer be added) and were picked as gossip
+                    // targets that silently dropped every message.
+                    if (id != null && !id.equals(localAddress)) {
+                        recordCandidate(id, addr, port);
                     }
                 }
             } catch (Exception e) {

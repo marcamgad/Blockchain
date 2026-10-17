@@ -43,6 +43,25 @@ class PeerAdmissionTest {
     }
 
     @Test
+    @DisplayName("HC-045: discovered peers are bounded candidates, never gossip targets")
+    void discoveryDoesNotPolluteGossipTable() throws Exception {
+        TestKeyPair a = new TestKeyPair(5301), b = new TestKeyPair(5302), c = new TestKeyPair(5303), d = new TestKeyPair(5304);
+        PBFTConsensus consensus = pbft(a, b, c, d);
+        try {
+            PeerNode node = new PeerNode(0, Mockito.mock(Blockchain.class), consensus, a.getPrivateKey());
+            java.util.List<Map<String, Object>> list = new java.util.ArrayList<>();
+            for (int i = 0; i < 100; i++) list.add(Map.of("id", "fake-" + i, "address", "10.9.0." + (i % 250), "port", 6001));
+            byte[] payload = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsBytes(list);
+            node.getGossipEngine().onMessageReceived(com.hybrid.blockchain.p2p.P2PMessage.create(
+                    b.getAddress(), b.getPrivateKey(), com.hybrid.blockchain.p2p.P2PMessage.Type.PEER_DISCOVERY, payload), b.getAddress());
+            assertThat(node.getPeerManager().getPeerCount()).as("gossip table untouched").isZero();
+            assertThat(node.getDiscoveredPeers()).hasSizeLessThanOrEqualTo(PeerNode.MAX_DISCOVERED_PEERS).isNotEmpty();
+        } finally {
+            consensus.shutdown();
+        }
+    }
+
+    @Test
     @DisplayName("HC-008: a peer with different consensus-rule flags is refused at HELLO")
     void ruleFlagMismatchRefused() throws Exception {
         java.lang.reflect.Method check = PeerNode.class.getDeclaredMethod("checkRuleFlags", int.class);
