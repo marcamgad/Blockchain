@@ -83,6 +83,35 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
 
     // [HC-042] v2: handshake signatures are domain-separated (see handshakeDigest).
     private static final int PROTOCOL_VERSION = 2;
+    /** [HC-043] A checkpoint matches our chain if we hold that block with that hash and state root. */
+    boolean matchesLocalChain(Checkpoint cp) {
+        Block local = blockchain.getStorage().loadBlockByHeight(cp.getBlockHeight());
+        return local != null && local.getHash().equals(cp.getBlockHash())
+                && local.getStateRoot() != null && local.getStateRoot().equals(cp.getStateRoot());
+    }
+
+    /**
+     * [HC-043] Adds to {@code pending} only the signatures in {@code incoming} that are by a known
+     * validator and verify over the SAME checkpoint content. Before, any signature map was merged
+     * unverified (and across different checkpoints of one height), so fabricated entries could
+     * "finalise" a checkpoint. Returns the number of signatures added.
+     */
+    int mergeVerifiedSignatures(Checkpoint pending, Checkpoint incoming) {
+        if (!pending.computeCheckpointHash().equals(incoming.computeCheckpointHash())) return 0;
+        byte[] digest = HexUtils.decode(pending.computeCheckpointHash());
+        int added = 0;
+        for (Map.Entry<String, String> e : incoming.getValidatorSignatures().entrySet()) {
+            Validator v = consensus.getValidators().stream()
+                    .filter(x -> x.getId().equals(e.getKey())).findFirst().orElse(null);
+            if (v == null || pending.getValidatorSignatures().containsKey(e.getKey())) continue;
+            if (Crypto.verify(digest, HexUtils.decode(e.getValue()), v.getPublicKey())) {
+                pending.getValidatorSignatures().put(e.getKey(), e.getValue());
+                added++;
+            }
+        }
+        return added;
+    }
+
     /** HELLO body: version (4) + network id (4) + rule flags (4) + nonce (32). */
     private static final int HELLO_LENGTH = 4 + 4 + 4 + 32;
 
@@ -357,7 +386,9 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                 
                 if (cp.getValidatorSignatures().isEmpty()) {
                     // This is a signature request
-                    if (consensus instanceof PBFTConsensus && ((PBFTConsensus) consensus).isValidator(localAddress)) {
+                    // [HC-043] sign only a checkpoint that matches OUR chain at that height
+                    if (consensus instanceof PBFTConsensus && ((PBFTConsensus) consensus).isValidator(localAddress)
+                            && matchesLocalChain(cp)) {
                         String hash = cp.computeCheckpointHash();
                         byte[] sig = Crypto.sign(HexUtils.decode(hash), privateKey);
                         cp.getValidatorSignatures().put(localAddress, HexUtils.encode(sig));
@@ -369,8 +400,10 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                     }
                 } else {
                     // This is a signature response or a finalized checkpoint
-                    Checkpoint pending = pendingCheckpoints.computeIfAbsent(cp.getBlockHeight(), k -> cp);
-                    pending.getValidatorSignatures().putAll(cp.getValidatorSignatures());
+                    // [HC-043] only for a checkpoint WE requested, same content, verified signatures
+                    Checkpoint pending = pendingCheckpoints.get(cp.getBlockHeight());
+                    if (pending == null) return;
+                    mergeVerifiedSignatures(pending, cp);
                     
                     if (consensus instanceof PBFTConsensus) {
                         PBFTConsensus pbft = (PBFTConsensus) consensus;
@@ -972,7 +1005,15 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
     public void broadcastCheckpointRequest(Checkpoint cp) {
         try {
             pendingCheckpoints.put(cp.getBlockHeight(), cp);
-            byte[] payload = new ObjectMapper().writeValueAsBytes(cp);
+            // [HC-043] count our own signature (the local "response" had no connection to go to)
+            if (consensus instanceof PBFTConsensus && consensus.isValidator(localAddress) && matchesLocalChain(cp)) {
+                cp.getValidatorSignatures().put(localAddress,
+                        HexUtils.encode(Crypto.sign(HexUtils.decode(cp.computeCheckpointHash()), privateKey)));
+            }
+            // the REQUEST carries no signatures (an empty map is what marks it as a request)
+            Checkpoint request = new Checkpoint(cp.getBlockHeight(), cp.getBlockHash(), cp.getStateRoot(),
+                    cp.getUtxoRoot(), cp.getTimestamp(), new HashMap<>());
+            byte[] payload = new ObjectMapper().writeValueAsBytes(request);
             P2PMessage msg = P2PMessage.create(localAddress, privateKey, P2PMessage.Type.CHECKPOINT, payload);
             gossipEngine.onMessageReceived(msg, localAddress);
         } catch (Exception e) {
