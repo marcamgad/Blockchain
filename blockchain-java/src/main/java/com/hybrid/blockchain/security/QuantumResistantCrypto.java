@@ -200,7 +200,7 @@ public class QuantumResistantCrypto {
      */
     public static byte[] deriveQuantumResistantKey(byte[] seed, String context) throws Exception {
         MessageDigest sha3 = MessageDigest.getInstance("SHA3-512", "BC");
-        sha3.update(context.getBytes());
+        sha3.update(context.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         sha3.update(seed);
         return sha3.digest();
     }

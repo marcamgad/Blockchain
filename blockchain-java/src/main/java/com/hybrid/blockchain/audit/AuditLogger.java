@@ -210,7 +210,7 @@ public class AuditLogger {
                 sb.append(key).append("=").append(metadata.get(key));
             }
 
-            return Crypto.bytesToHex(Crypto.hash(sb.toString().getBytes()));
+            return Crypto.bytesToHex(Crypto.hash(sb.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
         }
 
         public Map<String, Object> toMap() {

@@ -567,7 +567,7 @@ public class DeviceLifecycleManager {
         }
 
         // Message format: deviceId || manufacturer || model || devicePublicKey
-        byte[] message = (deviceId + manufacturer + model).getBytes();
+        byte[] message = (deviceId + manufacturer + model).getBytes(java.nio.charset.StandardCharsets.UTF_8);
         byte[] combined = new byte[message.length + devicePublicKey.length];
         System.arraycopy(message, 0, combined, 0, message.length);
         System.arraycopy(devicePublicKey, 0, combined, message.length, devicePublicKey.length);

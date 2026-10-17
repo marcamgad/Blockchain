@@ -489,7 +489,7 @@ public class AccountState {
      * @return a list of serialized MPT nodes for the account
      */
     public java.util.List<byte[]> getAccountProof(String address) {
-        return mpt.getAccountProof(address.getBytes());
+        return mpt.getAccountProof(address.getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
     /**
@@ -499,7 +499,7 @@ public class AccountState {
      * @return a single byte array containing all proof nodes
      */
     public byte[] getCompactAccountProof(String address) {
-        return mpt.getCompactAccountProof(address.getBytes());
+        return mpt.getCompactAccountProof(address.getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
     public AccountState cloneState() {

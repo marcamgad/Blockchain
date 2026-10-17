@@ -35,7 +35,7 @@ public class MPTUsageExample {
 
         // 5. Verify the Proof (Light Client Scenario)
         // A light client only needs the State Root and the Proof to verify Alice's state
-        byte[] aliceKey = aliceAddr.getBytes();
+        byte[] aliceKey = aliceAddr.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         byte[] expectedValue = state.getSerializedAccount(aliceAddr);
         byte[] rootBytes = Crypto.hexToBytes(stateRoot);
 
@@ -58,7 +58,7 @@ public class MPTUsageExample {
         String malloryAddr = "0xMallory";
         System.out.println("\nGenerating Proof of Non-Existence for " + malloryAddr + "...");
         List<byte[]> nonExistentProof = state.getAccountProof(malloryAddr);
-        boolean nonExistentValid = MerklePatriciaTrie.verifyAccountProof(malloryAddr.getBytes(), null, nonExistentProof, rootBytes);
+        boolean nonExistentValid = MerklePatriciaTrie.verifyAccountProof(malloryAddr.getBytes(java.nio.charset.StandardCharsets.UTF_8), null, nonExistentProof, rootBytes);
         System.out.println("Non-Existence Verification Result: " + (nonExistentValid ? "VALID (Account does not exist)" : "INVALID"));
     }
 }

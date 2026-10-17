@@ -577,7 +577,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
             data.put("toHeight", Math.min(toHeight, fromHeight + 49)); // Request max 50 blocks at a time
             
             String payloadJson = new ObjectMapper().writeValueAsString(data);
-            byte[] payload = payloadJson.getBytes();
+            byte[] payload = payloadJson.getBytes(java.nio.charset.StandardCharsets.UTF_8);
             
             // Create and send REQUEST_BLOCKS message
             P2PMessage msg = P2PMessage.create(localAddress, privateKey, 

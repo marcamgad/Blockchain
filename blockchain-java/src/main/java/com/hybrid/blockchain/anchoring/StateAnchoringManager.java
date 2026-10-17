@@ -36,7 +36,7 @@ public class StateAnchoringManager {
         // to submit a 'commit(height, stateRoot)' transaction.
         
         String anchorTx = "0x" + HexUtils.encode(com.hybrid.blockchain.Crypto.hash(
-                (height + ":" + stateRoot).getBytes()
+                (height + ":" + stateRoot).getBytes(java.nio.charset.StandardCharsets.UTF_8)
         ));
         
         anchors.put(height, anchorTx);

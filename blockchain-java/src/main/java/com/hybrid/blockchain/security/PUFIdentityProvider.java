@@ -30,7 +30,7 @@ public class PUFIdentityProvider {
         }
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
-            md.update("PUF_KEY_DERIVATION_TAG_V1".getBytes());
+            md.update("PUF_KEY_DERIVATION_TAG_V1".getBytes(java.nio.charset.StandardCharsets.UTF_8));
             byte[] hash = md.digest(pufResponse);
             
             // Map the hash into the secp256k1 scalar field [1, n-1]
@@ -59,7 +59,7 @@ public class PUFIdentityProvider {
         }
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
-            md.update("PUF_ANCHOR_TAG_V1".getBytes());
+            md.update("PUF_ANCHOR_TAG_V1".getBytes(java.nio.charset.StandardCharsets.UTF_8));
             return md.digest(pufResponse);
         } catch (Exception e) {
             throw new RuntimeException("Anchor computation failed", e);
@@ -73,8 +73,8 @@ public class PUFIdentityProvider {
     public static byte[] getSimulatedPUFResponse(String deviceHardwareId) {
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
-            md.update("PUF_SIMULATION_SALT".getBytes());
-            md.update(deviceHardwareId.getBytes());
+            md.update("PUF_SIMULATION_SALT".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            md.update(deviceHardwareId.getBytes(java.nio.charset.StandardCharsets.UTF_8));
             return md.digest();
         } catch (Exception e) {
             return new byte[32];

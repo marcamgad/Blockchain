@@ -1299,7 +1299,7 @@ public class Blockchain {
                 if (contractAddr == null) {
                     String creator = tx.getFrom();
                     long nonce = targetState.getNonce(creator);
-                    contractAddr = Crypto.deriveAddress(Crypto.hash((creator + nonce).getBytes()));
+                    contractAddr = Crypto.deriveAddress(Crypto.hash((creator + nonce).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
                     targetState.ensure(contractAddr);
                     targetState.setCode(contractAddr, code);
                     // Nonce already incremented for fee debit

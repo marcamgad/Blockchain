@@ -274,7 +274,7 @@ public class MultiSigManager {
 
     private String generateProposalId(String walletId, ProposalType type, Map<String, Object> data) {
         String combined = walletId + type.name() + System.currentTimeMillis() + data.hashCode();
-        return Crypto.bytesToHex(Crypto.hash(combined.getBytes()));
+        return Crypto.bytesToHex(Crypto.hash(combined.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
     }
 
     /**
@@ -359,7 +359,7 @@ public class MultiSigManager {
                 sb.append(key).append("=").append(data.get(key));
             }
 
-            return Crypto.hash(sb.toString().getBytes());
+            return Crypto.hash(sb.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
         }
 
         public void addSignature(String signer, byte[] signature) {
@@ -454,7 +454,7 @@ public class MultiSigManager {
         
         try {
             if (proposal.getProposalType() == ProposalType.GOV) {
-                String metadata = new String(proposal.getPayload());
+                String metadata = new String(proposal.getPayload(), java.nio.charset.StandardCharsets.UTF_8);
                 if (metadata.startsWith("ADD_VALIDATOR:")) {
                     String[] parts = metadata.split(":");
                     if (blockchain != null && parts.length >= 3) {
