@@ -63,7 +63,8 @@ public class Blockchain {
         this.tokenRegistry = new TokenRegistry(this.storage);
         this.monitor = com.hybrid.blockchain.monitoring.BlockchainMonitor.getInstance();
         // AUDIT-FIX: FIX-8 — wire live state into mempool for nonce-gap Sybil protection
-        this.mempool.setStateRef(this.state);
+        // [HC-027] a supplier, not a reference: init/rollback/revertTip replace this.state
+        this.mempool.setStateSupplier(() -> this.state);
     }
 
     public void setTokenRegistry(TokenRegistry registry) { this.tokenRegistry = registry; }

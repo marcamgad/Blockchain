@@ -35,10 +35,16 @@ public class Mempool {
 
     // AUDIT-FIX: FIX-8 — volatile reference so Blockchain can wire in live state
     // for nonce-gap Sybil protection. Null-safe; check is skipped when unset.
-    private volatile AccountState stateRef = null;
+    private volatile java.util.function.Supplier<AccountState> stateSupplier = null;
 
-    /** Wire in the live AccountState so nonce-gap checks can be enforced. */
-    public void setStateRef(AccountState state) { this.stateRef = state; }
+    /**
+     * Wire in a fixed AccountState (tests). Production uses {@link #setStateSupplier}: Blockchain
+     * replaces its state object on restart/rollback/fork, so a captured reference goes stale.
+     */
+    public void setStateRef(AccountState state) { this.stateSupplier = state == null ? null : () -> state; }
+
+    /** [HC-027] Always read the CURRENT committed state for nonce-gap checks. */
+    public void setStateSupplier(java.util.function.Supplier<AccountState> supplier) { this.stateSupplier = supplier; }
 
     public Mempool(int maxSize) {
         this.maxSize = maxSize > 0 ? maxSize : 1000;
@@ -298,7 +304,8 @@ public class Mempool {
             throw new IllegalArgumentException("tx already in mempool");
 
         // AUDIT-FIX: FIX-8 — Sybil nonce-gap rejection (prevents mempool flooding)
-        AccountState snap = this.stateRef;
+        java.util.function.Supplier<AccountState> sup = this.stateSupplier;
+        AccountState snap = sup == null ? null : sup.get();
         if (snap != null && tx.getFrom() != null && tx.getNonce() > 0) {
             long currentNonce = snap.getNonce(tx.getFrom());
             if (tx.getNonce() > currentNonce + Config.MAX_NONCE_GAP) {
