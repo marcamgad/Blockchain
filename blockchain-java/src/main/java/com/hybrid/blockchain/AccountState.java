@@ -582,6 +582,25 @@ public class AccountState {
             java.io.DataOutputStream dos = new java.io.DataOutputStream(baos);
 
             dos.writeLong(acc.getBalance());
+            // [HC-028] Custom-token balances, the ZK ownership commitment and the ABI are
+            // consensus-relevant, but were not committed: two states differing only in them had
+            // the same root. Encoded deterministically (tokens sorted by id, length-prefixed UTF-8).
+            java.util.TreeMap<String, Long> tokens = new java.util.TreeMap<>(acc.getTokenBalances());
+            tokens.remove("native");
+            tokens.values().removeIf(v -> v == null || v == 0L);   // a zero balance == absent
+            dos.writeInt(tokens.size());
+            for (Map.Entry<String, Long> t : tokens.entrySet()) {
+                byte[] id = t.getKey().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                dos.writeInt(id.length);
+                dos.write(id);
+                dos.writeLong(t.getValue());
+            }
+            byte[] commitment = acc.getCommitment();
+            dos.writeInt(commitment == null ? 0 : commitment.length);
+            if (commitment != null) dos.write(commitment);
+            byte[] abi = acc.getAbi();
+            dos.writeInt(abi == null ? 0 : abi.length);
+            if (abi != null) dos.write(abi);
             dos.writeLong(acc.getNonce());
             dos.writeDouble(acc.getReputation()); // FIX 4: persistent reputation in state root
 
