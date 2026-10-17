@@ -340,7 +340,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                     
                     if (consensus instanceof PBFTConsensus) {
                         PBFTConsensus pbft = (PBFTConsensus) consensus;
-                        int quorum = (2 * pbft.getValidators().size() / 3) + 1;
+                        int quorum = pbft.quorumSize();   // [HC-002] same bound as commit
                         if (pending.getValidatorSignatures().size() >= quorum) {
                             blockchain.getStorage().saveCheckpoint(pending);
                             log.info("[CHECKPOINT] Finalized checkpoint at height {} with quorum", pending.getBlockHeight());

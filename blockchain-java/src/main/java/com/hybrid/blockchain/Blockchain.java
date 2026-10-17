@@ -144,7 +144,7 @@ public class Blockchain {
                 
                 int n = consensus.getValidators().size();
                 int f = (n - 1) / 3;
-                int requiredSignatures = 2 * f + 1;
+                int requiredSignatures = com.hybrid.blockchain.consensus.PBFTConsensus.quorumSize(n);   // [HC-002]
                 
                 int validSignatureCount = 0;
                 String cpHashHex = latestCp.computeCheckpointHash();

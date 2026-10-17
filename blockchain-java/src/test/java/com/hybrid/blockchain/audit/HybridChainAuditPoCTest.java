@@ -117,7 +117,7 @@ public class HybridChainAuditPoCTest {
 
             String certH1 = replicaH1.getQuorumHash(seq, PBFTConsensus.Phase.COMMIT);
             String certH3 = replicaH3.getQuorumHash(seq, PBFTConsensus.Phase.COMMIT);
-            System.out.printf("[HC-002] n=5 f=1 quorum=3: h1 certifies %s, h3 certifies %s%n", certH1, certH3);
+            System.out.printf("[HC-002] n=5 f=1 quorum=%d: h1 certifies %s, h3 certifies %s%n", replicaH1.quorumSize(), certH1, certH3);
 
             boolean conflictingCertificates = certH1 != null && certH3 != null && !certH1.equals(certH3);
             assertThat(conflictingCertificates)
