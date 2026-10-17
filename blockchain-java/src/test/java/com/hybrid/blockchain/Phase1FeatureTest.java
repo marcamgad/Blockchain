@@ -22,7 +22,9 @@ public class Phase1FeatureTest {
     @DisplayName("P1-B: TELEMETRY_BATCH aggregates multiple device readings into one transaction")
     void testTelemetryBatching() throws Exception {
         // Setup blockchain
-        try (Storage storage = new Storage("test-batch-data", new byte[32])) {
+        // own temp dir: this used to write into ./test-batch-data, which was committed to git
+        java.nio.file.Path dataDir = java.nio.file.Files.createTempDirectory("test-batch-data-");
+        try (Storage storage = new Storage(dataDir.toString(), new byte[32])) {
             Mempool mempool = new Mempool();
             PoAConsensus consensus = new PoAConsensus(Collections.singletonList(new Validator("gateway-1", new byte[32])));
             Blockchain blockchain = new Blockchain(storage, mempool, consensus);
