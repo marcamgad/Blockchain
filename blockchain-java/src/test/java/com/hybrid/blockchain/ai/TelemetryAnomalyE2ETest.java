@@ -60,13 +60,14 @@ public class TelemetryAnomalyE2ETest {
         
         BlockApplier.createAndApplyBlock(tb, List.of(anomalyTx));
         
-        // Fee should be 5x (50) - capped by Math.min(5, multiplier)
+        // [HC-026] the anomaly is DETECTED (advisory, after the block is accepted) ...
+        com.hybrid.blockchain.ai.TelemetryAnomalyDetector.AnomalyStats stats =
+                com.hybrid.blockchain.ai.TelemetryAnomalyDetector.getInstance().getStats(device.getAddress());
+        assertThat(stats).isNotNull();
+        assertThat(stats.anomaliesDetected).isGreaterThan(0);
+        // ... but it no longer changes consensus state: the detector's history is node-local, so
+        // an anomaly penalty made identical transactions produce different state on different nodes.
         long finalBal = blockchain.getAccountState().getBalance(device.getAddress());
-        assertThat(finalBal).isEqualTo(balAfterNormal - 50);
-        
-        // Device reputation should also be penalized (recordDeviceActivity(..., false))
-        // In this implementation, reputation starts at 100 and drops by 10 for penalty.
-        int rep = blockchain.getAccountState().getLifecycleManager().getDeviceReputation(device.getAddress());
-        assertThat(rep).isLessThan(100);
+        assertThat(finalBal).isEqualTo(balAfterNormal - 10);   // the declared fee only
     }
 }

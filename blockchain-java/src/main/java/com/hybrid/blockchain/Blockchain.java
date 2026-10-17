@@ -876,6 +876,9 @@ public class Blockchain {
 
         chain.add(block);
 
+        // [HC-026] advisory, off the consensus path: never touches state
+        runAdvisoryAnomalyDetection(block);
+
         // Block is now accepted — safe to evict its transactions from the mempool.
         for (String appliedId : appliedTxIds) {
             mempool.remove(appliedId);
@@ -1289,9 +1292,12 @@ public class Blockchain {
                         }
                     } catch (Exception ignored) {} // Not a ZKP proof, use raw data
 
-                    int multiplier = com.hybrid.blockchain.ai.TelemetryAnomalyDetector.getInstance().check(tx.getFrom(), telemetryPayload, timestamp);
-                    multiplier = Math.min(5, multiplier);
-                    boolean isAnomaly = multiplier > 1;
+                    // [HC-026] The anomaly detector is NOT consulted here. Its sliding window lives in
+                    // this JVM's memory (empty after a restart, fed twice on the proposer, fed by the
+                    // REST/AI endpoints), so using it made the same tx produce different post-states on
+                    // different nodes. Detection now runs after the block is accepted, as an advisory
+                    // signal (see runAdvisoryAnomalyDetection), and never changes state.
+                    final boolean isAnomaly = false;
 
                     // P1-D: ZK-Firmware Integrity check
                     try {
@@ -1319,13 +1325,6 @@ public class Blockchain {
                         }
                     } catch (Exception ignored) {}
 
-                    if (isAnomaly) {
-                        try {
-                            targetState.debit(tx.getFrom(), Math.multiplyExact(tx.getFee(), (long)multiplier - 1));
-                        } catch (ArithmeticException e) {
-                            log.error("[TELEMETRY] Penalty fee overflow for {}", tx.getFrom());
-                        }
-                    }
 
                     // Store telemetry data; hash large payloads (>= 1024 bytes)
                     byte[] toStore = telemetryPayload.length >= 1024 ? Crypto.hash(telemetryPayload) : telemetryPayload;
@@ -1502,6 +1501,36 @@ public class Blockchain {
         }
 
         return new ExecutionResult(0, null, null, transactionEvents);  // Default return for any unhandled cases
+    }
+
+    /**
+     * [HC-026] Feeds the telemetry of an ACCEPTED block to the anomaly detector for monitoring.
+     * The result is published as an alert event and metric only; it never changes balances,
+     * reputation or any other consensus state, so nodes with different detector history still
+     * agree on every state root.
+     */
+    private void runAdvisoryAnomalyDetection(Block block) {
+        com.hybrid.blockchain.ai.TelemetryAnomalyDetector detector =
+                com.hybrid.blockchain.ai.TelemetryAnomalyDetector.getInstance();
+        for (Transaction tx : block.getTransactions()) {
+            if (tx.getType() != Transaction.Type.TELEMETRY || tx.getData() == null) continue;
+            try {
+                byte[] payload = tx.getData();
+                try {
+                    com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof proof =
+                            MAPPER.readValue(payload, com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof.class);
+                    if (proof.getPayload() != null) payload = proof.getPayload();
+                } catch (Exception notAProof) { /* raw reading */ }
+                if (detector.check(tx.getFrom(), payload, block.getTimestamp()) > 1) {
+                    if (monitor != null) monitor.recordMetric("telemetry.anomalies", 1);
+                    if (eventBus != null) {
+                        try { eventBus.publish("anomalies", tx); } catch (Exception ignored) { }
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("[ANOMALY] advisory check failed for {}: {}", tx.getId(), e.getMessage());
+            }
+        }
     }
 
     private void processIoTTransactionWithState(AccountState targetState, Transaction tx, long blockHeight, long timestamp) throws Exception {
