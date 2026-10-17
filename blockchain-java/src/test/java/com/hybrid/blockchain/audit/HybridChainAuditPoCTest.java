@@ -470,10 +470,11 @@ public class HybridChainAuditPoCTest {
                 String ga = a.chain.getChain().get(0).getHash(), gb = b.chain.getChain().get(0).getHash();
                 String err = null;
                 try {
-                    b.commitAndApply(a.build(List.of(mintN(new TestKeyPair(7706).getAddress(), a.scheduledReward(), 0)), 0));
+                    b.commitAndApply(a.build(List.of(mintN(LedgerPoCFixture.VALIDATORS[0].getAddress(), a.scheduledReward(), 0)), 0));
                 } catch (Exception e) { err = e.getMessage(); }
                 System.out.printf("[HC-020] genesis A=%s B=%s; B applying A's block 1: %s%n", ga, gb, err == null ? "ok" : err);
                 assertThat(gb).as("HC-020: genesis hash depends on System.currentTimeMillis() at init").isEqualTo(ga);
+                assertThat(err).as("HC-020: node B must accept node A's block 1").isNull();
             }
         }
     }

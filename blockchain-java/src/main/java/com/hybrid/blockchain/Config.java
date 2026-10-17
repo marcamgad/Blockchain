@@ -63,6 +63,12 @@ public final class Config {
     public static final long MAX_TIMESTAMP_DRIFT = 15000; // 15 sec
     public static final long MAX_NONCE_ATTEMPTS = Long.MAX_VALUE / 2;
     public static final int NETWORK_ID = getIntEnv("NETWORK_ID", 101);
+    /**
+     * [HC-020] Genesis timestamp: part of the genesis block hash, so it must be identical on every
+     * node. Fixed protocol constant (2026-01-01T00:00:00Z), deliberately NOT read from the
+     * environment — a per-node value would give each node its own chain.
+     */
+    public static final long GENESIS_TIMESTAMP = 1_767_225_600_000L;
     public static final String PROTOCOL_VERSION = getEnv("PROTOCOL_VERSION", "1.0.0");
     public static final int MAX_FL_MODEL_BYTES = 10 * 1024 * 1024; // 10MB
     public static final int MIN_FL_CONTRIBUTORS = getIntEnv("MIN_FL_CONTRIBUTORS", 3);

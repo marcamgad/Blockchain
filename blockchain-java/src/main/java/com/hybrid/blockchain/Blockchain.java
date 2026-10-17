@@ -196,7 +196,9 @@ public class Blockchain {
             }
 
             log.info("[INIT] Creating genesis block");
-            Block genesis = new Block(0, System.currentTimeMillis(), new ArrayList<>(), "0000000000000000000000000000000000000000000000000000000000000000", difficulty, state.calculateStateRoot());
+            // [HC-020] deterministic genesis: fixed timestamp and protocol-constant difficulty, so
+            // every node started from empty storage computes the same genesis hash
+            Block genesis = new Block(0, Config.GENESIS_TIMESTAMP, new ArrayList<>(), "0000000000000000000000000000000000000000000000000000000000000000", Config.INITIAL_DIFFICULTY, state.calculateStateRoot());
             genesis.setHash(genesis.calculateHash());
             chain.add(genesis);
             storage.saveBlock(genesis.getHash(), genesis);
