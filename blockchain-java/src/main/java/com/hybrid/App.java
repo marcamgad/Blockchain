@@ -145,7 +145,17 @@ public class App {
 
         // 18. Start Spring Boot API
 
-        SpringApplication.run(IoTRestAPI.class, args);
+        // [HC-009] Config.API_PORT was never passed to Spring (which always used 8080), and an API
+        // start failure left the node running with no API. Now API_PORT is Spring's default port
+        // (an explicit SERVER_PORT / server.port still takes precedence) and a failure exits.
+        SpringApplication api = new SpringApplication(IoTRestAPI.class);
+        api.setDefaultProperties(java.util.Map.of("server.port", String.valueOf(Config.API_PORT)));
+        try {
+            api.run(args);
+        } catch (Throwable t) {
+            log.error("[API] REST API failed to start on port {}: {} - shutting the node down", Config.API_PORT, t.getMessage());
+            System.exit(1);
+        }
     }
 
     /**
@@ -229,7 +239,7 @@ public class App {
                 if (blockchain.isPaused()) {
                     return;
                 }
-                if (pbft.getCurrentLeader().equals(nodeId)) {
+                if (nodeId.equals(pbft.getCurrentLeader())) {   // [HC-014] null-safe: no leader eligible -> skip slot
                     // Generate a new block
                     Block block = blockchain.createBlock(nodeId, Config.MAX_TRANSACTIONS_PER_BLOCK);
                     

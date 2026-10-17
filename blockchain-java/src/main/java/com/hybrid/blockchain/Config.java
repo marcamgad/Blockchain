@@ -57,7 +57,8 @@ public final class Config {
 
     // ─── Network & P2P ───────────────────────────────────────────────────────
     public static final int P2P_PORT = getIntEnv("P2P_PORT", 6001);
-    public static final int API_PORT = getIntEnv("API_PORT", 8000);
+    /** [HC-009] REST API port, now actually used (default 8080 = the documented port). */
+    public static final int API_PORT = getIntEnv("API_PORT", 8080);
     public static final long PEER_HEARTBEAT_INTERVAL_MS = 3000;
     public static final int MAX_PEERS = 50;
     public static final long MAX_TIMESTAMP_DRIFT = 15000; // 15 sec

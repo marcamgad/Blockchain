@@ -25,7 +25,19 @@ public class KeygenTool {
         }
 
         int n = Integer.parseInt(args[0]);
-        String seed = args.length >= 2 ? args[1] : "hybridchain-key-seed";
+        // [HC-010] No seed given -> 32 bytes from SecureRandom. The old default
+        // "hybridchain-key-seed" made every validator key of every network set up without a seed
+        // publicly computable. A seed is still accepted for reproducible TEST keys only.
+        String seed;
+        if (args.length >= 2) {
+            seed = args[1];
+            System.err.println("WARNING: deterministic keys from a supplied seed - anyone who knows the seed "
+                    + "knows every private key. Use for test networks only.");
+        } else {
+            byte[] rnd = new byte[32];
+            new java.security.SecureRandom().nextBytes(rnd);
+            seed = HexUtils.encode(rnd);
+        }
 
         X9ECParameters ecParams = CustomNamedCurves.getByName(Config.EC_CURVE);
         ECDomainParameters domainParams = new ECDomainParameters(
