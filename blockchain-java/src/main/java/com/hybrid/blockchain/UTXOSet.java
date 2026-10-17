@@ -49,6 +49,34 @@ public class UTXOSet {
         map.put(key, new UTXO(address, amount));
     }
 
+    /**
+     * [HC-035] Canonical commitment to the UTXO set: SHA-256 over entries sorted by key, each
+     * length-prefixed (key, address) plus the amount. Replaces hashing HashMap.toString(), whose
+     * order depends on table capacity / insertion history and so differed between validators
+     * (e.g. one that had restarted), making checkpoint signatures disagree.
+     */
+    public byte[] canonicalHash() {
+        java.util.List<String> keys = new java.util.ArrayList<>(map.keySet());
+        java.util.Collections.sort(keys);
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        java.io.DataOutputStream out = new java.io.DataOutputStream(bos);
+        try {
+            out.writeInt(keys.size());
+            for (String k : keys) {
+                UTXO u = map.get(k);
+                byte[] kb = k.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                byte[] ab = (u.getAddress() == null ? "" : u.getAddress()).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                out.writeInt(kb.length); out.write(kb);
+                out.writeInt(ab.length); out.write(ab);
+                out.writeLong(u.getAmount());
+            }
+            out.flush();
+        } catch (java.io.IOException impossible) {
+            throw new IllegalStateException(impossible);
+        }
+        return Crypto.hash(bos.toByteArray());
+    }
+
     /** [HC-018] Owner address of an unspent output, or null if it does not exist. */
     public String getOwner(String txid, int index) {
         UTXO u = map.get(txid + ":" + index);

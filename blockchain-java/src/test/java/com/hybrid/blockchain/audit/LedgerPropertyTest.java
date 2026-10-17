@@ -114,6 +114,33 @@ class LedgerPropertyTest {
         }
     }
 
+    /** [HC-035] same UTXO entries, different insertion history / capacity -> same commitment. */
+    @Test
+    void utxoCanonicalHashIndependentOfHistory() {
+        for (long seed = 1; seed <= 20; seed++) {
+            Random r = new Random(seed);
+            com.hybrid.blockchain.UTXOSet a = new com.hybrid.blockchain.UTXOSet();
+            List<String> kept = new ArrayList<>();
+            for (int i = 0; i < 500; i++) {                     // grow the table, then delete most
+                String tx = "t" + r.nextLong();
+                a.addOutput(tx, 0, "addr" + r.nextInt(50), 1 + r.nextInt(1000));
+                if (i % 40 == 0) kept.add(tx); else a.spendOutput(tx, 0);
+            }
+            com.hybrid.blockchain.UTXOSet restarted = com.hybrid.blockchain.UTXOSet.fromMap(a.toJSON());
+            com.hybrid.blockchain.UTXOSet reversed = new com.hybrid.blockchain.UTXOSet();
+            List<String> keys = new ArrayList<>(a.toJSON().keySet());
+            Collections.reverse(keys);
+            for (String k : keys) {
+                @SuppressWarnings("unchecked")
+                java.util.Map<String, Object> u = (java.util.Map<String, Object>) a.toJSON().get(k);
+                String[] p = k.split(":");
+                reversed.addOutput(p[0], Integer.parseInt(p[1]), (String) u.get("address"), ((Number) u.get("amount")).longValue());
+            }
+            assertThat(restarted.canonicalHash()).as("seed=%d", seed).isEqualTo(a.canonicalHash());
+            assertThat(reversed.canonicalHash()).as("seed=%d", seed).isEqualTo(a.canonicalHash());
+        }
+    }
+
     @Test
     void txRootIsStableForSameOrderedList() {
         Random r = new Random(7);

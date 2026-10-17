@@ -1006,7 +1006,7 @@ public class Blockchain {
             try {
                 Checkpoint cp = new Checkpoint(
                         (int) block.getIndex(), block.getHash(),
-                        block.getStateRoot(), Crypto.bytesToHex(Crypto.hash(utxo.toJSON().toString().getBytes())),
+                        block.getStateRoot(), Crypto.bytesToHex(utxo.canonicalHash()) /* [HC-035] */,
                         block.getTimestamp(), new HashMap<>());
                 // NOTE: Checkpoint is NOT saved here - it's only saved in PeerNode after quorum is reached
                 log.info("[CHECKPOINT] Broadcasting checkpoint request at height {}", block.getIndex());
