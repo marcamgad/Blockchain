@@ -136,6 +136,8 @@ public class HybridChainAuditPoCTest {
     // ─────────────────────────────────────────────────────────────────────────
 
     private static KeyPair p256() throws Exception {
+        if (java.security.Security.getProvider("BC") == null)
+            java.security.Security.addProvider(new org.bouncycastle.jce.provider.BouncyCastleProvider());
         KeyPairGenerator g = KeyPairGenerator.getInstance("EC", "BC");
         g.initialize(new ECGenParameterSpec("secp256r1"));
         return g.generateKeyPair();

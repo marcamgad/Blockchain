@@ -19,6 +19,18 @@ public class GossipNetworkTest {
     private List<Integer> allocatedPorts;
     private File runDataRoot;
 
+    // [HC-006] this class tests GOSSIP, not TLS: it uses legacy self-signed node certificates and
+    // opts in to the test-only trust-all mode explicitly (production never sets this property).
+    @org.junit.jupiter.api.BeforeAll
+    static void allowTestTls() {
+        System.setProperty(com.hybrid.blockchain.security.SSLUtils.INSECURE_TEST_PROPERTY, "true");
+    }
+
+    @org.junit.jupiter.api.AfterAll
+    static void restoreTls() {
+        System.clearProperty(com.hybrid.blockchain.security.SSLUtils.INSECURE_TEST_PROPERTY);
+    }
+
     @BeforeEach
     public void setup() throws Exception {
         // Set mock private key for testing
