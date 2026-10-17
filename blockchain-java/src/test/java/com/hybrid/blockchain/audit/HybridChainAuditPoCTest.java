@@ -818,7 +818,9 @@ public class HybridChainAuditPoCTest {
             boolean plaintextKeys = new String(fromKey, StandardCharsets.UTF_8).startsWith("meta:");
             System.out.printf("[HC-041] after moving the 'meta:baseFee' record onto 'meta:totalMinted': totalMinted=%s "
                     + "(no authentication error); keys stored in plaintext=%s%n", v, plaintextKeys);
-            assertThat(v).as("HC-041: AES-GCM record accepted under a different key (no AAD binding)").isNotEqualTo(999_999L);
+            // compare numerically: Jackson returns Integer for small values, so a Long literal never matched
+            assertThat(v instanceof Number ? ((Number) v).longValue() : null)
+                    .as("HC-041: AES-GCM record accepted under a different key (no AAD binding)").isNotEqualTo(999_999L);
         } finally {
             org.apache.commons.io.FileUtils.deleteDirectory(dir.toFile());
         }
