@@ -33,17 +33,21 @@ public class P2PMessage {
     private final byte[] payload;
     private final byte[] signature;
     private final long timestamp;
+    /** [HC-044] public key of senderId, so any receiver can authenticate the message. */
+    private final byte[] senderPubKey;
 
     @JsonCreator
     public P2PMessage(
             @JsonProperty("senderId") String senderId,
             @JsonProperty("type") Type type,
             @JsonProperty("payload") byte[] payload,
-            @JsonProperty("signature") byte[] signature) {
+            @JsonProperty("signature") byte[] signature,
+            @JsonProperty("senderPubKey") byte[] senderPubKey) {
         this.senderId = senderId;
         this.type = type;
         this.payload = payload;
         this.signature = signature;
+        this.senderPubKey = senderPubKey;
         this.timestamp = System.currentTimeMillis();
         this.messageId = calculateId();
     }
@@ -51,6 +55,10 @@ public class P2PMessage {
     /**
      * Constructor for test compatibility.
      */
+    public P2PMessage(String senderId, Type type, byte[] payload, byte[] signature) {
+        this(senderId, type, payload, signature, null);
+    }
+
     public P2PMessage(String senderId, String dummy, Type type, byte[] payload) {
         this(senderId, type, payload, new byte[64]);
     }
@@ -76,7 +84,7 @@ public class P2PMessage {
 
     public static P2PMessage create(String senderId, java.math.BigInteger privateKey, Type type, byte[] payload) {
         byte[] sig = Crypto.sign(signingDigest(senderId, type, payload), privateKey);   // [HC-040]
-        return new P2PMessage(senderId, type, payload, sig);
+        return new P2PMessage(senderId, type, payload, sig, Crypto.derivePublicKey(privateKey));
     }
 
     public boolean verify(byte[] publicKey) {
@@ -106,5 +114,20 @@ public class P2PMessage {
     public String toString() {
         return String.format("P2PMessage[id=%s, type=%s, sender=%s]", 
             messageId.substring(0, 8), type, senderId);
+    }
+
+    public byte[] getSenderPubKey() { return senderPubKey; }
+
+    /**
+     * [HC-044] True iff the message was signed by the key that owns senderId. Previously no
+     * receiver ever checked P2P message signatures, so senderId was an unverified label: any
+     * connected peer could send messages "from" another peer (e.g. to have that peer's score
+     * lowered for an invalid block).
+     */
+    public boolean verifyOrigin() {
+        if (senderPubKey == null || senderId == null || signature == null || payload == null || type == null)
+            return false;
+        if (!Crypto.deriveAddress(senderPubKey).equals(senderId)) return false;
+        return Crypto.verify(signingDigest(senderId, type, payload), signature, senderPubKey);
     }
 }
