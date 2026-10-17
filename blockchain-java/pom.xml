@@ -296,6 +296,8 @@
                     <includes>
                         <include>**/*Test.java</include>
                         <include>**/*Tests.java</include>
+                        <!-- security pentests were never run: *Pentest does not match *Test -->
+                        <include>**/*Pentest.java</include>
                     </includes>
                     <excludedGroups>${audit.excluded}</excludedGroups>
                     <excludes>
