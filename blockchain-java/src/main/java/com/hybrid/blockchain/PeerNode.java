@@ -67,6 +67,8 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
 
     // [HC-042] v2: handshake signatures are domain-separated (see handshakeDigest).
     private static final int PROTOCOL_VERSION = 2;
+    /** [HC-007] fixed CHALLENGE payload size: compressed secp256k1 key (33) + signature (64). */
+    private static final int CHALLENGE_LENGTH = 33 + 64;
 
     /**
      * [HC-042] Digest a node signs to prove key possession during the handshake.
@@ -645,6 +647,10 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
         if (in.readInt() != MsgType.CHALLENGE.ordinal())
             throw new IOException("Expected CHALLENGE");
         int challengeLen = in.readInt();
+        // [HC-007] a CHALLENGE is exactly a 33-byte compressed key + a 64-byte signature; reject
+        // any other length BEFORE allocating (the peer-chosen length used to size the buffer)
+        if (challengeLen != CHALLENGE_LENGTH)
+            throw new IOException("Bad CHALLENGE length " + challengeLen);
         byte[] remotePubKey = new byte[33];
         in.readFully(remotePubKey);
         byte[] remoteSig = new byte[challengeLen - 33];
@@ -674,6 +680,10 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
         if (in.readInt() != MsgType.CHALLENGE.ordinal())
             throw new IOException("Expected CHALLENGE");
         int challengeLen = in.readInt();
+        // [HC-007] a CHALLENGE is exactly a 33-byte compressed key + a 64-byte signature; reject
+        // any other length BEFORE allocating (the peer-chosen length used to size the buffer)
+        if (challengeLen != CHALLENGE_LENGTH)
+            throw new IOException("Bad CHALLENGE length " + challengeLen);
         byte[] remotePubKey = new byte[33];
         in.readFully(remotePubKey);
         byte[] remoteSig = new byte[challengeLen - 33];
