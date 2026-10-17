@@ -14,6 +14,24 @@ how it was verified. Main test suite after every fix: green (610 → 616 tests, 
 | HC-019 local slashing | `7aedad2` | `hc019` pass |
 | HC-022 + HC-023 counters | `c8c5ba2` | `hc022`, `hc022b`, `hc023` pass |
 | HC-026 telemetry determinism | `ca5ccfa` | `hc026` pass |
+| HC-025 block production | `dc268a4` | `hc025` pass + `BlockProductionTest` |
+| HC-020 genesis | `bcc8390` | `hc020` pass (cross-node apply) |
+| HC-021 fork validation | `e415429` | `hc021` pass + restore-path test |
+| HC-029 txid from wire | `87fc9ee` | `hc029` pass |
+| HC-024 rejected-block side effects | `bb0c1d9` | `hc024`, `hc024b` pass |
+| HC-027 stale mempool state | `24cbe24` | `hc027` pass |
+| HC-030 Merkle | `81f3567` | `hc030` pass |
+| HC-031 pruning/snapshots | `cd13e72` | `hc031` pass |
+| HC-028 state root coverage | `46df88a` | `hc028` pass |
+| HC-041 storage AAD | `f6b9f63` | `hc041` pass |
+| HC-007 handshake allocation | `dd7188b` | `hc007` pass |
+| HC-002 quorum | `4c01596` | `hc002` pass + `QuorumPropertyTest` |
+| HC-001 gossip threshold | `7f57727` | `hc001` pass (fresh JVM, no override) |
+| HC-005 + HC-003 CA | `02a9066` | `hc003`, `hc005` (2 tests) pass |
+| HC-006 trust-all TLS | `a328bb3` | `hc006` pass + foreign-CA test |
+| HC-004 IoT ingress signer | `4d892d3` | `hc004` pass |
+
+**Status: all 30 audit tests pass; main suite 622/622.**
 
 ---
 
@@ -164,6 +182,98 @@ penalty now assert the anomaly is detected while state is unaffected.
 
 ---
 
+## Round 2
+
+### HC-025 — The honest block producer never included a transfer
+**Before.** `createBlock` checked candidates with mempool rules: the expected nonce was "one after
+the highest pending nonce", and the candidate itself is pending, so every ACCOUNT transfer failed
+with "expected n+1 got n" and was dropped. **What happened.** A valid pending transfer was never put
+in a block. **After.** Candidates are checked with block rules: the nonce must follow the simulated
+state (several transactions from one sender chain in one block) and the balance is enforced by
+applying to the simulated state. **Verified.** `hc025`; `BlockProductionTest` goes through the real
+path `addTransaction -> createBlock -> apply` (no test did before; they all used `BlockApplier`).
+
+### HC-020 — Each node had its own genesis
+**Before.** Genesis used the wall clock. **What happened.** Two nodes started 25 ms apart had
+different genesis hashes and node B rejected node A's block 1. **After.** `Config.GENESIS_TIMESTAMP`
+(a fixed constant, deliberately not an environment variable) and the protocol difficulty.
+**Verified.** `hc020`: same genesis, and B applies A's block. Existing data directories keep their
+old genesis: start test networks from empty storage.
+
+### HC-021 — A junk block could undo the tip
+**Before.** For a block at the tip's height, the node compared hash strings, reverted its tip, and
+only then validated the newcomer; if validation failed the tip stayed reverted. **After.** The
+candidate's hash, parent, validator and signature are checked first; if full application still
+fails, the old tip is re-applied. **Verified.** `hc021`; `BlockProductionTest#invalidForkCandidateRestoresTip`.
+
+### HC-029 — Peers could choose a transaction's id
+**Before.** Jackson overwrote the computed `txid` with whatever the JSON said. **After.** `txid` is
+output-only (`READ_ONLY`); the unused `setData` was removed. **Verified.** `hc029`.
+
+### HC-024 — Rejected blocks left traces in storage
+**Before.** Receipts, indexes, telemetry, the FL model update/broadcast and token registrations
+were written while the block was still being checked. **What happened.** A rejected block left a
+SUCCESS receipt and a registered token. **After.** All of these are buffered and written only after
+the final state-root check; `TokenRegistry` stages changes per block (commit/rollback).
+**Verified.** `hc024`, `hc024b`.
+
+### HC-027 — The mempool used a stale state after a restart
+**Before.** The mempool held the very first `AccountState` object. **What happened.** After a
+restart, an account at nonce 101 could not submit nonce 102. **After.** The mempool asks the chain
+for its current state each time. **Verified.** `hc027`.
+
+### HC-030 — Two transaction lists, one block hash
+**Before.** Odd Merkle levels duplicated their last node. **After.** The odd node is promoted, and
+leaves and inner nodes are hashed with different tags. Consensus change. **Verified.** `hc030`.
+
+### HC-031 — Pruning freed nothing; snapshots grew forever
+**Before.** Pruning deleted a key that never existed and wrote an extra full snapshot, and every
+block kept a full snapshot. **After.** `Storage.deleteBlock` uses the real key; only the last 16
+snapshots are kept. **Verified.** `hc031`: the pruned block is gone, 2 snapshots instead of 7.
+
+### HC-028 — The state root ignored token balances, commitments and ABIs
+**After.** Each account's committed encoding includes its sorted non-zero token balances, ZK
+commitment and ABI. Consensus change. **Verified.** `hc028`; the clone round-trip property holds.
+
+### HC-041 — Encrypted records could be moved between keys
+**After.** AES-GCM authenticates the storage key (AAD); a moved record fails with
+`AEADBadTagException`. Data written by older versions is unreadable: recreate data directories.
+Remaining limitation: key names are stored in plaintext. **Verified.** `hc041`.
+
+### HC-007 — One packet made the node try a ~2 GB allocation
+**After.** The handshake CHALLENGE must be exactly 97 bytes and is rejected before any allocation.
+**Verified.** `hc007`: a clean `IOException`.
+
+### HC-002 — Unsafe commit threshold for 5, 6, 8, 9 ... validators
+**Before.** Quorum `2f+1`, safe only when n = 3f+1. **What happened.** With 5 validators, two honest
+replicas certified different blocks. **After.** `quorumSize(n) = ceil((n+f+1)/2)` from the current
+validator set, used for commits, view changes, checkpoints and fast sync. **Verified.** `hc002`;
+`QuorumPropertyTest` checks intersection and liveness for n = 4..64 and that the old formula was
+unsafe exactly when n != 3f+1.
+
+### HC-001 — The minimum network never sent a message
+**Before.** Gossip waited for 4 peers; a 4-validator network has 3 per node. Tests passed only
+because of `-DMIN_PEERS=1`. **After.** Default 1 (overridable); the override was removed from
+`pom.xml`, so the suite runs with the production default. **Verified.** `hc001` in a fresh JVM.
+
+### HC-005 + HC-003 — Production mTLS could not connect, and the CA key was the disk key
+**Before.** The CA paired a seed-derived private key with a random public key (nothing verified),
+and the seed was `STORAGE_AES_KEY`. **After.** Public key = private key x G; the CA is seeded from
+`NETWORK_CA_SEED` (at least 32 bytes, the same on every node, must differ from `STORAGE_AES_KEY`,
+which is now a real per-node secret). **Verified.** `hc005`: CA-path handshake client=OK server=OK;
+`hc003`: the CA key is not derivable from the disk key. `EDGE_DEPLOYMENT.md` and `MTLS_SETUP.md`
+updated.
+
+### HC-006 — The legacy TLS path trusted everyone
+**After.** No trust-all by default; only an explicit test property enables it.
+`MTLSSecureNetworkTest` now uses the real CA path and has a new negative test (a node whose
+certificate comes from another CA is not admitted). **Verified.** `hc006`: attacker certificate
+REJECTED.
+
+### HC-004 — Every MQTT/CoAP reading was rejected
+**After.** Ingress transactions are sent from the address of the key that signs them. Whether the
+gateway may report for a given device is still HC-013. **Verified.** `hc004`: `verify()=true`.
+
 ## Audit-test corrections made during the fix pass
 - `hc007` passed vacuously after `PROTOCOL_VERSION` became 2 (rejected with "Mismatch" before the
   allocation it tests). It now sends the current version and fails for the real reason
@@ -173,7 +283,16 @@ penalty now assert the anomaly is detected while state is unaffected.
 - Six audit tests errored in setup because they minted to arbitrary addresses (now forbidden by
   HC-016); they fund through the proposer and fail on their own assertion.
 
-## Still open (18 audit tests fail on purpose)
-HC-001, 002, 003, 004, 005 (×2), 006, 007 (batch 1); HC-020, 021, 024, 024b, 025, 027, 028, 029,
-030, 031, 041 (batch 2). Also noted, not yet a numbered finding: `MultiSigManager.signProposal(id,
-address, signature)` stores the signature without verifying it.
+## Still open (no failing audit test: LIKELY findings and design items)
+- **HC-008** per-node `REQUIRE_QUANTUM_SIG` changes transaction validity; **HC-009** `API_PORT`
+  ignored; **HC-010** default key-generator seed; **HC-011** the handshake checks key possession,
+  not validator membership; **HC-012** no socket timeouts, unbounded threads; **HC-013** device
+  authorisation for gateway telemetry; **HC-014** proposer-loop NPE; **HC-015** the remaining test
+  override (`-DREQUIRE_QUANTUM_SIG=false`).
+- **HC-032** fast-sync atomicity; **HC-033** unchecked arithmetic and missing per-type fee checks;
+  **HC-034** live chain/state exposed without locking; **HC-035** checkpoint `utxoRoot` hashes a
+  `HashMap.toString()`.
+- Not yet numbered: `MultiSigManager.signProposal(id, address, signature)` stores the signature
+  unverified; on-chain slashing evidence (follow-up to HC-019); PBFT view change / NEW_VIEW design.
+- Consensus changes in this pass (genesis, Merkle tree, state root, storage AAD, handshake v2): all
+  nodes must upgrade together, and test networks restart from empty storage.
