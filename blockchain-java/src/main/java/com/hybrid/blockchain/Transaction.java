@@ -332,7 +332,7 @@ public final class Transaction {
             try {
                 // To avoid storing raw byte-arrays where Keys are needed, we assume 
                 // QuantumResistantCrypto provides a way, or we reconstruct the key:
-                java.security.KeyFactory kf = java.security.KeyFactory.getInstance("Dilithium", "BCPQC");
+                java.security.KeyFactory kf = java.security.KeyFactory.getInstance(com.hybrid.blockchain.security.QuantumResistantCrypto.ALGORITHM, com.hybrid.blockchain.security.QuantumResistantCrypto.PROVIDER);
                 java.security.PublicKey dPubKey = kf.generatePublic(new java.security.spec.X509EncodedKeySpec(dilithiumPublicKey));
                 return com.hybrid.blockchain.security.QuantumResistantCrypto.verifyDilithium(payload, dilithiumSignature, dPubKey);
             } catch (Exception e) {

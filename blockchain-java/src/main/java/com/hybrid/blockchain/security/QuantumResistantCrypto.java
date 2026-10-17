@@ -1,8 +1,8 @@
 package com.hybrid.blockchain.security;
 
 import com.hybrid.blockchain.Crypto;
-import org.bouncycastle.pqc.jcajce.provider.BouncyCastlePQCProvider;
-import org.bouncycastle.pqc.jcajce.spec.DilithiumParameterSpec;
+import org.bouncycastle.jcajce.spec.MLDSAParameterSpec;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
 
 import java.security.*;
 import java.security.spec.X509EncodedKeySpec;
@@ -27,10 +27,16 @@ import java.util.Arrays;
  */
 public class QuantumResistantCrypto {
 
+    /** JCA names of the post-quantum signature scheme (ML-DSA, FIPS 204). */
+    public static final String ALGORITHM = "ML-DSA";
+    public static final String PROVIDER = "BC";
+
     static {
         // Register Bouncy Castle PQC provider
-        if (Security.getProvider("BCPQC") == null) {
-            Security.addProvider(new BouncyCastlePQCProvider());
+        // ML-DSA (FIPS 204, the standardised Dilithium) lives in the main BC provider; the
+        // pre-standard "Dilithium"/BCPQC classes were removed in Bouncy Castle 1.8x
+        if (Security.getProvider(PROVIDER) == null) {
+            Security.addProvider(new BouncyCastleProvider());
         }
     }
 
@@ -41,22 +47,22 @@ public class QuantumResistantCrypto {
      * @return KeyPair with quantum-resistant keys
      */
     public static KeyPair generateDilithiumKeyPair(int strength) throws Exception {
-        DilithiumParameterSpec spec;
+        MLDSAParameterSpec spec;
         switch (strength) {
             case 2:
-                spec = DilithiumParameterSpec.dilithium2;
+                spec = MLDSAParameterSpec.ml_dsa_44;   // Dilithium2 -> ML-DSA-44
                 break;
             case 3:
-                spec = DilithiumParameterSpec.dilithium3;
+                spec = MLDSAParameterSpec.ml_dsa_65;   // Dilithium3 -> ML-DSA-65
                 break;
             case 5:
-                spec = DilithiumParameterSpec.dilithium5;
+                spec = MLDSAParameterSpec.ml_dsa_87;   // Dilithium5 -> ML-DSA-87
                 break;
             default:
                 throw new IllegalArgumentException("Strength must be 2, 3, or 5");
         }
 
-        KeyPairGenerator keyGen = KeyPairGenerator.getInstance("Dilithium", "BCPQC");
+        KeyPairGenerator keyGen = KeyPairGenerator.getInstance(ALGORITHM, PROVIDER);
         keyGen.initialize(spec, new SecureRandom());
         return keyGen.generateKeyPair();
     }
@@ -65,7 +71,7 @@ public class QuantumResistantCrypto {
      * Sign message with Dilithium (quantum-resistant)
      */
     public static byte[] signDilithium(byte[] message, PrivateKey privateKey) throws Exception {
-        Signature signature = Signature.getInstance("Dilithium", "BCPQC");
+        Signature signature = Signature.getInstance(ALGORITHM, PROVIDER);
         signature.initSign(privateKey);
         signature.update(message);
         return signature.sign();
@@ -75,7 +81,7 @@ public class QuantumResistantCrypto {
      * Verify Dilithium signature
      */
     public static boolean verifyDilithium(byte[] message, byte[] signature, PublicKey publicKey) throws Exception {
-        Signature sig = Signature.getInstance("Dilithium", "BCPQC");
+        Signature sig = Signature.getInstance(ALGORITHM, PROVIDER);
         sig.initVerify(publicKey);
         sig.update(message);
         return sig.verify(signature);

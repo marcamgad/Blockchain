@@ -16,28 +16,65 @@
         <!-- Audit PoC tests (docs/audit) FAIL by design until each finding is fixed. Excluded from
              the default build; run with: mvn -o test -Dtest=HybridChainAuditPoCTest -Daudit.excluded=none -->
         <audit.excluded>audit-poc</audit.excluded>
+        <spring-boot.version>3.5.16</spring-boot.version>
+        <tomcat.override.version>10.1.61</tomcat.override.version>
         <pit.target>com.hybrid.blockchain.Crypto</pit.target>
         <pit.name>default</pit.name>
     </properties>
 
-    <!-- Security patch pins (audit Ops/Deps, OSV): Spring Boot 3.2.1 ships Tomcat 10.1.17, which has
-         7 CRITICAL / 16 HIGH advisories. 10.1.44 is the same Servlet 6.0 line (drop-in). -->
+    <!-- Dependency versions (audit Ops/Deps, OSV.dev): the Spring Boot BOM manages Spring,
+         Spring Security, Tomcat, Jackson, Logback, Micrometer, JUnit, Mockito ... as one tested set.
+         Non-BOM pins below are security upgrades of transitive libraries. -->
     <dependencyManagement>
         <dependencies>
+            <!-- Overrides declared BEFORE the Spring Boot BOM win. Each fixes OSV advisories still
+                 present in Boot 3.5.16's managed versions (audit Ops/Deps). -->
+            <dependency>
+                <groupId>com.fasterxml.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>2.22.3</version> <!-- 2.22.4 is a core-only patch: datatype modules not published -->
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.logging.log4j</groupId>
+                <artifactId>log4j-bom</artifactId>
+                <version>2.26.1</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-lang3</artifactId>
+                <version>3.21.0</version>
+            </dependency>
             <dependency>
                 <groupId>org.apache.tomcat.embed</groupId>
                 <artifactId>tomcat-embed-core</artifactId>
-                <version>10.1.44</version>
+                <version>${tomcat.override.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.apache.tomcat.embed</groupId>
                 <artifactId>tomcat-embed-websocket</artifactId>
-                <version>10.1.44</version>
+                <version>${tomcat.override.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.apache.tomcat.embed</groupId>
                 <artifactId>tomcat-embed-el</artifactId>
-                <version>10.1.44</version>
+                <version>${tomcat.override.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- transitive via leveldb; 21.0 has OSV advisories -->
+            <dependency>
+                <groupId>com.google.guava</groupId>
+                <artifactId>guava</artifactId>
+                <version>33.3.1-jre</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
@@ -50,7 +87,6 @@
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
-            <version>2.17.1</version>
         </dependency>
 
         <!-- ========================================================= -->
@@ -59,7 +95,6 @@
         <dependency>
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-lang3</artifactId>
-            <version>3.13.0</version>
         </dependency>
 
         <!-- ========================================================= -->
@@ -68,27 +103,21 @@
         <dependency>
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcprov-jdk18on</artifactId>
-            <version>1.78.1</version>
+            <version>1.86</version>
         </dependency>
         <dependency>
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcpkix-jdk18on</artifactId>
-            <version>1.78.1</version>
+            <version>1.86</version>
         </dependency>
 
         <!-- ========================================================= -->
         <!--  Networking (P2P layer will use Netty)                    -->
         <!-- ========================================================= -->
-        <dependency>
-            <groupId>io.netty</groupId>
-            <artifactId>netty-all</artifactId>
-            <version>4.1.98.Final</version>
-        </dependency>
 
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
-            <version>2.0.9</version>
         </dependency>                                            
         <!-- ========================================================= -->
         <!--  LevelDB (pure Java and JNI bindings)                     -->
@@ -111,25 +140,21 @@
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
-            <version>5.9.3</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-params</artifactId>
-            <version>5.9.3</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.awaitility</groupId>
             <artifactId>awaitility</artifactId>
-            <version>4.2.1</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.assertj</groupId>
             <artifactId>assertj-core</artifactId>
-            <version>3.26.3</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -141,68 +166,57 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
-            <version>3.2.1</version> <!-- latest stable version -->
         </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-websocket</artifactId>
-            <version>3.2.1</version>
         </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-json</artifactId>
-            <version>3.2.1</version>
         </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-validation</artifactId>
-            <version>3.2.1</version>
         </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security</artifactId>
-            <version>3.2.1</version>
         </dependency>
 
         <dependency>
             <groupId>org.springframework.security</groupId>
             <artifactId>spring-security-test</artifactId>
-            <version>6.2.1</version>
             <scope>test</scope>
         </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
-            <version>3.2.1</version>
         </dependency>
 
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-registry-prometheus</artifactId>
-            <version>1.12.0</version>
         </dependency>
         
         <dependency>
             <groupId>org.codehaus.janino</groupId>
             <artifactId>janino</artifactId>
-            <version>3.1.10</version>
         </dependency>
 
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>
-            <version>5.14.2</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-junit-jupiter</artifactId>
-            <version>5.14.2</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -214,19 +228,16 @@
         <dependency>
             <groupId>net.bytebuddy</groupId>
             <artifactId>byte-buddy</artifactId>
-            <version>1.15.10</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>net.bytebuddy</groupId>
             <artifactId>byte-buddy-agent</artifactId>
-            <version>1.15.10</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
-            <version>3.2.1</version>
             <scope>test</scope>
             <exclusions>
                 <exclusion>
@@ -238,7 +249,6 @@
         <dependency>
             <groupId>jakarta.annotation</groupId>
             <artifactId>jakarta.annotation-api</artifactId>
-            <version>2.1.1</version>
         </dependency>
         <dependency>
             <groupId>io.jsonwebtoken</groupId>
@@ -296,7 +306,7 @@
         <dependency>
             <groupId>org.msgpack</groupId>
             <artifactId>jackson-dataformat-msgpack</artifactId>
-            <version>0.9.8</version>
+            <version>0.9.12</version>
         </dependency>
     </dependencies>
 
@@ -306,7 +316,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
-                <version>2.22.2</version>
+                <version>3.5.3</version> <!-- 2.22.2 cannot launch JUnit Platform 1.12 (0 tests ran) -->
                 <configuration>
                     <!-- Disabled parallel to avoid cross-test state pollution (LevelDB locks, static state) -->
                     <forkCount>1</forkCount>
@@ -419,7 +429,7 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
-                <version>3.2.1</version>
+                <version>${spring-boot.version}</version>
                 <configuration>
                     <mainClass>com.hybrid.App</mainClass>
                 </configuration>
