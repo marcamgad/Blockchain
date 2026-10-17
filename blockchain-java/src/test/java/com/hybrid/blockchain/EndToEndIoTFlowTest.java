@@ -82,7 +82,7 @@ public class EndToEndIoTFlowTest {
             Transaction txCommit = new Transaction.Builder()
                 .type(Transaction.Type.FEDERATED_COMMIT)
                 .from(deviceId)
-                .data(new byte[32]) // dummy model hash
+                .data(Crypto.bytesToHex(Crypto.hash("model-round-1".getBytes())).getBytes()) // a real model hash
                 .nonce(17)
                 .fee(100)
                 .sign(device.getPrivateKey(), device.getPublicKey());

@@ -74,7 +74,7 @@ public class SSTORECorrectionTest {
         blockchain.getState().setCode("ContractAddress", bytecode);
         blockchain.getState().credit(fromAddress, 100000);
         
-        Block block = new Block(1, System.currentTimeMillis(), Collections.singletonList(tx), 
+        Block block = new Block(1, blockchain.getLatestBlock().getTimestamp() + 1, Collections.singletonList(tx), 
                 blockchain.getLatestBlock().getHash(), blockchain.getDifficulty(), "dummy_root");
         block.setValidatorId("ValidatorA");
         block.setSignature(new byte[64]);

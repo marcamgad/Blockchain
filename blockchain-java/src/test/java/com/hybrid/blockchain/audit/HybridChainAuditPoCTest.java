@@ -395,20 +395,19 @@ public class HybridChainAuditPoCTest {
     void hc017_failedTxFeeCreditedToProposer() throws Exception {
         try (LedgerPoCFixture f = new LedgerPoCFixture()) {
             TestKeyPair sender = new TestKeyPair(7702);
-            long r = f.scheduledReward();
-            f.commitAndApply(f.build(List.of(mintN(sender.getAddress(), r, 0)), 0));
+            long r = f.fund(sender.getAddress());
             long half = r / 2;
             String sink = new TestKeyPair(7703).getAddress();
             // Both validate against the PRE-block balance r (validation is not cumulative);
-            // tx#2 then fails in apply with 'Insufficient balance', but its fee is still paid out.
+            // tx#2 cannot be applied once tx#1 has spent the balance.
             Transaction t1 = LedgerPoCFixture.transfer(sender, sink, half, half, 1);
             Transaction t2 = LedgerPoCFixture.transfer(sender, sink, half, half, 2);
             long before = LedgerPoCFixture.totalSupply(f.chain);
-            f.commitAndApply(f.build(List.of(t1, t2), 0));
+            String err = null;
+            try { f.commitAndApply(f.build(List.of(t1, t2), 0)); } catch (Exception e) { err = e.getMessage(); }
             long after = LedgerPoCFixture.totalSupply(f.chain);
-            System.out.printf("[HC-017] supply before=%d after=%d (created from nothing: %d); proposer balance=%d%n",
-                    before, after, after - before,
-                    f.chain.getState().getBalance(LedgerPoCFixture.VALIDATORS[0].getAddress()));
+            System.out.printf("[HC-017] block %s; supply before=%d after=%d (created from nothing: %d)%n",
+                    err == null ? "accepted" : "rejected (" + err + ")", before, after, after - before);
             assertThat(after).as("HC-017: total supply changed with no MINT in the block").isEqualTo(before);
         }
     }

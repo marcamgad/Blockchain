@@ -786,12 +786,21 @@ public class Blockchain {
                 receiptError = re.getMessage();
                 // Even on revert, some values might be known
                 result = new ExecutionResult(0, null, re.getReturnData(), events);
-            } catch (Exception ex) {
+            } catch (ChargedFailureException cf) {
                 receiptStatus = TransactionReceipt.STATUS_FAILED;
-                receiptError = ex.getMessage();
+                receiptError = cf.getMessage();
                 result = new ExecutionResult(0, null, null, events);
+            } catch (Exception ex) {
+                // [HC-017] A transaction that cannot be applied makes the block invalid. Before,
+                // it got a FAILED receipt while its fee — never debited — was still paid to the
+                // proposer, creating money. Honest producers never include such transactions:
+                // createBlock simulates each candidate and drops the ones that fail.
+                throw new Exception("Block " + block.getIndex() + " contains an inapplicable transaction "
+                        + tx.getId() + ": " + ex.getMessage(), ex);
             }
-            totalFees += tx.getFee();
+            // Reaching here means the fee was debited (success, or a contract REVERT, whose fee
+            // and nonce are charged before execution).
+            totalFees = Math.addExact(totalFees, tx.getFee());
             // Build and save receipt
             TransactionReceipt receipt = new TransactionReceipt(
                     tx.getId(), block.getHash(), (int) block.getIndex(),
@@ -1208,8 +1217,9 @@ public class Blockchain {
                         // State changes intentionally discarded — contractSimState is not merged
                         throw re;
                     } catch (Exception e) {
-                        // Execution failed, discard contractSimState
-                        throw e;
+                        // Execution failed (e.g. out of gas): contractSimState is discarded, but the
+                        // fee and nonce above were legitimately charged. [HC-017]
+                        throw new ChargedFailureException(e.getMessage(), e);
                     }
                 }
             case IOT_MANAGEMENT:
