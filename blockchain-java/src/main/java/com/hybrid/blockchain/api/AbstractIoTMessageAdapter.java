@@ -82,23 +82,21 @@ public abstract class AbstractIoTMessageAdapter implements IoTMessageAdapter {
             throw new RateLimitedException("Ingress rate limit exceeded for " + deviceId);
         }
 
-        String nodeAddr = Config.NODE_ID;
+        // [HC-004] The sender must be the address of the key that signs. It used to be
+        // Config.NODE_ID ("node-<millis>"), which is not an address, so Transaction.verify()
+        // failed for every MQTT/CoAP reading and all IoT ingress was rejected.
+        BigInteger privKey = Config.getNodePrivateKey();   // throws if no node key: unsigned txs are never valid
+        byte[] pubKey = Crypto.derivePublicKey(privKey);
+        String nodeAddr = Crypto.deriveAddress(pubKey);
         long nonce = blockchain.getNonce(nodeAddr) + 1;
-        Transaction.Builder builder = new Transaction.Builder()
+        Transaction tx = new Transaction.Builder()
                 .type(type)
                 .from(nodeAddr)
                 .to(deviceId)
                 .amount(0)
                 .data(payload)
-                .nonce(nonce);
-
-        Transaction tx;
-        try {
-            BigInteger privKey = Config.getNodePrivateKey();
-            tx = builder.sign(privKey, Crypto.derivePublicKey(privKey)).build();
-        } catch (RuntimeException noKey) {
-            tx = builder.build(); // debug/test: no node key configured
-        }
+                .nonce(nonce)
+                .sign(privKey, pubKey);
 
         blockchain.addTransaction(tx);
         log.info("Submitted {} tx {} for device {}", type, tx.getTxid(), deviceId);
