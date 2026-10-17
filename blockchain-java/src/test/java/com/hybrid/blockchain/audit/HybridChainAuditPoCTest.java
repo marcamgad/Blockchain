@@ -643,7 +643,7 @@ public class HybridChainAuditPoCTest {
     @DisplayName("HC-023: a node restarted from its own storage must restore totalMinted")
     void hc023_restartLosesTotalMinted() throws Exception {
         try (LedgerPoCFixture f = new LedgerPoCFixture()) {
-            String to = new TestKeyPair(7712).getAddress();
+            String to = LedgerPoCFixture.VALIDATORS[0].getAddress();
             f.commitAndApply(f.build(List.of(mintN(to, f.scheduledReward(), 0)), 0));
             f.commitAndApply(f.build(List.of(mintN(to, f.scheduledReward(), 1)), 0));
             Blockchain restarted = new Blockchain(f.storage, new com.hybrid.blockchain.Mempool(10), f.consensus);
@@ -709,7 +709,7 @@ public class HybridChainAuditPoCTest {
     @DisplayName("HC-022: after fork resolution totalMinted must equal the MINTs on the canonical chain")
     void hc022_revertTipLeavesTotalMintedStale() throws Exception {
         try (LedgerPoCFixture f = new LedgerPoCFixture()) {
-            String to = new TestKeyPair(7708).getAddress();
+            String to = LedgerPoCFixture.VALIDATORS[0].getAddress();   // HC-016: MINT pays the proposer
             f.commitAndApply(f.build(List.of(mintN(to, f.scheduledReward(), 0)), 0));
             long r2 = f.scheduledReward();
             long ts = f.chain.getLatestBlock().getTimestamp();
@@ -741,7 +741,7 @@ public class HybridChainAuditPoCTest {
     void hc022b_revertTipLeavesBaseFeeStale() throws Exception {
         try (LedgerPoCFixture f = new LedgerPoCFixture()) {
             // Blocks above the fee-market target (TARGET_GAS_PER_BLOCK txs) move baseFee off its floor.
-            TestKeyPair s = new TestKeyPair(7725);
+            TestKeyPair s = LedgerPoCFixture.VALIDATORS[0];   // HC-016: the proposer earns the rewards it spends
             for (int m = 0; m < 45; m++) f.commitAndApply(f.build(List.of(mintN(s.getAddress(), f.scheduledReward(), m)), 0));
             int n = com.hybrid.blockchain.Config.TARGET_GAS_PER_BLOCK + 1;
             long fee = f.chain.getCurrentBaseFee() + 1;

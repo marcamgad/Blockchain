@@ -18,6 +18,9 @@ import org.slf4j.LoggerFactory;
 public class Blockchain {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Logger log = LoggerFactory.getLogger(Blockchain.class);
+    /** [HC-022] keys under which a block snapshot records chain-level counters. */
+    static final String SNAP_TOTAL_MINTED = "_totalMinted";
+    static final String SNAP_BASE_FEE = "_baseFee";
 
     protected List<Block> chain;
     private Mempool mempool;
@@ -92,6 +95,11 @@ public class Blockchain {
                     Map<String, Object> rawUTXO = (Map<String, Object>) snap.get("utxo");
                     state = AccountState.fromMap(rawState);
                     utxo = UTXOSet.fromMap(rawUTXO);
+                    // [HC-023] restore the supply counter on this path too (it was only read on
+                    // the tip-hash path, so every restart reset totalMinted to 0)
+                    Object snapMinted = rawState == null ? null : rawState.get(SNAP_TOTAL_MINTED);
+                    if (snapMinted == null) snapMinted = storage.getMeta("totalMinted");
+                    if (snapMinted instanceof Number) totalMinted = ((Number) snapMinted).longValue();
                     Block tip = storage.loadBlockByHeight(snapHeight);
                     if (tip != null) {
                         chain.add(tip);
@@ -677,8 +685,13 @@ public class Blockchain {
         if (snapshot == null) {
             throw new Exception("Critical: Cannot revert tip, no snapshot found for height " + newTip.getIndex());
         }
-        AccountState preConstructedState = AccountState.fromMap((Map<String, Object>) snapshot.get("state"));
+        Map<String, Object> rawSnapState = (Map<String, Object>) snapshot.get("state");
+        AccountState preConstructedState = AccountState.fromMap(rawSnapState);
         UTXOSet preConstructedUTXO = UTXOSet.fromMap((Map<String, Object>) snapshot.get("utxo"));
+        // [HC-022] chain-level counters at the new tip. Older snapshots lack them; then the
+        // counters are left unchanged and the condition is logged (cannot be repaired here).
+        Object snapMinted = rawSnapState == null ? null : rawSnapState.get(SNAP_TOTAL_MINTED);
+        Object snapBaseFee = rawSnapState == null ? null : rawSnapState.get(SNAP_BASE_FEE);
 
         lock.writeLock().lock();
         try {
@@ -686,7 +699,14 @@ public class Blockchain {
             // AUDIT-FIX: pre-construct then atomic-swap.
             this.state = preConstructedState;
             this.utxo = preConstructedUTXO;
-            
+            if (snapMinted instanceof Number && snapBaseFee instanceof Number) {
+                this.totalMinted = ((Number) snapMinted).longValue();
+                storage.putMeta("totalMinted", this.totalMinted);
+                feeMarket.saveBaseFee(storage, ((Number) snapBaseFee).longValue());
+            } else {
+                log.warn("[FORK] snapshot {} has no chain counters; totalMinted/baseFee not restored", newTip.getIndex());
+            }
+
             storage.saveState(this.state);
             storage.saveUTXO(this.utxo.toJSON());
             storage.put("chain:tip", newTip.getHash());
@@ -880,7 +900,11 @@ public class Blockchain {
         storage.saveState(state);
         
         // Save snapshot for fork resolution (save at height index to allow revert from index+1)
-        storage.saveSnapshot((int)block.getIndex(), state.toJSON(), utxo.toJSON());
+        // [HC-022] the snapshot also carries the chain-level counters revertTip must restore
+        Map<String, Object> snapState = state.toJSON();
+        snapState.put(SNAP_TOTAL_MINTED, totalMinted);
+        snapState.put(SNAP_BASE_FEE, nextBaseFee);
+        storage.saveSnapshot((int)block.getIndex(), snapState, utxo.toJSON());
         
         pruneBlock(block);
         
