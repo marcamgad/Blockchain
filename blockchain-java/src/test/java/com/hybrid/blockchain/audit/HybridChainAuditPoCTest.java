@@ -327,7 +327,9 @@ public class HybridChainAuditPoCTest {
 
         Method handle = MQTTAdapter.class.getDeclaredMethod("handleMessage", String.class, String.class);
         handle.setAccessible(true);
-        handle.invoke(adapter, "blockchain/iot/sensor-7/telemetry", "{\"deviceId\":\"sensor-7\",\"value\":21.5}");
+        // management topic: same build+sign path; telemetry additionally requires a device
+        // signature since HC-013 and is rejected before a transaction is built
+        handle.invoke(adapter, "blockchain/iot/sensor-7/mgmt", "{\"deviceId\":\"sensor-7\",\"action\":\"RESUME\"}");
 
         ArgumentCaptor<Transaction> captor = ArgumentCaptor.forClass(Transaction.class);
         Mockito.verify(chain).addTransaction(captor.capture());

@@ -81,6 +81,16 @@ public abstract class AbstractIoTMessageAdapter implements IoTMessageAdapter {
         if (!allowIngress(deviceId)) {
             throw new RateLimitedException("Ingress rate limit exceeded for " + deviceId);
         }
+        // [HC-013] Telemetry must be signed by the device's own registered key. Before, anyone able
+        // to publish to the broker / CoAP endpoint could attribute readings to any device id.
+        if (type == Transaction.Type.TELEMETRY) {
+            com.hybrid.blockchain.lifecycle.DeviceReading reading =
+                    com.hybrid.blockchain.lifecycle.DeviceReading.parse(payload);
+            if (reading == null || !reading.verify(blockchain.getState(), deviceId, System.currentTimeMillis())) {
+                throw new IllegalArgumentException("Telemetry for " + deviceId
+                        + " is not a valid device-signed reading (see DeviceReading)");
+            }
+        }
 
         // [HC-004] The sender must be the address of the key that signs. It used to be
         // Config.NODE_ID ("node-<millis>"), which is not an address, so Transaction.verify()

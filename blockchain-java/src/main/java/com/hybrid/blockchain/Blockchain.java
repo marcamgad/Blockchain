@@ -43,6 +43,15 @@ public class Blockchain {
      * FL model). Flushed only after the block passes the state-root check; discarded if it fails.
      */
     private final List<Runnable> pendingWrites = new ArrayList<>();
+    /**
+     * [HC-013] Time used by time-dependent validation rules: the block timestamp while a block is
+     * applied or built (consensus-agreed), 0 = "now" at mempool admission. Guarded by {@link #lock}.
+     */
+    private long validationTimestamp = 0;
+
+    private long validationTime() {
+        return validationTimestamp != 0 ? validationTimestamp : System.currentTimeMillis();
+    }
     private com.hybrid.blockchain.monitoring.BlockchainMonitor monitor;
     private com.hybrid.blockchain.audit.AuditLogger auditLogger;
 
@@ -543,7 +552,18 @@ public class Blockchain {
                                     // Fallback for missing/corrupt DID docs on non-PUF devices
                                 }
                             }
-                            
+
+                            // [HC-013] A gateway may relay a reading the DEVICE itself signed with
+                            // its registered key (end-to-end authenticity; the relaying sender only
+                            // pays the fee). The timestamp window bounds replay of old readings.
+                            if (!authorized) {
+                                com.hybrid.blockchain.lifecycle.DeviceReading reading =
+                                        com.hybrid.blockchain.lifecycle.DeviceReading.parse(tx.getData());
+                                if (reading != null && reading.verify(state, deviceId, validationTime())) {
+                                    authorized = true;
+                                }
+                            }
+
                             if (!authorized) {
                                 throw new Exception("TELEMETRY rejected: sender " + tx.getFrom() + " not authorized for device " + deviceId);
                             }
@@ -807,8 +827,13 @@ public class Blockchain {
                 expectedNonces.put(tx.getFrom(), base + 1);
             }
         }
-        for (Transaction tx : sortedTxs) {
-            validateTransaction(tx, true);
+        validationTimestamp = block.getTimestamp();   // [HC-013] consensus time for validation
+        try {
+            for (Transaction tx : sortedTxs) {
+                validateTransaction(tx, true);
+            }
+        } finally {
+            validationTimestamp = 0;
         }
 
         // [S1-01] Rollback guard. Everything below mutates the LIVE state/utxo, but the
@@ -1164,6 +1189,7 @@ public class Blockchain {
             
             // Enforce block size limit (2 MB)
             int blockBytesUsed = 0;
+            validationTimestamp = timestamp;   // [HC-013] validate candidates at the block's time
             for (Transaction tx : candidateTxs) {
                 try {
                     // [HC-025] Block semantics, not mempool semantics. validateTransaction(tx)
@@ -1192,6 +1218,7 @@ public class Blockchain {
                 }
             }
             
+            validationTimestamp = 0;
             // FIX 12: Do NOT double-credit the miner here.
             // The MINT tx already credited the block reward via applyTransactionToState().
             // The validator fee credit is applied in applyBlockInternal() after block inclusion.
@@ -1347,6 +1374,10 @@ public class Blockchain {
                             telemetryPayload = proof.getPayload();
                         }
                     } catch (Exception ignored) {} // Not a ZKP proof, use raw data
+                    // [HC-013] device-signed envelope relayed by a gateway: store the device's payload
+                    com.hybrid.blockchain.lifecycle.DeviceReading relayed =
+                            com.hybrid.blockchain.lifecycle.DeviceReading.parse(rawData);
+                    if (relayed != null) telemetryPayload = relayed.payload();
 
                     // [HC-026] The anomaly detector is NOT consulted here. Its sliding window lives in
                     // this JVM's memory (empty after a restart, fed twice on the proposer, fed by the
@@ -1592,7 +1623,11 @@ public class Blockchain {
                             MAPPER.readValue(payload, com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof.class);
                     if (proof.getPayload() != null) payload = proof.getPayload();
                 } catch (Exception notAProof) { /* raw reading */ }
-                if (detector.check(tx.getFrom(), payload, block.getTimestamp()) > 1) {
+                String device = tx.getFrom();
+                com.hybrid.blockchain.lifecycle.DeviceReading relayed =
+                        com.hybrid.blockchain.lifecycle.DeviceReading.parse(tx.getData());
+                if (relayed != null) { payload = relayed.payload(); device = relayed.deviceId; }   // [HC-013]
+                if (detector.check(device, payload, block.getTimestamp()) > 1) {
                     if (monitor != null) monitor.recordMetric("telemetry.anomalies", 1);
                     if (eventBus != null) {
                         try { eventBus.publish("anomalies", tx); } catch (Exception ignored) { }
