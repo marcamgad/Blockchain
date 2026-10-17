@@ -68,6 +68,31 @@ class BlockProductionTest {
         }
     }
 
+    /** [HC-034] REST-style iteration of getChain() while blocks are applied. */
+    @Test
+    void chainIterationIsSafeDuringBlockApplication() throws Exception {
+        try (LedgerPoCFixture f = new LedgerPoCFixture()) {
+            String v0 = LedgerPoCFixture.VALIDATORS[0].getAddress();
+            java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
+            java.util.concurrent.atomic.AtomicBoolean done = new java.util.concurrent.atomic.AtomicBoolean();
+            Thread reader = new Thread(() -> {
+                while (!done.get()) {
+                    try {
+                        long sum = 0;
+                        for (Block b : f.chain.getChain()) sum += b.getIndex();   // as IoTRestAPI does
+                        if (sum < 0) throw new IllegalStateException();
+                    } catch (Throwable t) { failure.compareAndSet(null, t); return; }
+                }
+            });
+            reader.start();
+            for (int i = 0; i < 40; i++) f.commitAndApply(f.build(java.util.List.of(LedgerPoCFixture.mint(v0, f.scheduledReward())), 0));
+            done.set(true);
+            reader.join();
+            assertThat(failure.get()).as("reader saw a torn chain").isNull();
+            assertThat(f.chain.getHeight()).isEqualTo(40);
+        }
+    }
+
     @Test
     void producerSkipsTransferThatOverspendsCumulatively() throws Exception {
         try (LedgerPoCFixture f = new LedgerPoCFixture()) {

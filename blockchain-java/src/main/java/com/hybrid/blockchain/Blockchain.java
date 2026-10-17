@@ -32,7 +32,7 @@ public class Blockchain {
     protected Consensus consensus;
     private final HardwareManager hardwareManager;
     private final RateLimiter transactionRateLimiter;
-    private boolean paused = false;
+    private volatile boolean paused = false;   // [HC-034] written by REST, read by the proposer thread
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
     private TokenRegistry tokenRegistry;
     private com.hybrid.blockchain.api.EventBus eventBus;
@@ -240,7 +240,7 @@ public class Blockchain {
 
     public boolean isPaused() { return paused; }
     public void setPaused(boolean paused) { this.paused = paused; }
-    private boolean skipRateLimit = false;
+    private volatile boolean skipRateLimit = false;   // [HC-034]
     public void setSkipRateLimit(boolean skipRateLimit) { this.skipRateLimit = skipRateLimit; }
     public UTXOSet getUtxoSet() { return this.utxo; }
 
@@ -1728,8 +1728,28 @@ public class Blockchain {
         return Crypto.bytesToHex(MerkleTree.computeRoot(leaves));
     }
 
+    /**
+     * [HC-034] Immutable snapshot taken under the read lock. It used to return the live list, which
+     * REST handlers iterated without the lock while applyBlock/revertTip mutated it
+     * (ConcurrentModificationException, torn reads).
+     */
     public List<Block> getChain() {
-        return chain;
+        lock.readLock().lock();
+        try {
+            return List.copyOf(chain);
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    /** Test hook: append a block to the in-memory chain without validation (package-private). */
+    void appendForTest(Block b) {
+        lock.writeLock().lock();
+        try {
+            chain.add(b);
+        } finally {
+            lock.writeLock().unlock();
+        }
     }
 
     public Storage getStorage() {

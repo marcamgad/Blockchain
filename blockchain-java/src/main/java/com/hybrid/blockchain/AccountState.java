@@ -55,7 +55,9 @@ public class AccountState {
     }
 
     public AccountState(Map<String, Account> obj) {
-        this.state = new HashMap<>(obj);
+        // [HC-034] concurrent, like the no-arg constructor: a restarted/cloned state was a plain
+        // HashMap read by REST threads without the chain lock
+        this.state = new ConcurrentHashMap<>(obj);
         this.mpt = new MerklePatriciaTrie();
         for (Map.Entry<String, Account> entry : obj.entrySet()) {
             updateMpt(entry.getKey(), entry.getValue());
@@ -212,6 +214,7 @@ public class AccountState {
      * @return native token balance
      */
     public long getBalance(String addr) {
+        if (addr == null) return 0;   // [HC-034] ConcurrentHashMap rejects null keys
         Account acc = state.get(addr);
         return acc != null ? acc.getBalance() : 0;
     }
@@ -304,6 +307,7 @@ public class AccountState {
      * @return the token balance, or 0 if not found
      */
     public long getTokenBalance(String addr, String tokenId) {
+        if (addr == null) return 0;
         Account acc = state.get(addr);
         return acc != null ? acc.getTokenBalance(tokenId) : 0;
     }
@@ -322,12 +326,13 @@ public class AccountState {
     // ─── Other accessors ─────────────────────────────────────────────────────
 
     public long getNonce(String addr) {
+        if (addr == null) return 0;
         Account acc = state.get(addr);
         return acc != null ? acc.getNonce() : 0;
     }
 
     public Account getAccount(String addr) {
-        return state.get(addr);
+        return addr == null ? null : state.get(addr);
     }
 
     public byte[] getSerializedAccount(String addr) {
@@ -428,6 +433,7 @@ public class AccountState {
     public PrivateDataManager getPrivateDataManager() { return privateDataManager; }
 
     public byte[] getCommitment(String addr) {
+        if (addr == null) return null;
         Account acc = state.get(addr);
         return acc != null ? acc.getCommitment() : null;
     }
