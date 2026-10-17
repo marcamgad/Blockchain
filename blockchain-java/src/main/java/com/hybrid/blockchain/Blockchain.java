@@ -715,6 +715,18 @@ public class Blockchain {
         if (!consensus.verifyBlock(block, validator))
             throw new Exception("Invalid validator signature");
 
+        // [HC-016] Supply rule: at most one MINT per block, paid to the block's proposer.
+        int mintCount = 0;
+        for (Transaction tx : block.getTransactions()) {
+            if (tx.getType() == Transaction.Type.MINT) {
+                mintCount++;
+                if (!block.getValidatorId().equals(tx.getTo()))
+                    throw new Exception("MINT must pay the block proposer " + block.getValidatorId());
+            }
+        }
+        if (mintCount > 1)
+            throw new Exception("At most one MINT per block, got " + mintCount);
+
         java.util.List<Transaction> sortedTxs = new java.util.ArrayList<>(block.getTransactions());
         sortedTxs.sort(java.util.Comparator
                 .comparingInt((Transaction tx) -> tx.getType() == Transaction.Type.MINT ? 0 : 1)
@@ -927,6 +939,10 @@ public class Blockchain {
     public boolean addTransaction(Transaction tx) throws Exception {
         lock.writeLock().lock();
         try {
+            // [HC-016] Transactions without a sender (MINT, UTXO) are created by the block
+            // producer itself and are never accepted from the network or the API.
+            if (tx.getFrom() == null)
+                throw new Exception("System transactions (from == null) are not accepted from the network");
             // Perform deep validation (including AI audit for contracts).
             validateTransaction(tx, false);
 
@@ -1101,7 +1117,8 @@ public class Blockchain {
             String postStateRoot = clonedState.calculateStateRoot();
             Block newBlock = new Block((int)nextIndex, timestamp, txsToInclude,
                     prev.getHash(), difficulty, postStateRoot);
-            newBlock.setValidatorId(Config.NODE_ID);
+            // [HC-016] the proposer id must be the address the MINT and the fees are paid to
+            newBlock.setValidatorId(minerAddress);
             newBlock.setHash(newBlock.calculateHash());
             return newBlock;
         } finally {

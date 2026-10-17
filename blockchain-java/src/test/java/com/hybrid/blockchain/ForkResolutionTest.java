@@ -38,6 +38,8 @@ public class ForkResolutionTest {
         java.util.List<Validator> mockValidators = new java.util.ArrayList<>();
         mockValidators.add(new Validator("ValidatorA", new byte[33]));
         mockValidators.add(new Validator("ValidatorB", new byte[33]));
+        // [HC-016] block 1's MINT must pay its proposer, so the funded sender is also a validator
+        mockValidators.add(new Validator(new TestKeyPair(1).getAddress(), new byte[33]));
         when(consensus.getValidators()).thenReturn(mockValidators);
         when(consensus.verifyBlock(any(), any())).thenReturn(true);
 
@@ -51,7 +53,7 @@ public class ForkResolutionTest {
         // with wall-clock time, so a second wall-clock read here can collide in the same
         // millisecond and be rejected as "timestamp older than previous block".
         Block b1 = new Block(1, blockchain.getLatestBlock().getTimestamp() + 1, java.util.Collections.singletonList(mint), blockchain.getLatestBlock().getHash(), blockchain.getDifficulty(), "");
-        b1.setValidatorId("ValidatorA");
+        b1.setValidatorId(sender.getAddress());
         b1.setSignature(new byte[64]);
         
         AccountState simState = blockchain.getState().cloneState();

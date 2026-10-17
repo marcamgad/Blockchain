@@ -288,6 +288,9 @@ public class Mempool {
     private boolean addInternal(Transaction tx) {
         if (tx == null || tx.getId() == null)
             throw new IllegalArgumentException("Invalid tx");
+        // [HC-016] the mempool only holds sender-signed transactions
+        if (tx.getFrom() == null)
+            throw new IllegalArgumentException("system transactions are not accepted into the mempool");
         long now = System.currentTimeMillis();
         if (Math.abs(now - tx.getTimestamp()) > 1000L * 60 * 60 * 24)
             throw new IllegalArgumentException("Transaction too old");

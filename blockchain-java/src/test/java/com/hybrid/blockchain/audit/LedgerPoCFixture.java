@@ -112,6 +112,20 @@ final class LedgerPoCFixture implements AutoCloseable {
         return b;
     }
 
+    /**
+     * Funds {@code address} the way the protocol allows after HC-016: the proposer
+     * (VALIDATORS[0]) mints its own reward in one block, then transfers it in the next.
+     * Returns the amount credited.
+     */
+    long fund(String address) throws Exception {
+        TestKeyPair v = VALIDATORS[0];
+        commitAndApply(build(List.of(mint(v.getAddress(), scheduledReward())), 0));
+        long fee = Math.max(1, chain.getCurrentBaseFee());
+        long amount = chain.getState().getBalance(v.getAddress()) - fee;
+        commitAndApply(build(List.of(transfer(v, address, amount, fee, chain.getNonce(v.getAddress()) + 1)), 0));
+        return amount;
+    }
+
     void commitAndApply(Block b) throws Exception {
         consensus.markCommitted(b.getHash(), b.getIndex(), b.getValidatorId());
         chain.applyBlock(b);

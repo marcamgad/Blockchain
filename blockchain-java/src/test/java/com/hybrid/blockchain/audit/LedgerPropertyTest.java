@@ -92,9 +92,7 @@ class LedgerPropertyTest {
             Random r = new Random(seed);
             try (LedgerPoCFixture f = new LedgerPoCFixture()) {
                 TestKeyPair[] users = {new TestKeyPair(9100 + (int) seed), new TestKeyPair(9200 + (int) seed)};
-                for (TestKeyPair u : users)
-                    f.commitAndApply(f.build(List.of(new Transaction.Builder().type(Transaction.Type.MINT)
-                            .to(u.getAddress()).amount(f.scheduledReward()).nonce(r.nextLong()).build()), 0));
+                for (TestKeyPair u : users) f.fund(u.getAddress());   // HC-016: no minting to arbitrary users
                 String rootBefore = f.chain.getState().calculateStateRoot();
                 long b0 = f.chain.getState().getBalance(users[0].getAddress());
                 List<Transaction> txs = new ArrayList<>();

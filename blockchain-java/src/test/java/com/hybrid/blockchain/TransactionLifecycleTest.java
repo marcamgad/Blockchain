@@ -205,19 +205,20 @@ public class TransactionLifecycleTest {
     void testMintTransactionSuccess() throws Exception {
         int nextHeight = blockchain.getHeight() + 1;
         long expectedReward = Tokenomics.getCurrentReward(nextHeight, blockchain.getTotalMinted());
-        String miner = "0xminer";
-        
+        // [HC-016] the only MINT in a block is the proposer's reward (BlockApplier adds it)
+        String miner = tb.getValidatorKey().getAddress();
         Transaction mintTx = new Transaction.Builder()
                 .type(Transaction.Type.MINT)
                 .to(miner)
                 .amount(expectedReward)
                 .nonce(nextHeight)
                 .build();
-        
-        blockchain.validateTransaction(mintTx);
-        BlockApplier.createAndApplyBlock(tb, List.of(mintTx));
-        
-        assertThat(blockchain.getBalance(miner)).as("Miner should receive exact reward").isEqualTo(expectedReward);
+        blockchain.validateTransaction(mintTx);   // schedule check still passes for the exact amount
+
+        long before = blockchain.getBalance(miner);
+        BlockApplier.createAndApplyBlock(tb, List.of());
+
+        assertThat(blockchain.getBalance(miner) - before).as("Miner should receive exact reward").isEqualTo(expectedReward);
     }
 
     @Test
