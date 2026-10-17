@@ -56,6 +56,22 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
     private final Map<Long, AtomicBoolean> sentCommits = new ConcurrentHashMap<>();
     private final Map<Integer, Checkpoint> pendingCheckpoints = new ConcurrentHashMap<>();
 
+    /** [HC-012] unauthenticated-phase bounds */
+    static final int HANDSHAKE_TIMEOUT_MS = 10_000;
+    static final int MAX_PENDING_HANDSHAKES = 16;
+    private final java.util.concurrent.atomic.AtomicInteger pendingHandshakes = new java.util.concurrent.atomic.AtomicInteger();
+
+    /**
+     * [HC-011] Who may join after a successful handshake. Under PBFT: validators only, unless the
+     * operator explicitly allows read-only observer nodes (ALLOW_OBSERVER_PEERS=true).
+     */
+    boolean isAuthorisedPeer(String peerAddress) {
+        if (!(consensus instanceof PBFTConsensus)) return true;
+        if (consensus.isValidator(peerAddress)) return true;
+        String allow = System.getProperty("ALLOW_OBSERVER_PEERS", System.getenv("ALLOW_OBSERVER_PEERS"));
+        return Boolean.parseBoolean(allow);
+    }
+
     /**
      * Message types for peer-to-peer communication.
      */
@@ -575,16 +591,42 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                     socket.close();
                     return;
                 }
-                
-                remotePeerId = !isInbound ? performOutboundHandshake(in, out, localNonce)
-                        : performInboundHandshake(in, out, localNonce);
-                
+
+                // [HC-012] Bound the unauthenticated phase: at most MAX_PENDING_HANDSHAKES at once,
+                // each must complete within HANDSHAKE_TIMEOUT_MS. Before, there was no timeout at
+                // all, so a peer that opened a socket and sent nothing held a thread forever, and
+                // half-open connections were not counted against any limit.
+                if (pendingHandshakes.incrementAndGet() > MAX_PENDING_HANDSHAKES) {
+                    pendingHandshakes.decrementAndGet();
+                    log.warn("[P2P] Rejecting connection: {} handshakes already pending", MAX_PENDING_HANDSHAKES);
+                    socket.close();
+                    return;
+                }
+                try {
+                    socket.setSoTimeout(HANDSHAKE_TIMEOUT_MS);
+                    remotePeerId = !isInbound ? performOutboundHandshake(in, out, localNonce)
+                            : performInboundHandshake(in, out, localNonce);
+                } finally {
+                    pendingHandshakes.decrementAndGet();
+                }
+                socket.setSoTimeout(0);   // authenticated peers may legitimately stay quiet
+
                 if (peerManager.isBanned(socket.getInetAddress().getHostAddress())) {
                     log.warn("[P2P] Rejecting banned peer {}", remotePeerId);
                     socket.close();
                     return;
                 }
-                
+
+                // [HC-011] The handshake proves the peer holds the key for remotePeerId; under PBFT
+                // only validators may join the validator network. Before, any key holder was admitted
+                // (Sybil identities filling the peer table, eclipse).
+                if (!isAuthorisedPeer(remotePeerId)) {
+                    log.warn("[P2P] Rejecting {}: not in the validator set", remotePeerId);
+                    socket.close();
+                    remotePeerId = null;   // nothing registered yet; skip cleanup in finally
+                    return;
+                }
+
                 peerConnections.put(remotePeerId, out);
                 log.info("[P2P] Secure session established with {} ID: {} (Local: {})", 
                         socket.getInetAddress(), remotePeerId, localDID);
