@@ -157,13 +157,14 @@ public class HybridChainAuditPoCTest {
     @Test
     @DisplayName("HC-003: the CA signing key must not be derivable from the disk-encryption key")
     void hc003_caSigningKeyDerivedFromStorageKey() throws Exception {
-        byte[] aesKey = java.util.Arrays.copyOf(
-                Crypto.hash("contents-of-any-operators-env-file".getBytes(StandardCharsets.UTF_8)), 16);
-        CertificateAuthority victimCa = new CertificateAuthority(aesKey);
-        CertificateAuthority attackerCa = new CertificateAuthority(aesKey); // attacker only knows the key
+        // The node's CA exactly as App.java builds it ...
+        CertificateAuthority nodeCa = new CertificateAuthority(com.hybrid.blockchain.Config.requireNetworkCaSeed());
+        // ... versus an attacker who holds only the disk-encryption key (e.g. a stolen env file / SD card)
+        CertificateAuthority attackerCa = new CertificateAuthority(com.hybrid.blockchain.Config.STORAGE_AES_KEY);
 
         boolean identical = java.util.Arrays.equals(
-                caPrivateKey(victimCa).getEncoded(), caPrivateKey(attackerCa).getEncoded());
+                caPrivateKey(nodeCa).getEncoded(), caPrivateKey(attackerCa).getEncoded());
+        System.out.println("[HC-003] CA key derivable from STORAGE_AES_KEY alone: " + identical);
         assertThat(identical)
                 .as("HC-003: anyone holding STORAGE_AES_KEY reconstructs the network CA's private "
                         + "signing key bit-for-bit")

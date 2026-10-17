@@ -55,8 +55,9 @@ public class App {
         log.info("Validators initialized: {}", validators.size());
 
         // 4. Initialize Certificate Authority for mTLS
-        // The CA is deterministically derived from STORAGE_AES_KEY, ensuring consistency across nodes
-        CertificateAuthority ca = new CertificateAuthority(Config.STORAGE_AES_KEY);
+        // [HC-003] The CA is derived from NETWORK_CA_SEED (same on every node), NOT from the
+        // per-node disk-encryption key
+        CertificateAuthority ca = new CertificateAuthority(Config.requireNetworkCaSeed());
         X509Certificate caCert = ca.getCACertificate();
         log.info("[mTLS] CA initialized with root certificate CN={}", caCert.getSubjectX500Principal().getName());
 

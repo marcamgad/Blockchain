@@ -68,22 +68,23 @@ public class CertificateAuthority {
         BigInteger privKeyInt = new BigInteger(1, derivedKey);
         // secp256r1 curve order (approx 2^256)
         BigInteger curveOrder = new BigInteger("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551", 16);
-        privKeyInt = privKeyInt.mod(curveOrder);
-        
-        KeyPairGenerator keyGen = KeyPairGenerator.getInstance(KEY_ALGORITHM, "BC");
-        keyGen.initialize(new ECGenParameterSpec(EC_CURVE_NAME));
-        KeyPair generatedPair = keyGen.generateKeyPair();
-        
-        // Now we need to reconstruct with our deterministic private key
-        // Use BC specs directly
+        // [HC-005] private scalar in [1, n-1] (mod alone could yield 0)
+        privKeyInt = privKeyInt.mod(curveOrder.subtract(BigInteger.ONE)).add(BigInteger.ONE);
+
         ECNamedCurveParameterSpec ecSpec = ECNamedCurveTable.getParameterSpec(EC_CURVE_NAME);
-        org.bouncycastle.jce.spec.ECPrivateKeySpec privateKeySpec = 
+        org.bouncycastle.jce.spec.ECPrivateKeySpec privateKeySpec =
             new org.bouncycastle.jce.spec.ECPrivateKeySpec(privKeyInt, ecSpec);
-        
+        // [HC-005] The public key MUST be derived from the private key: Q = d * G. Previously it
+        // came from an unrelated, freshly generated random key pair, so the CA certificate's public
+        // key matched no private key and no certificate it issued ever verified (production mTLS
+        // could never complete a handshake).
+        org.bouncycastle.jce.spec.ECPublicKeySpec publicKeySpec =
+            new org.bouncycastle.jce.spec.ECPublicKeySpec(ecSpec.getG().multiply(privKeyInt).normalize(), ecSpec);
+
         KeyFactory keyFactory = KeyFactory.getInstance(KEY_ALGORITHM, "BC");
         PrivateKey prvKey = keyFactory.generatePrivate(privateKeySpec);
-        PublicKey pubKey = generatedPair.getPublic();
-        
+        PublicKey pubKey = keyFactory.generatePublic(publicKeySpec);
+
         return new KeyPair(pubKey, prvKey);
     }
 

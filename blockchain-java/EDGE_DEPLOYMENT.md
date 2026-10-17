@@ -288,15 +288,24 @@ VALIDATOR_PUBKEYS=031c…,02ab…,03ef…,02cd…   <- public, goes on EVERY nod
 Now generate the shared network secrets, also once:
 
 ```bash
-openssl rand -hex 16    # STORAGE_AES_KEY  - same value on every node (see warning below)
+openssl rand -hex 32    # NETWORK_CA_SEED  - SAME value on every node (network TLS authority)
 openssl rand -hex 32    # JWT_SECRET       - can be different per node
 ```
 
-> **Security warning about `STORAGE_AES_KEY`.** It is *meant* to be a per-node disk
-> encryption key, but the code also derives the network's TLS certificate authority from it,
-> so today every node must share it. That means anyone holding it can read every node's
-> database and impersonate nodes at the network layer. Treat it like the master secret of
-> the whole network. This is a real design flaw (audit finding HC-002), not a quirk.
+Then, **on each Pi separately**, generate that node's own disk-encryption key:
+
+```bash
+openssl rand -hex 16    # STORAGE_AES_KEY  - DIFFERENT on every node
+```
+
+> **What changed (audit fixes HC-003/HC-005).** The network's TLS certificate authority is now
+> derived from `NETWORK_CA_SEED`, no longer from `STORAGE_AES_KEY`. So:
+> - `NETWORK_CA_SEED` is the network's master secret: identical on every node, keep it private.
+>   Anyone holding it can issue node certificates.
+> - `STORAGE_AES_KEY` is now a true per-node secret: use a different value on each Pi. A stolen
+>   SD card no longer gives access to the other nodes or to the network authority.
+> - The node refuses to start if `NETWORK_CA_SEED` is missing, shorter than 32 bytes, or equal to
+>   `STORAGE_AES_KEY`.
 
 ### 7.3 Write the settings file on each Pi
 
@@ -304,12 +313,13 @@ openssl rand -hex 32    # JWT_SECRET       - can be different per node
 nano /home/pi/hybridchain.env
 ```
 
-Paste this, filling in the values. Only `NODE_PRIVATE_KEY` differs between Pis:
+Paste this, filling in the values. `NODE_PRIVATE_KEY` and `STORAGE_AES_KEY` differ between Pis:
 
 ```bash
 # --- secrets (KEEP PRIVATE) ---
 NODE_PRIVATE_KEY=PASTE_THIS_NODES_OWN_NODE_n_PRIVATE_KEY
-STORAGE_AES_KEY=PASTE_THE_SHARED_16_BYTE_HEX        # identical on every node
+STORAGE_AES_KEY=PASTE_THIS_NODES_OWN_16_BYTE_HEX    # different on every node
+NETWORK_CA_SEED=PASTE_THE_SHARED_32_BYTE_HEX        # identical on every node
 JWT_SECRET=PASTE_A_LONG_RANDOM_STRING
 
 # --- the validator set (public, identical on every node) ---

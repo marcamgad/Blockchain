@@ -132,6 +132,31 @@ public final class Config {
         }
     }
 
+    /**
+     * [HC-003] Seed of the network-wide mTLS certificate authority (hex, env/property
+     * NETWORK_CA_SEED, at least 32 bytes). It used to be STORAGE_AES_KEY, which forced every node
+     * to share its disk-encryption key and let anyone holding that key mint node certificates.
+     * Every node of one network sets the SAME value; it must differ from STORAGE_AES_KEY.
+     * In DEBUG a fixed development seed is used.
+     */
+    public static byte[] requireNetworkCaSeed() {
+        String hex = getEnv("NETWORK_CA_SEED", null);
+        byte[] seed;
+        if (hex != null && !hex.isBlank()) {
+            seed = HexUtils.decode(hex.trim());
+        } else if (getBooleanEnv("DEBUG", false)) {
+            seed = Crypto.hash("hybridchain-DEVELOPMENT-ONLY-network-ca-seed".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } else {
+            throw new IllegalStateException("NETWORK_CA_SEED must be set (hex, >= 32 bytes, same on every node, "
+                    + "different from STORAGE_AES_KEY)");
+        }
+        if (seed.length < 32)
+            throw new IllegalStateException("NETWORK_CA_SEED must be at least 32 bytes (64 hex chars)");
+        if (STORAGE_AES_KEY != null && java.util.Arrays.equals(seed, STORAGE_AES_KEY))
+            throw new IllegalStateException("NETWORK_CA_SEED must not equal STORAGE_AES_KEY");
+        return seed;
+    }
+
     // ─── Helpers ─────────────────────────────────────────────────────────────
 
     private static String getEnv(String name, String def) {
