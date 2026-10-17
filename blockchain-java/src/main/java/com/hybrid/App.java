@@ -130,8 +130,8 @@ public class App {
                 try {
                     peerNode.broadcastPeerList();
                     log.debug("[SEED] Broadcast peer list ({} known peers)", peerNode.getPeers().size());
-                } catch (Exception e) {
-                    log.warn("[SEED] Peer-list broadcast failed: {}", e.getMessage());
+                } catch (Throwable t) {   // keep the periodic task alive (see proposer)
+                    log.warn("[SEED] Peer-list broadcast failed: {}", t.getMessage());
                 }
             }, 30_000L, 30_000L, TimeUnit.MILLISECONDS);
             log.info("[SEED] Peer-list broadcast enabled (every 30 s)");
@@ -269,8 +269,10 @@ public class App {
                     
                     log.info("[PROPOSER] Proposed block {} hash: {}", seq, hash);
                 }
-            } catch (Exception e) {
-                log.error("[PROPOSER] Error in block production: {}", e.getMessage(), e);
+            } catch (Throwable t) {
+                // catch Throwable: a periodic task that throws (incl. an Error) is cancelled
+                // silently by the executor, and this node would never propose again
+                log.error("[PROPOSER] Error in block production: {}", t.getMessage(), t);
             }
         }, Config.TARGET_BLOCK_TIME_MS, Config.TARGET_BLOCK_TIME_MS, TimeUnit.MILLISECONDS);
         

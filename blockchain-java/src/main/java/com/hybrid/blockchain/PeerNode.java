@@ -513,8 +513,8 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                 }
 
                 broadcastPeerList();
-            } catch (Exception e) {
-                log.warn("[SYNC] Error during sync: {}", e.getMessage());
+            } catch (Throwable t) {   // a throwing periodic task is cancelled silently
+                log.warn("[SYNC] Error during sync: {}", t.getMessage());
             }
         }, 30, 30, TimeUnit.SECONDS);
     }
