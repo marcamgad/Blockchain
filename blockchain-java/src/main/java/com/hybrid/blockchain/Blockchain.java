@@ -653,6 +653,17 @@ public class Blockchain {
             default:
                 throw new Exception("Unknown transaction type: " + tx.getType());
         }
+
+        // [HC-033] Uniform fee rule for every signed transaction. Eight types (CONTRACT,
+        // IOT_MANAGEMENT, FEDERATED_*, TOKEN_REGISTER/MINT/BURN, PRIVATE_TRANSFER, TELEMETRY_BATCH)
+        // never checked fee >= baseFee, and the token types never checked the sender can pay it.
+        if (tx.getFrom() != null && tx.getType() != Transaction.Type.UTXO) {
+            long baseFee = feeMarket.getCurrentBaseFee(storage);
+            if (tx.getFee() < baseFee)
+                throw new Exception("Fee " + tx.getFee() + " below baseFee " + baseFee);
+            if (state.getBalance(tx.getFrom()) < tx.getFee())
+                throw new Exception("Insufficient native balance for fee");
+        }
     }
 
     // Apply block to chain, update UTXO and account state

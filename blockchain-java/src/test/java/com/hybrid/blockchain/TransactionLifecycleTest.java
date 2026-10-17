@@ -440,10 +440,10 @@ public class TransactionLifecycleTest {
         blockchain.getAccountState().credit(alice.getAddress(), INITIAL_BALANCE);
         
         String tokenId = "TF";
-        BlockApplier.createAndApplyBlock(tb, List.of(TestTransactionFactory.createTokenRegister(owner, "TF", "TF", tokenId, 1000L, 0, 1)));
+        BlockApplier.createAndApplyBlock(tb, List.of(TestTransactionFactory.createTokenRegister(owner, "TF", "TF", tokenId, 1000L, 10, 1)));
         
         Transaction mintTx = new Transaction.Builder()
-                .type(Transaction.Type.TOKEN_MINT)
+                .type(Transaction.Type.TOKEN_MINT).fee(10)   /* [HC-033] fee >= baseFee */
                 .from(owner.getAddress())
                 .to(alice.getAddress())
                 .amount(500)
@@ -513,10 +513,10 @@ public class TransactionLifecycleTest {
         blockchain.getAccountState().credit(alice.getAddress(), INITIAL_BALANCE);
         
         String tokenId = "TBN";
-        BlockApplier.createAndApplyBlock(tb, List.of(TestTransactionFactory.createTokenRegister(owner, "TBN", "TBN", tokenId, 1000L, 0, 1)));
+        BlockApplier.createAndApplyBlock(tb, List.of(TestTransactionFactory.createTokenRegister(owner, "TBN", "TBN", tokenId, 1000L, 10, 1)));
         
         Transaction mintTx = new Transaction.Builder()
-                .type(Transaction.Type.TOKEN_MINT)
+                .type(Transaction.Type.TOKEN_MINT).fee(10)   /* [HC-033] fee >= baseFee */
                 .from(owner.getAddress())
                 .to(alice.getAddress())
                 .amount(500)
@@ -544,7 +544,7 @@ public class TransactionLifecycleTest {
     void testTokenBurnExceeds() throws Exception {
         TestKeyPair alice = new TestKeyPair(240);
         Transaction burnTx = new Transaction.Builder()
-                .type(Transaction.Type.TOKEN_BURN)
+                .type(Transaction.Type.TOKEN_BURN).fee(10)   /* [HC-033] fee >= baseFee */
                 .from(alice.getAddress())
                 .amount(100)
                 .data("LOST".getBytes())

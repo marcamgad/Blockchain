@@ -256,6 +256,7 @@ public class AccountState {
      * @param amount  the amount to credit
      */
     public void creditToken(String addr, String tokenId, long amount) {
+        if (amount < 0) throw new IllegalArgumentException("Invalid amount: cannot credit negative amount");   // [HC-033]
         ensure(addr);
         Account acc = state.get(addr);
         acc.creditToken(tokenId, amount);
@@ -707,7 +708,7 @@ public class AccountState {
 
         /** Credits the native token. */
         public synchronized void credit(long amount) {
-            tokenBalances.merge("native", amount, (a, b) -> a + b);
+            tokenBalances.merge("native", amount, Math::addExact);   // [HC-033] overflow throws, never wraps
         }
 
         /** Sets a specific token balance. */
@@ -717,7 +718,7 @@ public class AccountState {
 
         /** Credits a specific token. */
         public synchronized void creditToken(String tokenId, long amount) {
-            tokenBalances.merge(tokenId, amount, (a, b) -> a + b);
+            tokenBalances.merge(tokenId, amount, Math::addExact);    // [HC-033]
         }
 
         /** Debits the native token (no balance check). */

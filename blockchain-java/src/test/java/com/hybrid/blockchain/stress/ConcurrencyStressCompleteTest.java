@@ -151,7 +151,7 @@ public class ConcurrencyStressCompleteTest {
                     synchronized(this) { 
                          long dynNonce = blockchain.getAccountState().getNonce(owner.getAddress()) + 1;
                          Transaction tx = new Transaction.Builder()
-                             .type(Transaction.Type.TOKEN_MINT)
+                             .type(Transaction.Type.TOKEN_MINT).fee(10)   /* [HC-033] fee >= baseFee */
                              .from(owner.getAddress())
                              .to("rec")
                              .amount(200)

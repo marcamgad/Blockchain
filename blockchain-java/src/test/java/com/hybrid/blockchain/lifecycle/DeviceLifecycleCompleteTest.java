@@ -108,7 +108,7 @@ public class DeviceLifecycleCompleteTest {
         }
         
         Transaction tx = new Transaction.Builder()
-                .type(Transaction.Type.IOT_MANAGEMENT)
+                .type(Transaction.Type.IOT_MANAGEMENT).fee(10)   /* [HC-033] fee >= baseFee */
                 .from(actor.getAddress())
                 .data(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsBytes(data))
                 .nonce(blockchain.getAccountState().getNonce(actor.getAddress()) + 1)
