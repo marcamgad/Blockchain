@@ -30,6 +30,48 @@ public class TokenRegistry {
      *
      * @param storage the storage instance for persisting token metadata
      */
+    // ── [HC-024] per-block staging ────────────────────────────────────────────
+    // Registry changes made while a block is applied are kept here and only persisted when the
+    // block is accepted. Before, they were written to storage immediately, so a REJECTED block
+    // still registered tokens (token-id squatting) and advanced totalMinted.
+    private Map<String, TokenInfo> staged = null;
+
+    /** Opens a staging area for the block about to be applied. */
+    public synchronized void beginBlock() { staged = new HashMap<>(); }
+
+    /** The block was accepted: publish and persist every staged change. */
+    public synchronized void commitBlock() {
+        if (staged == null) return;
+        for (TokenInfo info : staged.values()) {
+            tokenCache.put(info.tokenId, info);
+            persistToken(info);
+        }
+        staged = null;
+    }
+
+    /** The block was rejected: drop every staged change. */
+    public synchronized void rollbackBlock() { staged = null; }
+
+    /** Copy-on-write while staging, so the committed TokenInfo is never mutated in place. */
+    private TokenInfo writable(TokenInfo info) {
+        if (staged == null) return info;
+        TokenInfo copy = staged.get(info.tokenId);
+        if (copy == null) {
+            copy = new TokenInfo(info.tokenId, info.name, info.symbol, info.decimals, info.maxSupply, info.owner);
+            copy.totalMinted = info.totalMinted;
+        }
+        return copy;
+    }
+
+    private void store(TokenInfo info) {
+        if (staged != null) {
+            staged.put(info.tokenId, info);
+        } else {
+            tokenCache.put(info.tokenId, info);
+            persistToken(info);
+        }
+    }
+
     public TokenRegistry(Storage storage) {
         this.storage = storage;
     }
@@ -90,8 +132,7 @@ public class TokenRegistry {
         }
         TokenInfo info = new TokenInfo(tokenId, name, symbol, decimals, maxSupply, owner);
         if (!isSimulation) {
-            tokenCache.put(tokenId, info);
-            persistToken(info);
+            store(info);   // [HC-024] staged while a block is being applied
             log.info("[TokenRegistry] Registered token: {} ({})", name, tokenId);
         }
     }
@@ -117,8 +158,9 @@ public class TokenRegistry {
         }
         state.creditToken(to, tokenId, amount);
         if (!isSimulation) {
-            info.totalMinted += amount;
-            persistToken(info);
+            TokenInfo w = writable(info);
+            w.totalMinted = Math.addExact(w.totalMinted, amount);
+            store(w);
             log.info("[TokenRegistry] Minted {} of {} to {}", amount, tokenId, to);
         }
     }
@@ -140,10 +182,11 @@ public class TokenRegistry {
         requireToken(tokenId);
         state.debitToken(from, tokenId, amount);
         if (!isSimulation) {
-            TokenInfo info = tokenCache.get(tokenId);
+            TokenInfo info = getTokenInfo(tokenId);
             if (info != null && info.totalMinted >= amount) {
-                info.totalMinted -= amount;
-                persistToken(info);
+                TokenInfo w = writable(info);
+                w.totalMinted -= amount;
+                store(w);
             }
             log.info("[TokenRegistry] Burned {} of {} from {}", amount, tokenId, from);
         }
@@ -198,6 +241,7 @@ public class TokenRegistry {
      * (Reentrant: the mutating methods call this via {@code requireToken}.)
      */
     public synchronized TokenInfo getTokenInfo(String tokenId) {
+        if (staged != null && staged.containsKey(tokenId)) return staged.get(tokenId);   // [HC-024]
         TokenInfo cached = tokenCache.get(tokenId);
         if (cached != null) return cached;
         try {

@@ -38,6 +38,11 @@ public class Blockchain {
     private com.hybrid.blockchain.api.EventBus eventBus;
     private PeerNode peerNode;
     private long totalMinted = 0;
+    /**
+     * [HC-024] Storage side effects of the block being applied (receipts, indexes, telemetry,
+     * FL model). Flushed only after the block passes the state-root check; discarded if it fails.
+     */
+    private final List<Runnable> pendingWrites = new ArrayList<>();
     private com.hybrid.blockchain.monitoring.BlockchainMonitor monitor;
     private com.hybrid.blockchain.audit.AuditLogger auditLogger;
 
@@ -814,6 +819,8 @@ public class Blockchain {
         AccountState stateBackup = state.cloneState();
         UTXOSet utxoBackup = UTXOSet.fromMap(utxo.toJSON());
         long totalMintedBackup = totalMinted;
+        pendingWrites.clear();   // [HC-024] start each block with an empty side-effect buffer
+        if (tokenRegistry != null) tokenRegistry.beginBlock();
 
         try {
         state.setBlockHeight(block.getIndex());
@@ -862,7 +869,8 @@ public class Blockchain {
                     tx.getId(), block.getHash(), (int) block.getIndex(),
                     receiptStatus, gasUsed, receiptError, events, block.getTimestamp(),
                     result.getContractAddress(), result.getReturnData());
-            try {
+            // [HC-024] deferred: written only if the whole block is accepted
+            pendingWrites.add(() -> {
                 storage.saveReceipt(tx.getId(), receipt);
                 storage.indexTransaction(tx.getId(), block.getHash(), (int) block.getIndex());
                 if (tx.getFrom() != null) {
@@ -871,7 +879,7 @@ public class Blockchain {
                 if (tx.getTo() != null) {
                     storage.indexAddressTx(tx.getTo(), tx.getId(), block.getTimestamp());
                 }
-            } catch (Exception ignored) {}
+            });
             appliedTxIds.add(tx.getId());
         }
 
@@ -900,6 +908,14 @@ public class Blockchain {
         }
 
         chain.add(block);
+
+        // [HC-024] the block is accepted: now persist its receipts/indexes/telemetry/FL effects
+        if (tokenRegistry != null) tokenRegistry.commitBlock();
+        List<Runnable> writes = new ArrayList<>(pendingWrites);
+        pendingWrites.clear();
+        for (Runnable w : writes) {
+            try { w.run(); } catch (Exception e) { log.warn("[BLOCKCHAIN] deferred write failed: {}", e.getMessage()); }
+        }
 
         // [HC-026] advisory, off the consensus path: never touches state
         runAdvisoryAnomalyDetection(block);
@@ -989,6 +1005,8 @@ public class Blockchain {
             // block leaves no partial mutations behind, then propagate the rejection.
             this.state = stateBackup;
             this.utxo = utxoBackup;
+            pendingWrites.clear();   // [HC-024] a rejected block leaves nothing in storage
+            if (tokenRegistry != null) tokenRegistry.rollbackBlock();
             this.totalMinted = totalMintedBackup;
             log.error("[BLOCKCHAIN] Block {} at height {} rejected — rolled back to pre-block state: {}",
                     block.getHash(), block.getIndex(), e.getMessage());
@@ -1369,7 +1387,8 @@ public class Blockchain {
                         }
                         
                         if (targetState == this.state) {
-                            storage.saveTelemetry(targetDeviceId, (int) blockIndex, tx.getId(), toStore);
+                            final String telemDevice = targetDeviceId;   // [HC-024] deferred write
+                            pendingWrites.add(() -> storage.saveTelemetry(telemDevice, (int) blockIndex, tx.getId(), toStore));
                         }
                         // Update device reputation on telemetry result
                         targetState.getLifecycleManager().recordDeviceActivity(targetDeviceId, !isAnomaly);
@@ -1438,12 +1457,26 @@ public class Blockchain {
                         throw new Exception("FEDERATED_COMMIT missing model hash");
                     }
 
-                    com.hybrid.blockchain.ai.FederatedLearningManager.getInstance()
-                            .applyCommittedModel(modelHash, modelWeights, round, contributors, storage);
-
-                    if (peerNode != null && modelWeights != null && modelWeights.length > 0) {
-                        int broadcastRound = com.hybrid.blockchain.ai.FederatedLearningManager.getInstance().getRoundNumber();
-                        peerNode.broadcastFLModel(broadcastRound, modelHash, modelWeights);
+                    // [HC-024] Applying/broadcasting the committed model is a side effect outside the
+                    // state; it runs only for the live state and only once the block is accepted
+                    // (previously it also ran in createBlock's simulation and for rejected blocks).
+                    if (targetState == this.state) {
+                        final String mHash = modelHash;
+                        final double[] mWeights = modelWeights;
+                        final Integer mRound = round;
+                        final Integer mContrib = contributors;
+                        pendingWrites.add(() -> {
+                            try {
+                                com.hybrid.blockchain.ai.FederatedLearningManager.getInstance()
+                                        .applyCommittedModel(mHash, mWeights, mRound, mContrib, storage);
+                            } catch (Exception e) {
+                                log.warn("[FedLearn] applyCommittedModel failed: {}", e.getMessage());
+                            }
+                            if (peerNode != null && mWeights != null && mWeights.length > 0) {
+                                int broadcastRound = com.hybrid.blockchain.ai.FederatedLearningManager.getInstance().getRoundNumber();
+                                peerNode.broadcastFLModel(broadcastRound, mHash, mWeights);
+                            }
+                        });
                     }
                 }
                 return new ExecutionResult(0, null, null, transactionEvents);
