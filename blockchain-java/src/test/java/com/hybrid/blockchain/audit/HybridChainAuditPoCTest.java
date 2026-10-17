@@ -272,7 +272,9 @@ public class HybridChainAuditPoCTest {
         java.io.DataOutputStream d = new java.io.DataOutputStream(bos);
         d.writeInt(0);                                   // MsgType.HELLO.ordinal()
         d.writeInt(40);                                  // len (discarded by the node)
-        d.writeInt(1);                                   // PROTOCOL_VERSION
+        java.lang.reflect.Field pv = com.hybrid.blockchain.PeerNode.class.getDeclaredField("PROTOCOL_VERSION");
+        pv.setAccessible(true);
+        d.writeInt(pv.getInt(null));                     // current PROTOCOL_VERSION (2 since HC-042)
         d.writeInt(com.hybrid.blockchain.Config.NETWORK_ID);
         d.write(new byte[32]);                           // remote nonce
         d.writeInt(1);                                   // MsgType.CHALLENGE.ordinal()
@@ -480,7 +482,7 @@ public class HybridChainAuditPoCTest {
     @DisplayName("HC-021: an invalid same-height block must not revert the current tip")
     void hc021_forkPathRevertsBeforeValidating() throws Exception {
         try (LedgerPoCFixture f = new LedgerPoCFixture()) {
-            String to = new TestKeyPair(7707).getAddress();
+            String to = LedgerPoCFixture.VALIDATORS[0].getAddress();
             f.commitAndApply(f.build(List.of(mintN(to, f.scheduledReward(), 0)), 0));
             f.commitAndApply(f.build(List.of(mintN(to, f.scheduledReward(), 1)), 0));
             com.hybrid.blockchain.Block tip = f.chain.getLatestBlock();
@@ -502,7 +504,7 @@ public class HybridChainAuditPoCTest {
     void hc025_createBlockNeverIncludesTransfers() throws Exception {
         try (LedgerPoCFixture f = new LedgerPoCFixture()) {
             TestKeyPair sender = new TestKeyPair(7710);
-            f.commitAndApply(f.build(List.of(mintN(sender.getAddress(), f.scheduledReward(), 0)), 0));
+            f.fund(sender.getAddress());
             Transaction t = LedgerPoCFixture.transfer(sender, new TestKeyPair(7711).getAddress(), 10, 1, 1);
             f.chain.addTransaction(t);
             com.hybrid.blockchain.Block b = f.chain.createBlock(LedgerPoCFixture.VALIDATORS[0].getAddress(), 100);
@@ -550,7 +552,7 @@ public class HybridChainAuditPoCTest {
         try (LedgerPoCFixture f = new LedgerPoCFixture()) {
             TestKeyPair s = new TestKeyPair(7716);
             String sink = new TestKeyPair(7717).getAddress();
-            for (int m = 0; m < 5; m++) f.commitAndApply(f.build(List.of(mintN(s.getAddress(), f.scheduledReward(), m)), 0));
+            for (int m = 0; m < 5; m++) f.fund(s.getAddress());
             List<Transaction> txs = new ArrayList<>();
             for (int n = 1; n <= com.hybrid.blockchain.Config.MAX_NONCE_GAP + 1; n++)
                 txs.add(LedgerPoCFixture.transfer(s, sink, 0, 2, n));
@@ -621,7 +623,7 @@ public class HybridChainAuditPoCTest {
     @DisplayName("HC-031: PrunedBlockchain must actually delete pruned blocks (and storage must stay bounded)")
     void hc031_pruningDeletesNothing() throws Exception {
         try (LedgerPoCFixture f = new LedgerPoCFixture(2)) {
-            String to = new TestKeyPair(7724).getAddress();
+            String to = LedgerPoCFixture.VALIDATORS[0].getAddress();
             List<String> hashes = new ArrayList<>();
             for (int i = 0; i < 6; i++) {
                 com.hybrid.blockchain.Block b = f.build(List.of(mintN(to, f.scheduledReward(), i)), 0);
@@ -661,7 +663,7 @@ public class HybridChainAuditPoCTest {
     void hc024_rejectedBlockPersistsReceipts() throws Exception {
         try (LedgerPoCFixture f = new LedgerPoCFixture()) {
             TestKeyPair sender = new TestKeyPair(7713);
-            f.commitAndApply(f.build(List.of(mintN(sender.getAddress(), f.scheduledReward(), 0)), 0));
+            f.fund(sender.getAddress());
             Transaction t = LedgerPoCFixture.transfer(sender, new TestKeyPair(7714).getAddress(), 10, 1, 1);
             com.hybrid.blockchain.Block good = f.build(List.of(t), 0);
             com.hybrid.blockchain.Block bad = new com.hybrid.blockchain.Block(good.getIndex(), good.getTimestamp(),
@@ -685,7 +687,7 @@ public class HybridChainAuditPoCTest {
     void hc024b_rejectedBlockRegistersToken() throws Exception {
         try (LedgerPoCFixture f = new LedgerPoCFixture()) {
             TestKeyPair squatter = new TestKeyPair(7723);
-            f.commitAndApply(f.build(List.of(mintN(squatter.getAddress(), f.scheduledReward(), 0)), 0));
+            f.fund(squatter.getAddress());
             Transaction reg = com.hybrid.blockchain.testutil.TestTransactionFactory
                     .createTokenRegister(squatter, "USDX", "US Dollar X", "USDX", 1_000_000, 1, 1);
             com.hybrid.blockchain.Block good = f.build(List.of(reg), 0);
