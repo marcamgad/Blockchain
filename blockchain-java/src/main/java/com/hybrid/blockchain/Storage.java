@@ -92,12 +92,19 @@ public class Storage implements AutoCloseable {
         return this.dbPath;
     }
 
-    private byte[] encrypt(byte[] data) throws Exception {
+    /**
+     * [HC-041] AES-GCM with the storage key as Additional Authenticated Data. Before, a record
+     * encrypted for one key decrypted cleanly under any other key, so anyone with write access to
+     * the data directory could move records around (e.g. copy an old snapshot or a different meta
+     * value over the current one) without knowing the encryption key.
+     */
+    private byte[] encrypt(byte[] data, String storedKey) throws Exception {
         byte[] iv = new byte[GCM_IV_LENGTH];
         secureRandom.nextBytes(iv);
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
         GCMParameterSpec spec = new GCMParameterSpec(GCM_TAG_LENGTH, iv);
         cipher.init(Cipher.ENCRYPT_MODE, aesKey, spec);
+        cipher.updateAAD(aad(storedKey));
         byte[] ciphertext = cipher.doFinal(data);
         byte[] encrypted = new byte[iv.length + ciphertext.length];
         System.arraycopy(iv, 0, encrypted, 0, iv.length);
@@ -105,7 +112,7 @@ public class Storage implements AutoCloseable {
         return encrypted;
     }
 
-    private byte[] decrypt(byte[] data) throws Exception {
+    private byte[] decrypt(byte[] data, String storedKey) throws Exception {
         if (data == null || data.length < GCM_IV_LENGTH) throw new IllegalArgumentException("Invalid encrypted data");
         byte[] iv = new byte[GCM_IV_LENGTH];
         System.arraycopy(data, 0, iv, 0, GCM_IV_LENGTH);
@@ -115,6 +122,7 @@ public class Storage implements AutoCloseable {
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
         GCMParameterSpec spec = new GCMParameterSpec(GCM_TAG_LENGTH, iv);
         cipher.init(Cipher.DECRYPT_MODE, aesKey, spec);
+        cipher.updateAAD(aad(storedKey));
         return cipher.doFinal(ciphertext);
     }
 
@@ -124,7 +132,7 @@ public class Storage implements AutoCloseable {
         try {
             cache.put(key, value);
             byte[] json = mapper.writeValueAsBytes(value);
-            byte[] encrypted = encrypt(json);
+            byte[] encrypted = encrypt(json, secureKey(key));
             db.put(bytes(secureKey(key)), encrypted);
         } catch (Exception e) {
             throw new RuntimeException("Failed to store encrypted value", e);
@@ -142,7 +150,7 @@ public class Storage implements AutoCloseable {
             if (sk == null) return null;
             byte[] encrypted = db.get(bytes(sk));
             if (encrypted == null) return null;
-            byte[] decrypted = decrypt(encrypted);
+            byte[] decrypted = decrypt(encrypted, sk);
             T value = mapper.readValue(decrypted, clazz);
             cache.put(key, value);
             return value;
@@ -168,7 +176,7 @@ public class Storage implements AutoCloseable {
         // Critical tip update; use sync write
         try {
             byte[] json = mapper.writeValueAsBytes(hash);
-            byte[] encrypted = encrypt(json);
+            byte[] encrypted = encrypt(json, secureKey("chain:tip"));
             WriteOptions syncOptions = new WriteOptions().sync(true);
             db.put(bytes(secureKey("chain:tip")), encrypted, syncOptions);
             cache.put("chain:tip", hash);
@@ -279,7 +287,7 @@ public class Storage implements AutoCloseable {
         // Critical snapshot height update; use sync write
         try {
             byte[] json = mapper.writeValueAsBytes(height);
-            byte[] encrypted = encrypt(json);
+            byte[] encrypted = encrypt(json, secureKey("meta:lastSnapshotHeight"));
             WriteOptions syncOptions = new WriteOptions().sync(true);
             db.put(bytes(secureKey("meta:lastSnapshotHeight")), encrypted, syncOptions);
             cache.put("meta:lastSnapshotHeight", height);
@@ -364,7 +372,7 @@ public class Storage implements AutoCloseable {
                     String k = asString(entry.getKey());
                     if (!k.startsWith(prefix)) break;
                     try {
-                        byte[] decrypted = decrypt(entry.getValue());
+                        byte[] decrypted = decrypt(entry.getValue(), k);
                         result.add(mapper.readValue(decrypted, String.class));
                         count++;
                     } catch (Exception e) {}
@@ -374,7 +382,7 @@ public class Storage implements AutoCloseable {
                     String k = asString(entry.getKey());
                     if (!k.startsWith(prefix)) break;
                     try {
-                        byte[] decrypted = decrypt(entry.getValue());
+                        byte[] decrypted = decrypt(entry.getValue(), k);
                         result.add(mapper.readValue(decrypted, String.class));
                         count++;
                     } catch (Exception e) {}
@@ -471,7 +479,7 @@ public class Storage implements AutoCloseable {
                 String k = asString(entry.getKey());
                 if (!k.startsWith(prefix) || k.compareTo(endKey) >= 0) break;
                 try {
-                    byte[] decrypted = decrypt(entry.getValue());
+                    byte[] decrypted = decrypt(entry.getValue(), k);
                     Map<String, Object> record = mapper.readValue(decrypted, Map.class);
                     result.add(record);
                 } catch (Exception ignored) {}
@@ -519,7 +527,7 @@ public class Storage implements AutoCloseable {
                 String k = asString(entry.getKey());
                 if (k.startsWith(prefix)) {
                     try {
-                        byte[] decrypted = decrypt(entry.getValue());
+                        byte[] decrypted = decrypt(entry.getValue(), k);
                         return mapper.readValue(decrypted, com.hybrid.blockchain.Checkpoint.class);
                     } catch (Exception e) { /* corrupted */ }
                 }
@@ -540,6 +548,11 @@ public class Storage implements AutoCloseable {
     }
 
     // ─── Internal helpers ─────────────────────────────────────────────────────
+
+    /** [HC-041] AAD = domain tag + the exact key bytes the record is stored under. */
+    private static byte[] aad(String storedKey) {
+        return ("HC-STORAGE-v2\u0000" + storedKey).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
 
     private String secureKey(String key) {
         return key;

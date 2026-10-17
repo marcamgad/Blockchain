@@ -815,13 +815,18 @@ public class HybridChainAuditPoCTest {
             com.hybrid.blockchain.Storage reopened = new com.hybrid.blockchain.Storage(dir.toString(),
                     com.hybrid.blockchain.HexUtils.decode("00112233445566778899001122334455"));
             Object v;
-            try { v = reopened.getMeta("totalMinted"); } finally { reopened.close(); }
+            String detected = null;
+            try { v = reopened.getMeta("totalMinted"); }
+            catch (RuntimeException e) { v = null; detected = String.valueOf(e.getCause()); }   // correct: tamper detected
+            finally { reopened.close(); }
+            System.out.println("[HC-041] tamper detection: " + (detected == null ? "none" : detected));
             boolean plaintextKeys = new String(fromKey, StandardCharsets.UTF_8).startsWith("meta:");
-            System.out.printf("[HC-041] after moving the 'meta:baseFee' record onto 'meta:totalMinted': totalMinted=%s "
-                    + "(no authentication error); keys stored in plaintext=%s%n", v, plaintextKeys);
+            System.out.printf("[HC-041] after moving the 'meta:baseFee' record onto 'meta:totalMinted': totalMinted=%s; "
+                    + "keys stored in plaintext=%s%n", v, plaintextKeys);
             // compare numerically: Jackson returns Integer for small values, so a Long literal never matched
-            assertThat(v instanceof Number ? ((Number) v).longValue() : null)
-                    .as("HC-041: AES-GCM record accepted under a different key (no AAD binding)").isNotEqualTo(999_999L);
+            boolean swappedValueAccepted = v instanceof Number && ((Number) v).longValue() == 999_999L;
+            assertThat(swappedValueAccepted)
+                    .as("HC-041: AES-GCM record accepted under a different key (no AAD binding)").isFalse();
         } finally {
             org.apache.commons.io.FileUtils.deleteDirectory(dir.toFile());
         }
