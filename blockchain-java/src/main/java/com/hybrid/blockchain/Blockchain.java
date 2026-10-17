@@ -187,22 +187,30 @@ public class Blockchain {
                     Block cpBlock = storage.loadBlockByHash(latestCp.getBlockHash());
                     if (cpBlock != null) {
                         // Load snapshot instead of tip state if tip state is missing or outdated
+                        // [HC-032] Build the candidate state in LOCALS and commit only if it matches
+                        // the checkpoint. Before, state/utxo were replaced and cpBlock appended first,
+                        // so a mismatch fell through to genesis with an unverified state and a chain
+                        // of [cpBlock, genesis].
                         Map<String, Object> snap = storage.get("snapshot:" + latestCp.getBlockHeight(), Map.class);
+                        AccountState candidateState;
+                        UTXOSet candidateUtxo;
                         if (snap != null) {
-                            state = AccountState.fromMap((Map<String, Object>) snap.get("state"));
-                            utxo = UTXOSet.fromMap((Map<String, Object>) snap.get("utxo"));
+                            candidateState = AccountState.fromMap((Map<String, Object>) snap.get("state"));
+                            candidateUtxo = UTXOSet.fromMap((Map<String, Object>) snap.get("utxo"));
                         } else {
-                            state = storage.loadState();
-                            utxo = UTXOSet.fromMap(storage.loadUTXO());
+                            candidateState = storage.loadState();
+                            candidateUtxo = UTXOSet.fromMap(storage.loadUTXO());
                         }
-                        if (state == null) state = new AccountState();
-                        
-                        chain.add(cpBlock);
-                        if (state.calculateStateRoot().equals(latestCp.getStateRoot())) {
+                        if (candidateState == null) candidateState = new AccountState();
+
+                        if (candidateState.calculateStateRoot().equals(latestCp.getStateRoot())) {
+                            state = candidateState;
+                            utxo = candidateUtxo;
+                            chain.add(cpBlock);
                             log.info("[INIT] Fast sync successful at height {}", latestCp.getBlockHeight());
                             return;
                         } else {
-                            log.warn("[INIT] Checkpoint state root mismatch! Falling back to genesis.");
+                            log.warn("[INIT] Checkpoint state root mismatch! Falling back to genesis (state untouched).");
                         }
                     }
                 } else {
