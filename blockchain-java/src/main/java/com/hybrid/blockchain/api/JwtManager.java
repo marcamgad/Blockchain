@@ -77,9 +77,13 @@ public class JwtManager {
         if (s == null || s.isEmpty()) s = System.getenv("JWT_SECRET");
         if (s != null && !s.isEmpty()) return s;
 
-        if (Config.isProductionProfile()) {
+        // [HC-052] Fail CLOSED: the built-in development secret is public (it is in the source), so
+        // anyone could mint ADMIN tokens with it. It used to be refused only when
+        // SPRING_PROFILES_ACTIVE contained "prod", which the deployment guides never set; now it is
+        // allowed only in explicit DEBUG mode (same rule as STORAGE_AES_KEY).
+        if (Config.isProductionProfile() || !Config.isDebug()) {
             throw new IllegalStateException(
-                    "JWT_SECRET must be set in production; refusing to start with a default key.");
+                    "JWT_SECRET must be set (only DEBUG=true may use the insecure development secret).");
         }
         log.warn("JWT_SECRET not set — using insecure development secret. "
                 + "Set JWT_SECRET for any non-local deployment.");

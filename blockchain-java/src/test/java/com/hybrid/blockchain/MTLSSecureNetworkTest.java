@@ -16,10 +16,20 @@ import java.time.Duration;
 @Tag("integration")
 public class MTLSSecureNetworkTest {
 
-    static {
-        // ENFORCING ABSOLUTE LAW: DEBUG MUST BE FALSE
+    // DEBUG must be false for ChainFixture. Set it for THIS class only and restore it afterwards:
+    // the static-block version leaked DEBUG=false into every later test in the shared JVM.
+    private static String previousDebug;
+
+    @org.junit.jupiter.api.BeforeAll
+    static void productionMode() {
+        previousDebug = System.getProperty("DEBUG");
         System.setProperty("DEBUG", "false");
         System.setProperty("NODE_PRIVATE_KEY", "1111111111111111111111111111111111111111111111111111111111111111");
+    }
+
+    @org.junit.jupiter.api.AfterAll
+    static void restoreMode() {
+        if (previousDebug == null) System.clearProperty("DEBUG"); else System.setProperty("DEBUG", previousDebug);
     }
 
     @Test
