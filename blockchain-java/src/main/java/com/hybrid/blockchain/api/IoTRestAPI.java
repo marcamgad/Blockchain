@@ -40,6 +40,10 @@ import org.slf4j.LoggerFactory;
 public class IoTRestAPI {
 
     private static final Logger log = LoggerFactory.getLogger(IoTRestAPI.class);
+    /** [HC-056] response bounds for public read endpoints */
+    static final int MAX_PAGE = 100;
+    static final int MAX_TELEMETRY_RANGE = 10_000;
+    static final int MAX_TELEMETRY_RECORDS = 1_000;
 
     private Blockchain blockchain;
     private Mempool mempool;
@@ -271,56 +275,56 @@ public class IoTRestAPI {
         }
     }
 
+    /**
+     * [HC-054] Retired. It built the transaction on the server WITHOUT any signature, so every
+     * request with a sender failed "Invalid signature" (and sender-less ones are refused since
+     * HC-016): the endpoint could never submit anything. Clients sign locally and use
+     * {@link #submitSignedTransaction}.
+     */
     @PostMapping("/transactions/submit")
-    public ResponseEntity<?> submitTransaction(@RequestBody SubmitTransactionRequest payload,
-            @RequestHeader(value = "Authorization", required = false) String auth) throws Exception {
+    public ResponseEntity<?> submitTransaction(@RequestBody(required = false) SubmitTransactionRequest payload,
+            @RequestHeader(value = "Authorization", required = false) String auth) {
+        return ResponseEntity.status(410).body(Map.of(
+                "error", "Unsigned submission is not supported",
+                "use", "POST /api/v1/transactions/submit-signed with a client-signed transaction"));
+    }
 
-        // Anonymous transaction submission is not allowed; device-authenticated submissions only.
+    /**
+     * [HC-054] Submits a transaction signed by the client (same JSON the P2P layer uses). The
+     * caller's JWT must belong to the transaction's sender; signature, nonce, balance, fee and
+     * every other rule are enforced by {@link com.hybrid.blockchain.Blockchain#addTransaction}.
+     */
+    @PostMapping("/transactions/submit-signed")
+    public ResponseEntity<?> submitSignedTransaction(@RequestBody byte[] body,
+            @RequestHeader(value = "Authorization", required = false) String auth) {
         if (auth == null || auth.isBlank()) {
             return unauthorized();
         }
+        Transaction tx;
+        try {
+            tx = blockchain.deserializeTransaction(body);
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Malformed transaction JSON"));
+        }
+        if (tx == null || tx.getFrom() == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Transaction must have a sender"));
+        }
         String token = auth.replace("Bearer ", "").trim();
-        if (payload.getFrom() != null && !verifyToken(token, payload.getFrom())) {
+        if (!verifyToken(token, tx.getFrom())) {
             return unauthorized();
         }
-
-        blockchainLock.writeLock().lock();
-        try {
-            if (payload.getFrom() != null && !transactionSubmitLimiter.allowRequest(payload.getFrom())) {
-                return ResponseEntity.status(429).body(Map.of("error", "Rate limit exceeded"));
-            }
-
-            long nonce = blockchain.getState().getNonce(payload.getFrom()) + 1;
-
-            Transaction tx = new Transaction.Builder()
-                    .type(payload.getType())
-                    .from(payload.getFrom())
-                    .to(payload.getTo())
-                    .amount(payload.getAmount())
-                    .fee(payload.getFee())
-                    .nonce(nonce)
-                    .networkId(Config.NETWORK_ID)
-                    .data(HexUtils.decode(payload.getData() == null ? "" : payload.getData()))
-                    .build();
-
-            try {
-                blockchain.addTransaction(tx);
-            } catch (Exception e) {
-                if (e.getMessage() != null && e.getMessage().toLowerCase().contains("rate limit")) {
-                    return ResponseEntity.status(429).body(Map.of("error", e.getMessage()));
-                }
-                throw e;
-            }
-
-            log.info("Transaction submitted: {} from {}", tx.getTxid(), tx.getFrom());
-
-            return ResponseEntity.ok(Map.of(
-                    "txId", tx.getTxid(),
-                    "status", "pending",
-                    "timestamp", tx.getTimestamp()));
-        } finally {
-            blockchainLock.writeLock().unlock();
+        if (!transactionSubmitLimiter.allowRequest(tx.getFrom())) {
+            return ResponseEntity.status(429).body(Map.of("error", "Rate limit exceeded"));
         }
+        try {
+            blockchain.addTransaction(tx);
+        } catch (Exception e) {
+            String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            int status = msg.toLowerCase().contains("rate limit") ? 429 : 400;
+            return ResponseEntity.status(status).body(Map.of("error", msg));
+        }
+        log.info("Signed transaction submitted: {} from {}", tx.getTxid(), tx.getFrom());
+        return ResponseEntity.ok(Map.of("txId", tx.getTxid(), "status", "pending", "timestamp", tx.getTimestamp()));
     }
 
     @GetMapping("/transactions/{txId}")
@@ -491,7 +495,7 @@ public class IoTRestAPI {
         // In a hardened blockchain, deployment is just a transaction with bytecode
         log.info("Contract deployment request received (Stub)");
         return ResponseEntity
-                .ok(Map.of("status", "pending", "info", "Submit via /transactions/submit with Type=CONTRACT"));
+                .ok(Map.of("status", "pending", "info", "Sign a Type=CONTRACT transaction locally and POST it to /api/v1/transactions/submit-signed"));
     }
 
     @PostMapping("/contracts/{address}/call")
@@ -499,7 +503,7 @@ public class IoTRestAPI {
             @RequestBody ContractRequest payload) throws Exception {
         log.info("Contract call request received (Stub)");
         return ResponseEntity
-                .ok(Map.of("status", "pending", "info", "Submit via /transactions/submit with Type=CONTRACT"));
+                .ok(Map.of("status", "pending", "info", "Sign a Type=CONTRACT transaction locally and POST it to /api/v1/transactions/submit-signed"));
     }
 
     // ============================================
@@ -590,10 +594,16 @@ public class IoTRestAPI {
     // Phase 5: Transaction Indexer
     // ============================================
     @GetMapping("/address/{address}/transactions")
-    public ResponseEntity<?> getAddressTransactions(@PathVariable("address") String address, @RequestParam(value = "offset", defaultValue = "0") int offset, @RequestParam(value = "limit", defaultValue = "50") int limit) {
+    public ResponseEntity<?> getAddressTransactions(@PathVariable("address") String address,
+            @RequestParam(value = "limit", defaultValue = "50") int limit,
+            @RequestParam(value = "cursor", required = false) String cursor) {
+        // [HC-056] `offset` used to be passed as the storage LIMIT and `limit` was ignored, so the
+        // default call returned nothing and a large offset was an unbounded scan. Now: limit is
+        // clamped to 1..MAX_PAGE and pagination uses the storage cursor.
+        int pageSize = Math.max(1, Math.min(MAX_PAGE, limit));
         blockchainLock.readLock().lock();
         try {
-            var txs = blockchain.getStorage().getAddressTransactions(address, offset, null);
+            var txs = blockchain.getStorage().getAddressTransactions(address, pageSize, cursor);
             return ResponseEntity.ok(txs);
         } catch (Exception e) {
             return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
@@ -604,8 +614,9 @@ public class IoTRestAPI {
 
     // Explorer aliases
     @GetMapping("/explorer/address/{address}")
-    public ResponseEntity<?> explorerAddress(@PathVariable("address") String address, @RequestParam(value = "offset", defaultValue = "0") int offset) {
-        return getAddressTransactions(address, offset, 50);
+    public ResponseEntity<?> explorerAddress(@PathVariable("address") String address,
+            @RequestParam(value = "cursor", required = false) String cursor) {
+        return getAddressTransactions(address, 50, cursor);   // [HC-056]
     }
 
     @GetMapping("/explorer/block/{hash}")
@@ -626,7 +637,14 @@ public class IoTRestAPI {
         blockchainLock.readLock().lock();
         try {
             if (toBlock == -1) toBlock = blockchain.getHeight();
+            // [HC-056] bounded range and response: one request could read and decrypt a device's
+            // whole history
+            if (fromBlock < 0 || toBlock < fromBlock)
+                return ResponseEntity.badRequest().body(Map.of("error", "invalid block range"));
+            if ((long) toBlock - fromBlock > MAX_TELEMETRY_RANGE)
+                return ResponseEntity.badRequest().body(Map.of("error", "range exceeds " + MAX_TELEMETRY_RANGE + " blocks"));
             List<Map<String, Object>> records = blockchain.getStorage().getTelemetry(deviceId, fromBlock, toBlock);
+            if (records.size() > MAX_TELEMETRY_RECORDS) records = records.subList(0, MAX_TELEMETRY_RECORDS);
             return ResponseEntity.ok(records);
         } catch (Exception e) {
             return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
@@ -978,11 +996,16 @@ public ResponseEntity<?> adminMetrics(@RequestHeader(value = "Authorization", re
      * Submits a local model weight update from a node.
      */
     @PostMapping("/ai/federated/submit")
-    public ResponseEntity<?> submitFederatedUpdate(@RequestBody Map<String, Object> payload) {
+    public ResponseEntity<?> submitFederatedUpdate(@RequestBody Map<String, Object> payload,
+            @RequestHeader(value = "Authorization", required = false) String auth) {
         try {
             String nodeId = (String) payload.get("nodeId");
             if (nodeId == null || nodeId.isBlank())
                 return ResponseEntity.status(400).body(Map.of("error", "nodeId is required"));
+            // [HC-055] the update must come from the node it names: any authenticated caller could
+            // submit updates for ANY nodeId and skew the aggregated model
+            if (auth == null || !verifyToken(auth.replace("Bearer ", "").trim(), nodeId))
+                return unauthorized();
 
             @SuppressWarnings("unchecked")
             java.util.List<Number> rawWeights = (java.util.List<Number>) payload.get("weights");

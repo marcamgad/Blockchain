@@ -19,6 +19,9 @@ public class Interpreter {
     private final BlockchainContext context;
     private byte[] returnData = null;
 
+    /** [HC-057] maximum operand-stack depth */
+    public static final int MAX_STACK = 1024;
+
     public Interpreter(byte[] bytecode, long gasLimit, BlockchainContext context) {
         this.bytecode = bytecode;
         this.stack = new Stack<>();
@@ -40,6 +43,11 @@ public class Interpreter {
      */
     public void execute() throws Exception {
         while (pc < bytecode.length) {
+            // [HC-057] bounded stack (EVM: 1024). Gas alone did not bound it: the gas limit is
+            // fee * 1000, so a well-funded contract could push until every validator ran out of
+            // memory (an OutOfMemoryError is not caught by the Exception handlers around execution).
+            if (stack.size() > MAX_STACK)
+                throw new Exception("Stack overflow (max " + MAX_STACK + ")");
             OpCode op = OpCode.fromByte(bytecode[pc++]);
             if (op == null)
                 throw new Exception("Unknown OpCode at " + (pc - 1));
@@ -93,18 +101,10 @@ public class Interpreter {
                     long outLen = stack.pop();
                     
                     // Resolve target address from registry
+                    // [HC-057] the registry already maps EVERY account (Blockchain fills it before
+                    // execution); the former fallback re-hashed all accounts on every miss, an
+                    // O(accounts) scan per CALL for a fixed gas cost
                     String targetAddr = context.addressRegistry.getOrDefault(toAddr, null);
-                    if (targetAddr == null) {
-                        // Try hash-based lookup
-                        targetAddr = context.state.getAllAddresses().stream()
-                            .filter(addr -> {
-                                byte[] h = Crypto.hash(addr.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                                return java.nio.ByteBuffer.wrap(h, 0, 8)
-                                    .order(java.nio.ByteOrder.BIG_ENDIAN).getLong() == toAddr;
-                            })
-                            .findFirst()
-                            .orElse(null);
-                    }
                     
                     if (targetAddr == null) {
                         // Target address not found; execution fails
