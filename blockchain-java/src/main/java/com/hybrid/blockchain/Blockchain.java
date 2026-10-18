@@ -1294,7 +1294,8 @@ public class Blockchain {
 
                 byte[] code = tx.getData();
                 String contractAddr = tx.getTo();
-                long gasLimit = tx.getFee() * 1000;
+                // [HC-062] saturating: fee * 1000 used to overflow to a negative/garbage limit
+                long gasLimit = Math.min(tx.getFee(), Long.MAX_VALUE / 1000) * 1000;
 
                 if (contractAddr == null) {
                     String creator = tx.getFrom();

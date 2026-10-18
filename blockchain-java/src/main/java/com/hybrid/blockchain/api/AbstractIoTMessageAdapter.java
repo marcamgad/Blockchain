@@ -78,6 +78,13 @@ public abstract class AbstractIoTMessageAdapter implements IoTMessageAdapter {
     protected synchronized String submitDeviceTx(Transaction.Type type, String deviceId, byte[] payload)
             throws Exception {
         validatePayload(payload);
+        // [HC-064] Never sign management actions with the NODE key on behalf of whoever published
+        // the message: lifecycle checks compare the device owner with tx.from, so a gateway that
+        // owns its devices would let any broker publisher suspend/revoke/re-flash all of them.
+        // Management must arrive as a transaction signed by the owner (submitSignedTx).
+        if (type == Transaction.Type.IOT_MANAGEMENT) {
+            throw new IllegalArgumentException("Management actions must be submitted as a transaction signed by the device owner");
+        }
         if (!allowIngress(deviceId)) {
             throw new RateLimitedException("Ingress rate limit exceeded for " + deviceId);
         }
@@ -110,6 +117,30 @@ public abstract class AbstractIoTMessageAdapter implements IoTMessageAdapter {
 
         blockchain.addTransaction(tx);
         log.info("Submitted {} tx {} for device {}", type, tx.getTxid(), deviceId);
+        return tx.getTxid();
+    }
+
+    /**
+     * [HC-064] Relays a transaction the client signed itself. Signature, nonce, fee and every
+     * authorization rule are enforced by {@link Blockchain#addTransaction}; the rate limit is
+     * per sender (a shared key let one client exhaust the ingress for everybody).
+     *
+     * @param expectedType required transaction type, or null for any
+     */
+    protected String submitSignedTx(byte[] payload, Transaction.Type expectedType) throws Exception {
+        validatePayload(payload);
+        Transaction tx = blockchain.deserializeTransaction(payload);
+        if (tx == null || tx.getFrom() == null) {
+            throw new IllegalArgumentException("Transaction must have a sender");
+        }
+        if (expectedType != null && tx.getType() != expectedType) {
+            throw new IllegalArgumentException("Expected a " + expectedType + " transaction");
+        }
+        if (!allowIngress(tx.getFrom())) {
+            throw new RateLimitedException("Ingress rate limit exceeded for " + tx.getFrom());
+        }
+        blockchain.addTransaction(tx);
+        log.info("Relayed signed {} tx {} from {}", tx.getType(), tx.getTxid(), tx.getFrom());
         return tx.getTxid();
     }
 }

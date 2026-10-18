@@ -112,13 +112,9 @@ public class CoAPAdapter extends AbstractIoTMessageAdapter {
                 }
                 // Rate-limit raw tx ingress (keyed per-endpoint; a real deployment would
                 // key by remote peer identity).
-                if (!allowIngress("coap-tx")) {
-                    exchange.respond(CoAP.ResponseCode.SERVICE_UNAVAILABLE, "Rate limit exceeded");
-                    return;
-                }
-                Transaction tx = blockchain.deserializeTransaction(payload);
-                blockchain.addTransaction(tx);
-                exchange.respond(CoAP.ResponseCode.CREATED, tx.getTxid());
+                exchange.respond(CoAP.ResponseCode.CREATED, submitSignedTx(payload, null));
+            } catch (RateLimitedException rle) {
+                exchange.respond(CoAP.ResponseCode.SERVICE_UNAVAILABLE, "Rate limit exceeded");
             } catch (Exception e) {
                 exchange.respond(CoAP.ResponseCode.BAD_REQUEST, e.getMessage());
             }

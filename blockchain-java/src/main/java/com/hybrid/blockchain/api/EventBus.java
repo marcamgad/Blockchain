@@ -28,7 +28,15 @@ public class EventBus {
     private final Map<String, Set<WebSocketSession>> subscribers = new ConcurrentHashMap<>();
 
     /** session → Map of filters (e.g., "address", "eventName") */
-    private final Map<WebSocketSession, Map<String, String>> sessionFilters = new ConcurrentHashMap<>();
+    private final Map<WebSocketSession, Map<String, Map<String, String>>> sessionFilters = new ConcurrentHashMap<>();
+
+    /**
+     * [HC-063] Only these topics exist. Any client used to be able to create an unbounded number
+     * of topic entries (never removed), and a session had a single filter shared by all its
+     * subscriptions, so subscribing to a second topic silently replaced the first filter.
+     */
+    public static final Set<String> TOPICS = Set.of("blocks", "transactions", "mempool", "contracts", "anomalies", "consensus");
+    static final int MAX_FILTER_KEYS = 8;
 
     /**
      * Subscribes a WebSocket session to the given topic.
@@ -44,11 +52,21 @@ public class EventBus {
      * Subscribes a WebSocket session to the given topic with optional filters.
      */
     public void subscribe(String topic, WebSocketSession session, Map<String, String> filter) {
+        if (topic == null || !TOPICS.contains(topic)) {
+            log.warn("[EventBus] Session {} tried to subscribe to unknown topic", session.getId());
+            return;
+        }
+        if (filter != null && filter.size() > MAX_FILTER_KEYS) {
+            log.warn("[EventBus] Session {} sent an oversized filter", session.getId());
+            return;
+        }
         subscribers.computeIfAbsent(topic, k -> ConcurrentHashMap.newKeySet()).add(session);
+        Map<String, Map<String, String>> perTopic = sessionFilters.computeIfAbsent(session, k -> new ConcurrentHashMap<>());
         if (filter != null && !filter.isEmpty()) {
-            sessionFilters.put(session, new HashMap<>(filter));
+            perTopic.put(topic, new HashMap<>(filter));
             log.info("[EventBus] Session {} subscribed to '{}' with filter {}", session.getId(), topic, filter);
         } else {
+            perTopic.remove(topic);
             log.info("[EventBus] Session {} subscribed to '{}'", session.getId(), topic);
         }
     }
@@ -64,6 +82,8 @@ public class EventBus {
         if (sessions != null) {
             sessions.remove(session);
         }
+        Map<String, Map<String, String>> perTopic = sessionFilters.get(session);
+        if (perTopic != null) perTopic.remove(topic);
     }
 
     /**
@@ -111,8 +131,9 @@ public class EventBus {
             }
 
             // Apply filters if present
-            if (sessionFilters.containsKey(session)) {
-                Map<String, String> filter = sessionFilters.get(session);
+            Map<String, Map<String, String>> perTopic = sessionFilters.get(session);
+            Map<String, String> filter = perTopic == null ? null : perTopic.get(topic);
+            if (filter != null) {
                 if (!matchesFilter(payload, filter)) {
                     continue;
                 }
@@ -157,7 +178,7 @@ public class EventBus {
             }
             return true;
         } catch (Exception e) {
-            return true; // If we can't filter, we broadcast (safety first)
+            return false; // [HC-063] fail closed: an unfilterable event is not sent to a filtered subscriber
         }
     }
 

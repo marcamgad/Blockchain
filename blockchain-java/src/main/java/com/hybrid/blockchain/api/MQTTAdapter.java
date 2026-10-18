@@ -71,7 +71,8 @@ public class MQTTAdapter extends AbstractIoTMessageAdapter {
 
             String deviceId = extractDeviceId(topic, data);
             if (topic.endsWith("/mgmt")) {
-                submitDeviceTx(Transaction.Type.IOT_MANAGEMENT, deviceId, rawPayload);
+                // [HC-064] payload is an owner-signed IOT_MANAGEMENT transaction
+                submitSignedTx(rawPayload, Transaction.Type.IOT_MANAGEMENT);
             } else if (topic.endsWith("/telemetry")) {
                 submitDeviceTx(Transaction.Type.TELEMETRY, deviceId, rawPayload);
             }
