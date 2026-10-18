@@ -1673,7 +1673,10 @@ public class Blockchain {
                 lifecycle.provisionDevice((String) data.get("deviceId"), (String) data.get("manufacturer"), (String) data.get("model"), HexUtils.decode((String) data.get("devicePublicKey")), HexUtils.decode(sig), enablePUF);
                 break;
             case "ACTIVATE":
-                lifecycle.activateDevice((String) data.get("deviceId"), (String) data.get("owner"), HexUtils.decode((String) data.get("devicePublicKey")), timestamp);
+                // [HC-047] sender must be the owner; device must sign its consent with its attested key
+                lifecycle.activateDevice((String) data.get("deviceId"), (String) data.get("owner"),
+                        HexUtils.decode((String) data.get("devicePublicKey")), timestamp, from,
+                        data.get("activationSignature") == null ? null : HexUtils.decode((String) data.get("activationSignature")));
                 break;
             case "SUSPEND":
                 lifecycle.suspendDevice((String) data.get("deviceId"), from, (String) data.get("reason"));

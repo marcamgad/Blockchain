@@ -50,6 +50,11 @@ public class DeviceLifecycleManager {
         private byte[] pufProof;    // PAPER-IMPL: P1-C — ZKP ownership proof
         private String pufNullifier; // PAPER-IMPL: P1-C — Unique nullifier from ZKP
         private boolean pufEnabled = true; // Flag for PUF identity enforcement
+        /** [HC-047] the device public key the manufacturer attested at provisioning */
+        private byte[] attestedPublicKey;
+
+        public byte[] getAttestedPublicKey() { return attestedPublicKey; }
+        public void setAttestedPublicKey(byte[] k) { this.attestedPublicKey = k == null ? null : k.clone(); }
 
         public DeviceRecord() {
             this.firmwareHistory = new ArrayList<>();
@@ -83,6 +88,7 @@ public class DeviceLifecycleManager {
             copy.pufProof = this.pufProof != null ? this.pufProof.clone() : null;
             copy.pufNullifier = this.pufNullifier;
             copy.pufEnabled = this.pufEnabled;
+            copy.attestedPublicKey = this.attestedPublicKey != null ? this.attestedPublicKey.clone() : null;
             return copy;
         }
 
@@ -326,31 +332,22 @@ public class DeviceLifecycleManager {
         // Create device record
         DeviceRecord record = new DeviceRecord(deviceId, manufacturer, model);
         record.setAttestationSignature(manufacturerSignature);
+        record.setAttestedPublicKey(devicePublicKey);   // [HC-047] bind activation to this key
         record.setRegistrationBlock(currentBlockHeight);
         record.setLastActivityBlock(currentBlockHeight);
         record.setStatus(DeviceStatus.PROVISIONING);
         record.setPufEnabled(enablePUF);
 
-        // PAPER-IMPL: P1-C — derive PUF identity and generate ZKP ownership proof
+        // PAPER-IMPL: P1-C — PUF identity.
+        // [HC-049] The nullifier must be a deterministic function of the transaction. It used to be
+        // the hash of a freshly generated ZK proof (random nonces) computed INSIDE the state
+        // transition, using a device private key "simulated" on the node: every validator stored a
+        // different nullifier, so PUF-device telemetry was valid on one node and invalid on another.
+        // The nullifier is now a public identifier bound to the attested key; authenticity of
+        // readings still comes from the ownership proof the device produces with its own key.
         if (enablePUF) {
-            // In a real device, this happens locally. Here we simulate the device's self-proof.
-        try {
-            byte[] pufResponse = com.hybrid.blockchain.security.PUFIdentityProvider.getSimulatedPUFResponse(deviceId);
-            java.math.BigInteger privKey = com.hybrid.blockchain.security.PUFIdentityProvider.derivePrivateKey(pufResponse);
-            
-            com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof proof = 
-                com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof.create(
-                    com.hybrid.blockchain.privacy.ZKProofSystem.toBytes32(privKey), 
-                    devicePublicKey
-                );
-            
-            record.setPufIdentity(null, proof.getNullifier()); // Storing nullifier for Sybil resistance
-            log.info("[Lifecycle] Generated PUF-ZKP nullifier for device {}: {}", deviceId, proof.getNullifier());
-        } catch (Exception e) {
-            log.warn("[Lifecycle] PUF-ZKP identity generation failed: {}", e.getMessage());
+            record.setPufIdentity(null, pufNullifier(deviceId, devicePublicKey));
         }
-        }
-
         // Store in registry
         deviceRegistry.put(deviceId, record);
 
@@ -380,6 +377,38 @@ public class DeviceLifecycleManager {
     /**
      * Activate device (assign to owner and create DID)
      */
+    /** [HC-049] Deterministic, public PUF nullifier for a provisioned device. */
+    public static String pufNullifier(String deviceId, byte[] devicePublicKey) {
+        return com.hybrid.blockchain.HexUtils.encode(com.hybrid.blockchain.Crypto.hashWithDomain(
+                "HC-PUF-NULLIFIER-v1", deviceId.getBytes(java.nio.charset.StandardCharsets.UTF_8), devicePublicKey));
+    }
+
+    /** [HC-047] Digest the DEVICE signs to consent to being activated for {@code owner}. */
+    public static byte[] activationDigest(String deviceId, String owner) {
+        return com.hybrid.blockchain.Crypto.hashWithDomain("HC-DEVICE-ACTIVATE-v1", deviceId, owner);
+    }
+
+    /**
+     * [HC-047] Activation as executed by an IOT_MANAGEMENT transaction. Before, any sender could
+     * activate any PROVISIONING device, name any owner and register any key in its DID (the key
+     * telemetry is later authenticated with, HC-013). Now: the sender must be the owner it claims;
+     * the key must be the one the manufacturer attested at provisioning; and the device itself must
+     * sign {@link #activationDigest} with that key, proving physical possession.
+     */
+    public void activateDevice(String deviceId, String owner, byte[] devicePublicKey, long timestamp,
+                               String caller, byte[] deviceSignature) {
+        DeviceRecord record = getDeviceRecord(deviceId);
+        if (owner == null || !owner.equals(caller))
+            throw new SecurityException("Activation must be sent by the claimed owner");
+        byte[] attested = record.getAttestedPublicKey();
+        if (attested == null || !Arrays.equals(attested, devicePublicKey))
+            throw new SecurityException("Activation key is not the manufacturer-attested device key: " + deviceId);
+        if (deviceSignature == null
+                || !com.hybrid.blockchain.Crypto.verify(activationDigest(deviceId, owner), deviceSignature, devicePublicKey))
+            throw new SecurityException("Missing or invalid device activation signature: " + deviceId);
+        activateDevice(deviceId, owner, devicePublicKey, timestamp);
+    }
+
     public void activateDevice(String deviceId, String owner, byte[] devicePublicKey, long timestamp) {
         DeviceRecord record = getDeviceRecord(deviceId);
 
@@ -746,6 +775,27 @@ public class DeviceLifecycleManager {
                 if (data.containsKey("reputationScore")) {
                     record.setReputationScore(((Number) data.get("reputationScore")).doubleValue());
                 }
+                // [HC-048] restore the fields toJSON used to drop
+                if (data.get("lastActivityBlock") instanceof Number)
+                    record.setLastActivityBlock(((Number) data.get("lastActivityBlock")).longValue());
+                if (data.get("pufNullifier") != null) record.setPufIdentity(null, (String) data.get("pufNullifier"));
+                if (data.get("pufEnabled") instanceof Boolean) record.setPufEnabled((Boolean) data.get("pufEnabled"));
+                if (data.get("attestedPublicKey") != null)
+                    record.setAttestedPublicKey(com.hybrid.blockchain.HexUtils.decode((String) data.get("attestedPublicKey")));
+                if (data.get("attestationSignature") != null)
+                    record.setAttestationSignature(com.hybrid.blockchain.HexUtils.decode((String) data.get("attestationSignature")));
+                if (data.get("metadata") instanceof Map) {
+                    for (Map.Entry<String, Object> me : ((Map<String, Object>) data.get("metadata")).entrySet())
+                        record.addMetadata(me.getKey(), me.getValue() == null ? null : String.valueOf(me.getValue()));   // null stays null
+                }
+                if (data.get("firmwareHistory") instanceof List) {
+                    for (Map<String, Object> m : (List<Map<String, Object>>) data.get("firmwareHistory")) {
+                        record.addFirmwareUpdate(new FirmwareUpdate((String) m.get("version"),
+                                m.get("hash") == null ? null : com.hybrid.blockchain.HexUtils.decode((String) m.get("hash")),
+                                ((Number) m.get("blockHeight")).longValue(), (String) m.get("updatedBy"),
+                                m.get("commitment") == null ? null : com.hybrid.blockchain.HexUtils.decode((String) m.get("commitment"))));
+                    }
+                }
                 
                 manager.deviceRegistry.put(entry.getKey(), record);
             }
@@ -762,6 +812,10 @@ public class DeviceLifecycleManager {
     /**
      * Serialize state for blockchain storage
      */
+    private static String hexOrNull(byte[] b) {
+        return b == null ? null : com.hybrid.blockchain.HexUtils.bytesToHex(b);
+    }
+
     public Map<String, Object> toJSON() {
         Map<String, Object> json = new HashMap<>();
 
@@ -778,6 +832,24 @@ public class DeviceLifecycleManager {
             deviceData.put("firmwareVersion", record.getFirmwareVersion());
             deviceData.put("registrationBlock", record.getRegistrationBlock());
             deviceData.put("reputationScore", record.getReputationScore());
+            // [HC-048] every consensus-relevant field (state root, clones, restarts)
+            deviceData.put("lastActivityBlock", record.getLastActivityBlock());
+            deviceData.put("pufNullifier", record.getPufNullifier());
+            deviceData.put("pufEnabled", record.isPufEnabled());
+            deviceData.put("attestedPublicKey", hexOrNull(record.getAttestedPublicKey()));
+            deviceData.put("attestationSignature", hexOrNull(record.getAttestationSignature()));
+            deviceData.put("metadata", new java.util.TreeMap<>(record.getMetadata()));
+            List<Map<String, Object>> fw = new ArrayList<>();
+            for (FirmwareUpdate u : record.getFirmwareHistory()) {
+                Map<String, Object> m = new HashMap<>();
+                m.put("version", u.getVersion());
+                m.put("hash", hexOrNull(u.getHash()));
+                m.put("blockHeight", u.getBlockHeight());
+                m.put("updatedBy", u.getUpdatedBy());
+                m.put("commitment", hexOrNull(u.getCommitment()));
+                fw.add(m);
+            }
+            deviceData.put("firmwareHistory", fw);
             devices.put(entry.getKey(), deviceData);
         }
         Map<String, String> mfs = new HashMap<>();

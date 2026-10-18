@@ -725,6 +725,9 @@ public class TransactionLifecycleTest {
         data.put("deviceId", deviceId);
         data.put("owner", owner.getAddress());
         data.put("devicePublicKey", Crypto.bytesToHex(deviceKey.getPublicKey()));
+        // [HC-047] the device consents (proof of possession) with its attested key
+        data.put("activationSignature", Crypto.bytesToHex(Crypto.sign(
+                com.hybrid.blockchain.lifecycle.DeviceLifecycleManager.activationDigest(deviceId, owner.getAddress()), deviceKey.getPrivateKey())));
         
         Transaction tx = new Transaction.Builder()
                 .type(Transaction.Type.IOT_MANAGEMENT)
@@ -885,8 +888,11 @@ public class TransactionLifecycleTest {
         data.clear();
         data.put("action", "ACTIVATE");
         data.put("deviceId", deviceId);
-        data.put("owner", "OWNER1");
+        // [HC-047] activation is sent by the owner it names (was: manufacturer naming "OWNER1")
+        data.put("owner", manufacturer.getAddress());
         data.put("devicePublicKey", Crypto.bytesToHex(deviceKey.getPublicKey()));
+        data.put("activationSignature", Crypto.bytesToHex(Crypto.sign(
+                com.hybrid.blockchain.lifecycle.DeviceLifecycleManager.activationDigest(deviceId, manufacturer.getAddress()), deviceKey.getPrivateKey())));
         
         Transaction aTx = new Transaction.Builder()
                 .type(Transaction.Type.IOT_MANAGEMENT)
