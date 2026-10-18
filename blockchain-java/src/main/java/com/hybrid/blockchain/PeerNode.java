@@ -453,6 +453,11 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                     return;
                 }
 
+                // [HC-051] only validators may distribute models (sender authenticated by HC-044)
+                if (consensus == null || !consensus.isValidator(msg.getSenderId())) {
+                    log.warn("[FL] Ignoring model broadcast from non-validator {}", msg.getSenderId());
+                    return;
+                }
                 int round = Integer.parseInt(parts[0]);
                 String modelHash = parts[1].trim();
                 double[] weights = bytesToWeights(Base64.getDecoder().decode(parts[2]));
