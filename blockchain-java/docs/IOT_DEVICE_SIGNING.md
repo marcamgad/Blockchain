@@ -72,3 +72,25 @@ def sign_reading(device_id: str, payload: bytes, sk: SigningKey) -> bytes:
 - A signed reading can be relayed by any gateway; it cannot be redirected to another device or
   altered. Within the 10-minute window a gateway could resubmit the same reading. Applications
   that need strict once-only delivery should include a per-device counter in `payload`.
+
+## Activating a device (audit fix HC-047)
+
+After the manufacturer provisions a device (attesting its public key), the owner activates it
+with an `IOT_MANAGEMENT` transaction. Three things are now required:
+
+1. The transaction is **sent by the owner** named in it (`from == owner`).
+2. `devicePublicKey` is **the key the manufacturer attested** at provisioning.
+3. The **device signs its consent**, proving physical possession:
+
+```
+activationDigest = SHA-256( "HC-DEVICE-ACTIVATE-v1" ‖ 0x00 ‖ len(deviceId) ‖ deviceId ‖ len(owner) ‖ owner )
+```
+(same length-prefixed encoding as readings, UTF-8 strings), signed with the device key and put in
+the transaction data as `activationSignature` (128 hex chars, `r ‖ s`, low-S):
+
+```json
+{"action":"ACTIVATE","deviceId":"thermo-42","owner":"hb…","devicePublicKey":"02…",
+ "activationSignature":"…"}
+```
+
+Java: `Crypto.sign(DeviceLifecycleManager.activationDigest(deviceId, owner), devicePrivateKey)`.
