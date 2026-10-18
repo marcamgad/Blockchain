@@ -8,12 +8,18 @@ import com.dylibso.chicory.runtime.HostFunction;
 import com.dylibso.chicory.runtime.ImportFunction;
 import com.dylibso.chicory.runtime.Instance;
 import com.dylibso.chicory.runtime.ImportValues;
+import com.dylibso.chicory.runtime.MStack;
+import com.dylibso.chicory.wasm.types.Instruction;
+import com.dylibso.chicory.wasm.types.OpCode;
 import com.dylibso.chicory.wasm.Parser;
 import com.dylibso.chicory.wasm.WasmModule;
 import com.dylibso.chicory.wasm.types.ValueType;
 
 import java.io.ByteArrayInputStream;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.List;
 import java.util.concurrent.*;
 
@@ -27,7 +33,27 @@ import java.util.concurrent.*;
  * a {@code STATUS_REVERTED} receipt without committing state changes.
  */
 public class WasmContractEngine {
-    private static final ConcurrentHashMap<String, WasmModule> MODULE_CACHE = new ConcurrentHashMap<>();
+    /** [HC-061] bounded LRU: every distinct binary used to stay parsed in memory forever */
+    static final int MODULE_CACHE_MAX = 64;
+    private static final Map<String, WasmModule> MODULE_CACHE = Collections.synchronizedMap(
+            new LinkedHashMap<>(16, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, WasmModule> e) {
+                    return size() > MODULE_CACHE_MAX;
+                }
+            });
+    /**
+     * [HC-059] Deterministic metering. Gas used to be charged only inside host calls, so a pure
+     * loop or memory.grow cost nothing and was stopped only by a 5 s wall-clock timeout - which
+     * fires on a slow node (Pi) and not on a fast one, splitting consensus. Now every instruction
+     * costs gas, memory growth and bulk memory ops cost per page/byte, and gas is capped so a
+     * metered run always ends far below the timeout, which remains only a liveness backstop.
+     */
+    static final long GAS_PER_INSTRUCTION = 1;
+    static final long GAS_PER_MEMORY_PAGE = 1_000;   // per 64 KiB page grown
+    static final long BULK_BYTES_PER_GAS = 64;       // memory.copy / memory.fill
+    static final long MAX_WASM_GAS = 10_000_000;
+    private static final long TIMEOUT_SECONDS = 30;
 
 
     private final byte[] wasmBinary;
@@ -39,7 +65,7 @@ public class WasmContractEngine {
 
     public WasmContractEngine(byte[] wasmBinary, long gasLimit, Interpreter.BlockchainContext context) {
         this.wasmBinary = wasmBinary;
-        this.gasLimit   = gasLimit;
+        this.gasLimit   = Math.min(gasLimit, MAX_WASM_GAS);
         this.context    = context;
     }
 
@@ -117,7 +143,11 @@ public class WasmContractEngine {
 
                 // Load Wasm Module (with caching)
                 String moduleKey = HexUtils.encode(Crypto.hash(wasmBinary));
-                WasmModule module = MODULE_CACHE.computeIfAbsent(moduleKey, k -> Parser.parse(wasmBinary));
+                WasmModule module = MODULE_CACHE.get(moduleKey);
+                if (module == null) {
+                    module = Parser.parse(wasmBinary);
+                    MODULE_CACHE.put(moduleKey, module);
+                }
 
 
                 // Setup Imports
@@ -128,6 +158,7 @@ public class WasmContractEngine {
                 // Instantiate
                 Instance instance = Instance.builder(module)
                         .withImportValues(imports)
+                        .withUnsafeExecutionListener(this::meter)
                         .build();
 
                 // Execute function - Chicory 1.0.0 uses long[] for arguments
@@ -137,7 +168,7 @@ public class WasmContractEngine {
             });
 
             try {
-                future.get(5, TimeUnit.SECONDS);
+                future.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
             } catch (ExecutionException e) {
                 Throwable cause = e.getCause();
                 // FIX 5: Propagate RevertException specifically so state is not committed
@@ -178,8 +209,20 @@ public class WasmContractEngine {
      * @param amount units to deduct
      * @throws RevertException if total consumed reaches or exceeds the gas limit
      */
-    private void deductGas(int amount) {
-        gasConsumed += amount;
+    /** [HC-059] charged before each instruction executes (operands are still on the stack). */
+    private void meter(Instruction ins, MStack stack) {
+        long cost = GAS_PER_INSTRUCTION;
+        OpCode op = ins.opcode();
+        if (op == OpCode.MEMORY_GROW) {
+            cost += (stack.peek() & 0xFFFFFFFFL) * GAS_PER_MEMORY_PAGE;
+        } else if (op == OpCode.MEMORY_COPY || op == OpCode.MEMORY_FILL) {
+            cost += (stack.peek() & 0xFFFFFFFFL) / BULK_BYTES_PER_GAS;
+        }
+        deductGas(cost);
+    }
+
+    private void deductGas(long amount) {
+        gasConsumed = (amount >= gasLimit - gasConsumed) ? gasLimit : gasConsumed + amount;
         // FIX 5: Throw RevertException (not RuntimeException) to trigger STATUS_REVERTED receipt
         if (gasConsumed >= gasLimit) {
             throw new RevertException("Out of Gas (WASM): consumed=" + gasConsumed + " limit=" + gasLimit);
