@@ -19,6 +19,28 @@ public class Block {
     private String validatorId;
     private byte[] signature;
     private int blockSizeBytes;
+    /**
+     * [HC-046] The COMMIT signatures of a quorum for this block. NOT part of the hash: the
+     * signers sign the hash. It travels with the block (gossip, storage, sync) so any node can
+     * check that 2f+1 validators committed it, instead of trusting one leader signature.
+     */
+    private List<CommitSignature> commitCertificate;
+
+    /** One validator's COMMIT vote: signature over PBFTMessage(COMMIT, view, index, hash, id). */
+    public static class CommitSignature {
+        public String validatorId;
+        public long view;
+        public String signature;   // hex
+
+        public CommitSignature() {
+        }
+
+        public CommitSignature(String validatorId, long view, String signature) {
+            this.validatorId = validatorId;
+            this.view = view;
+            this.signature = signature;
+        }
+    }
 
     public Block() {
     }
@@ -164,6 +186,14 @@ public class Block {
     public void setTxRoot(String txRoot) {
         this.txRoot = txRoot;
         this.hash = calculateHash();
+    }
+
+    public List<CommitSignature> getCommitCertificate() {
+        return commitCertificate;
+    }
+
+    public void setCommitCertificate(List<CommitSignature> commitCertificate) {
+        this.commitCertificate = commitCertificate;
     }
 
     public int getBlockSizeBytes() {

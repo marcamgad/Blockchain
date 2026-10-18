@@ -190,7 +190,9 @@ public class BlockStructureTest {
         Block b = new Block(last.getIndex() + 1, last.getTimestamp() + 1, List.of(), last.getHash(), 1, "WRONG_STATE");
         b.setValidatorId(tb.getValidatorKey().getAddress());
         b.setSignature(Crypto.sign(Crypto.hash(b.serializeCanonical()), tb.getValidatorKey().getPrivateKey()));
-        
+        // [HC-046] a leader signature alone is no longer final; mark it committed to reach the state check
+        tb.getConsensus().markCommitted(b.getHash(), b.getIndex(), tb.getValidatorKey().getAddress());
+
         assertThatThrownBy(() -> blockchain.applyBlock(b))
                 .hasMessageContaining("Invalid state root");
     }

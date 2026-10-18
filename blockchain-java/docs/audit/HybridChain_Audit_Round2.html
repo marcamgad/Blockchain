@@ -1,0 +1,550 @@
+<title>HybridChain Security Audit II</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: a single reading column (~68ch) with full-width data tables in scroll containers; a sticky table of contents on wide screens. */
+:root {
+  --bg: #f6f8f9;
+  --surface: #ffffff;
+  --fg: #16212b;
+  --muted: #5a6b78;
+  --rule: #d7dfe5;
+  --accent: #0b6b74;
+  --accent-soft: #e2f1f2;
+  --code-bg: #eef2f4;
+  --crit: #b4232f; --crit-bg: #fbe6e8;
+  --high: #b85c00; --high-bg: #fdeedd;
+  --med: #8a6d00;  --med-bg: #fbf3cf;
+  --low: #3d6a8a;  --low-bg: #e4eef5;
+  --ok: #1d7a46;   --ok-bg: #e0f3e8;
+  --open: #6b3fa0; --open-bg: #efe7f8;
+  --display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f161c; --surface: #16202a; --fg: #e3eaef; --muted: #96a6b3; --rule: #2a3946;
+    --accent: #4cc2cb; --accent-soft: #143238; --code-bg: #1c2833;
+    --crit: #ff7b86; --crit-bg: #3a1a1f; --high: #ffaa5c; --high-bg: #3a2614;
+    --med: #e8c94e; --med-bg: #332c12; --low: #8cc0e3; --low-bg: #16293a;
+    --ok: #6fd69c; --ok-bg: #12301f; --open: #c3a3f0; --open-bg: #2a1f3b;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f161c; --surface: #16202a; --fg: #e3eaef; --muted: #96a6b3; --rule: #2a3946;
+  --accent: #4cc2cb; --accent-soft: #143238; --code-bg: #1c2833;
+  --crit: #ff7b86; --crit-bg: #3a1a1f; --high: #ffaa5c; --high-bg: #3a2614;
+  --med: #e8c94e; --med-bg: #332c12; --low: #8cc0e3; --low-bg: #16293a;
+  --ok: #6fd69c; --ok-bg: #12301f; --open: #c3a3f0; --open-bg: #2a1f3b;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg);
+  font-family: var(--body); font-size: 17px; line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.wrap { max-width: 1180px; margin: 0 auto; padding-block: 40px 80px; display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 48px; }
+nav.toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 24px); align-self: start; font-size: 14px; }
+nav.toc h2 { font-family: var(--display); font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+nav.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+nav.toc a { color: var(--fg); text-decoration: none; border-left: 2px solid var(--rule); padding-left: 10px; display: block; }
+nav.toc a:hover, nav.toc a:focus-visible { border-color: var(--accent); color: var(--accent); outline: none; }
+main { min-width: 0; }
+.prose { max-width: 70ch; }
+header.cover { border-bottom: 1px solid var(--rule); padding-bottom: 28px; margin-bottom: 36px; }
+.eyebrow { font-family: var(--mono); font-size: 12.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
+h1 { font-family: var(--display); font-weight: 700; font-size: clamp(34px, 5vw, 50px); line-height: 1.08; margin: 10px 0 14px; text-wrap: balance; letter-spacing: -0.01em; }
+h2 { font-family: var(--display); font-weight: 700; font-size: 28px; line-height: 1.2; margin: 56px 0 14px; text-wrap: balance; scroll-margin-top: 24px; }
+h3 { font-family: var(--display); font-weight: 500; font-size: 21px; margin: 32px 0 8px; text-wrap: balance; }
+h4 { font-family: var(--body); font-weight: 700; font-size: 16px; margin: 18px 0 4px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+p { margin: 0 0 14px; }
+.lede { font-size: 20px; color: var(--muted); max-width: 62ch; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 24px; font-size: 14.5px; color: var(--muted); margin-top: 18px; }
+.meta b { color: var(--fg); font-weight: 600; }
+code, .mono { font-family: var(--mono); font-size: .86em; }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+a { color: var(--accent); }
+.verdict { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 22px 24px; display: grid; gap: 12px; }
+.verdict .line { font-family: var(--display); font-size: 24px; font-weight: 700; line-height: 1.25; text-wrap: balance; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; margin: 22px 0 6px; }
+.stat { border-top: 2px solid var(--accent); padding-top: 8px; }
+.stat .n { font-family: var(--display); font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.stat .l { font-size: 14px; color: var(--muted); }
+.tbl { overflow-x: auto; margin: 14px 0 22px; border: 1px solid var(--rule); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 15px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-family: var(--body); font-weight: 700; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); background: var(--bg); position: sticky; top: 0; }
+tr:last-child td { border-bottom: 0; }
+td.id { font-family: var(--mono); font-size: 13.5px; white-space: nowrap; }
+td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sev { display: inline-block; font-family: var(--mono); font-size: 11.5px; font-weight: 600; letter-spacing: .04em; padding: 2px 7px; border-radius: 999px; white-space: nowrap; }
+.s-crit { color: var(--crit); background: var(--crit-bg); }
+.s-high { color: var(--high); background: var(--high-bg); }
+.s-med { color: var(--med); background: var(--med-bg); }
+.s-low { color: var(--low); background: var(--low-bg); }
+.s-info { color: var(--muted); background: var(--code-bg); }
+.st-ok { color: var(--ok); background: var(--ok-bg); }
+.st-open { color: var(--open); background: var(--open-bg); }
+.grade { font-family: var(--display); font-weight: 700; font-size: 18px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.finding { border-top: 1px solid var(--rule); padding-top: 18px; margin-top: 26px; }
+.finding .head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; }
+.finding .head h3 { margin: 0; }
+.finding .where { font-family: var(--mono); font-size: 13px; color: var(--muted); margin: 6px 0 10px; overflow-wrap: anywhere; }
+.ba { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 10px 0; }
+.ba > div { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 14px; min-width: 0; }
+.ba .k { font-family: var(--mono); font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; margin-bottom: 4px; }
+.ba .before .k { color: var(--crit); }
+.ba .after .k { color: var(--ok); }
+.ba p { margin: 0; font-size: 15.5px; }
+.proof { font-size: 15px; color: var(--muted); }
+ul.tight { padding-left: 20px; margin: 0 0 14px; }
+ul.tight li { margin: 4px 0; }
+pre { background: var(--code-bg); border-radius: 8px; padding: 14px 16px; overflow-x: auto; font-family: var(--mono); font-size: 13.5px; line-height: 1.55; margin: 10px 0 18px; }
+.note { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 4px; }
+footer { margin-top: 64px; padding-top: 18px; border-top: 1px solid var(--rule); color: var(--muted); font-size: 14px; }
+@media (max-width: 900px) {
+  .wrap { grid-template-columns: minmax(0, 1fr); gap: 0; padding-block: 24px 60px; }
+  nav.toc { position: static; margin-bottom: 28px; }
+  nav.toc ol { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+}
+@media (max-width: 620px) {
+  body { font-size: 16px; }
+  .ba { grid-template-columns: minmax(0, 1fr); }
+  h2 { font-size: 24px; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+html { scroll-behavior: smooth; }
+</style>
+
+<div class="wrap">
+<nav class="toc" aria-label="Contents">
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#verdict">1. Verdict</a></li>
+    <li><a href="#scorecard">2. Scorecard by area</a></li>
+    <li><a href="#scope">3. Scope and method</a></li>
+    <li><a href="#architecture">4. How the system fits together</a></li>
+    <li><a href="#round">5. This round's fixes</a></li>
+    <li><a href="#open">6. What is still open</a></li>
+    <li><a href="#ledger">7. Full finding ledger</a></li>
+    <li><a href="#upgrade">8. Upgrade and rollout</a></li>
+    <li><a href="#roadmap">9. Road to production</a></li>
+  </ol>
+</nav>
+
+<main>
+<header class="cover">
+  <div class="eyebrow">Security audit · round 2 · after remediation</div>
+  <h1>HybridChain Security Audit II</h1>
+  <p class="lede">A second full pass over the HybridChain Java IoT blockchain, done after the first round of fixes. It covers every module, re-checks the earlier fixes, and records what was found and fixed in this round and what is still open.</p>
+  <div class="meta">
+    <span><b>Date</b> 18 Oct 2026</span>
+    <span><b>Code</b> <code>blockchain-java</code>, branch <code>fix/audit-batch3</code> on top of <code>c567794</code> plus this round's uncommitted changes</span>
+    <span><b>Stack</b> Java 17 · Spring Boot 3.5.16 · BouncyCastle 1.86 · LevelDB · Chicory WASM 1.0.0</span>
+  </div>
+</header>
+
+<section id="verdict">
+<h2>1. Verdict</h2>
+<div class="verdict">
+  <div class="line">Ready for a private testnet or a supervised pilot. Not yet ready for production.</div>
+  <p class="prose" style="margin:0">All 77 recorded findings were reviewed. Every critical finding is fixed, and each fix has a test that fails on the old code and passes on the new code. Production is blocked by three things: leader-failure recovery can stall, the system has never been run as a real multi-node network on separate machines, and the keys that were published in the repository have to be replaced.</p>
+</div>
+<div class="stats" role="list">
+  <div class="stat" role="listitem"><div class="n">77</div><div class="l">findings recorded (HC-001 to HC-077)</div></div>
+  <div class="stat" role="listitem"><div class="n">9 / 9</div><div class="l">critical findings fixed</div></div>
+  <div class="stat" role="listitem"><div class="n">687</div><div class="l">tests passing, 0 failing</div></div>
+  <div class="stat" role="listitem"><div class="n">30 / 30</div><div class="l">audit proof tests passing</div></div>
+  <div class="stat" role="listitem"><div class="n">74.2%</div><div class="l">line coverage (60.6% branch)</div></div>
+  <div class="stat" role="listitem"><div class="n">43 → 1</div><div class="l">vulnerable dependencies</div></div>
+</div>
+</section>
+
+<section id="scorecard">
+<h2>2. Scorecard by area</h2>
+<p class="prose">Grades are out of 10. They measure the risk left after this round, not the work done. A 9 means no known weakness that matters for a pilot. A 5 means a known gap that would matter in production.</p>
+<div class="tbl"><table>
+<thead><tr><th>Area</th><th>Grade</th><th>State after this round</th><th>Main thing still missing</th></tr></thead>
+<tbody>
+<tr><td>Consensus (PBFT)</td><td class="grade">7</td><td>Quorum math is correct for every validator count. Blocks are final only with a 2f+1 commit certificate that any node can verify. Vote and proposal signatures are checked and unambiguous. A node never commits two blocks at one height, so view change is safe.</td><td>View change has no NEW_VIEW step, so the network can stall after a badly timed leader failure (liveness, not safety). Misbehaviour evidence is not stored on-chain.</td></tr>
+<tr><td>Ledger and state machine</td><td class="grade">8</td><td>Minting, fees, UTXO ownership, fork revert, genesis, restart and the state root are all fixed and covered by proof tests. Execution is deterministic: no wall clock or node-local AI state is used.</td><td>The method-level review ledger still has unreviewed helper methods. Private transfers move no value (placeholder feature).</td></tr>
+<tr><td>Cryptography</td><td class="grade">8</td><td>Full-digest ECDSA with low-S signatures, ML-DSA post-quantum signatures, domain-separated hashing, AES-GCM with record binding (AAD). Signed encodings are length-prefixed across blocks, votes, checkpoints and credentials.</td><td>Old seed-derived keys are compromised and must be rotated. There is no hardware key storage (HSM) on the edge nodes yet.</td></tr>
+<tr><td>Block sync and checkpoints</td><td class="grade">7</td><td>Lagging nodes now learn peer heights and catch up. Every synced block must carry a valid commit certificate. Requests and responses are capped at 50 blocks. Fast-sync verifies the quorum signatures, the state root, the UTXO root and the checkpoint block.</td><td>No peer-to-peer state snapshot download (fast-sync only works from local storage). The fast-sync load path still has no dedicated test.</td></tr>
+<tr><td>Smart contracts (bytecode VM and WASM)</td><td class="grade">7</td><td>WASM gas is charged per instruction, memory growth is priced, and gas is capped, so every node reaches the same result. The bytecode VM has a stack limit. The gas limit cannot overflow.</td><td>Contracts read sensors from each node's local hardware (HC-058), which becomes nondeterministic once real sensors are attached.</td></tr>
+<tr><td>P2P transport</td><td class="grade">8</td><td>mTLS with a working certificate authority, no trust-all fallback, bounded handshakes, socket timeouts, authenticated and size-capped messages, and capped peer discovery.</td><td>Validator admission is a static list. There is no on-chain validator-set governance.</td></tr>
+<tr><td>REST, WebSocket, MQTT, CoAP</td><td class="grade">8</td><td>Every write needs a signed transaction or a matching JWT. Admin endpoints are gated. Reads are paged and bounded. The event bus has fixed topics and per-topic filters. MQTT and CoAP only relay transactions the owner signed.</td><td>API test coverage is 47%. MQTT and CoAP have no TLS (DTLS) of their own, so payload confidentiality depends on the network.</td></tr>
+<tr><td>Devices, identity, credentials</td><td class="grade">8</td><td>Activation needs owner and device consent. PUF nullifiers are deterministic. Credentials expire. Telemetry is device-signed, and PUF proofs are bound to one transaction. Firmware is verified by a manufacturer signature.</td><td>Revocation is owner-only, with no admin or recovery path.</td></tr>
+<tr><td>Privacy and zero-knowledge</td><td class="grade">5</td><td>Ownership proofs are bound to their transaction. Nullifiers are derived from the proof. The threshold proof fails closed.</td><td>The leader-eligibility proof is unsound by design and must stay disabled. Private transfers move no value. Firmware "proofs" are commitments, not zero-knowledge proofs.</td></tr>
+<tr><td>AI and federated learning</td><td class="grade">8</td><td>AI output never changes consensus state. Federated-learning models are hash-checked and only accepted from validators. Detectors are fed only from accepted blocks and authenticated data.</td><td>No defence against poisoning from validators themselves (no robust aggregation).</td></tr>
+<tr><td>Operations and deployment</td><td class="grade">6</td><td>Dependencies are patched. The Docker image runs as a non-root user. The production profile refuses debug secrets. The edge-deployment guide was corrected.</td><td>LevelDB data and <code>node_modules</code> are committed to git. Startup code has 0% test coverage. No multi-machine deployment test exists.</td></tr>
+<tr><td>Tests and evidence</td><td class="grade">8</td><td>687 tests and 30 audit proofs. Each finding has a regression test, and the production signature rule is tested in a separate JVM.</td><td>Branch coverage is 60.6%. The <code>iot</code>, <code>examples</code> and <code>tools</code> packages have no tests.</td></tr>
+</tbody></table></div>
+</section>
+
+<section id="scope">
+<h2>3. Scope and method</h2>
+<div class="prose">
+<p>The audit covered all 96 main source files (about 21,400 lines) and the 157 test files, plus the build file, Docker files, the compose files and the environment template. Modules were reviewed in risk order: transport and P2P, ledger, consensus, cryptography and storage, contracts, devices and identity, API and IoT ingress, privacy, AI, then operations.</p>
+<h4>Rules every fix followed</h4>
+<ul class="tight">
+  <li>Each finding gets a test that asserts the correct behaviour. The test must fail on the old code before the fix counts. For example, the WASM metering test failed 3 out of 3 on the old engine, where the infinite loop ran the full 5-second timeout.</li>
+  <li>The full suite must stay green after every change. The audit proof suite runs with <code>mvn -o test -Dtest=HybridChainAuditPoCTest -Daudit.excluded=none</code>.</li>
+  <li>Fixes are defensive: they validate, bind or bound. No feature was removed without a replacement path. The old unsigned REST submission now answers 410 Gone and points to the signed endpoint.</li>
+  <li>Changes that alter consensus encodings are marked as such (see section 8).</li>
+</ul>
+<h4>Severity scale</h4>
+<div class="legend">
+  <span class="sev s-crit">CRITICAL</span><span>can split consensus, create money or take over the network</span>
+</div>
+<div class="legend">
+  <span class="sev s-high">HIGH</span><span>breaks a security property for some users or devices, or stops the network working</span>
+</div>
+<div class="legend">
+  <span class="sev s-med">MEDIUM</span><span>denial of service, data integrity under conditions, or a broken feature with a security role</span>
+</div>
+<div class="legend">
+  <span class="sev s-low">LOW</span><span>hardening, defence in depth</span> <span class="sev s-info">INFO</span><span>observations</span>
+</div>
+</div>
+</section>
+
+<section id="architecture">
+<h2>4. How the system fits together</h2>
+<p class="prose">This map shows where trust is checked. Each arrow into the ledger passes a signature or quorum check. The dashed paths are advisory: AI and monitoring read accepted blocks and never write consensus state.</p>
+<pre class="mermaid">
+flowchart LR
+  subgraph Edge["Edge and clients"]
+    D["IoT device<br/>(device key, PUF)"]
+    W["Wallet / client<br/>(account key)"]
+  end
+  subgraph Ingress["Node ingress"]
+    MQ["MQTT / CoAP adapter<br/>relays signed tx only"]
+    API["REST + JWT<br/>submit-signed"]
+    WS["WebSocket event bus<br/>fixed topics"]
+  end
+  subgraph Core["Node core"]
+    MP["Mempool<br/>validateTransaction"]
+    PB["PBFT<br/>proposal sig, 2f+1 commit cert"]
+    BC["Blockchain.applyBlock<br/>deterministic state machine"]
+    ST[("LevelDB<br/>AES-GCM + AAD")]
+  end
+  subgraph Net["Peers (mTLS)"]
+    P["Other validators<br/>votes, blocks, sync"]
+  end
+  AI["AI and anomaly detection<br/>(advisory)"]
+  D -->|device-signed reading| MQ
+  W -->|signed tx| API
+  MQ --> MP
+  API --> MP
+  MP --> PB
+  P <-->|signed votes, certified blocks| PB
+  PB --> BC
+  BC --> ST
+  BC -.->|accepted blocks| AI
+  BC -.-> WS
+</pre>
+</section>
+
+<section id="round">
+<h2>5. This round's fixes</h2>
+<p class="prose">Fourteen findings were fixed in this round. They are listed with what happened before the fix and what happens now. Earlier rounds (HC-001 to HC-064) are summarised in the ledger in section 7.</p>
+
+<div class="finding">
+  <div class="head"><span class="sev s-crit">CRITICAL</span><h3>HC-046 · One leader signature finalised a block</h3></div>
+  <div class="where">consensus/PBFTConsensus.java · verifyBlock, verifyCommitCertificate, buildCommitCertificate · Block.java · PeerNode.java applyBlockAtSequence</div>
+  <div class="ba">
+    <div class="before"><div class="k">Before</div><p>If a node had not seen the commit votes itself, <code>verifyBlock</code> accepted any block signed by the current leader. One validator was enough to finalise a block. Separately, the commit path applied the pending block even when no quorum hash existed at all. Blocks from earlier views were rejected, because only the current leader's key was tried, so a lagging node could not sync history.</p></div>
+    <div class="after"><div class="k">After</div><p>Every block carries a commit certificate: the COMMIT signatures of the validators that voted for it. The signatures cover the block hash, and the certificate is not part of the hash. A block is final only if the proposer's signature verifies and either this node saw the quorum itself or the certificate holds valid signatures from 2f+1 distinct, known, non-slashed validators. A single-validator network is the exception, because there the quorum is 1. The commit path refuses a block when there is no quorum or the hash or height differs.</p></div>
+  </div>
+  <p class="proof">Proof: <code>CommitCertificateTest</code>. A second node that never saw the votes accepts a block with a 3-of-4 certificate. It rejects no certificate, 2 of 4, a duplicated signer, and a signature attached to the wrong validator. The existing <code>BlockStructureTest</code> case that applied a leader-only block in a 4-validator network is now rejected, as intended.</p>
+</div>
+
+<div class="finding">
+  <div class="head"><span class="sev s-high">HIGH</span><h3>HC-065 · Proposals were voted on without checking who signed them</h3></div>
+  <div class="where">Blockchain.java validateBlock · Consensus.verifyProposerSignature · PBFTConsensus</div>
+  <div class="ba">
+    <div class="before"><div class="k">Before</div><p><code>validateBlock</code> checked only that a signature was present. It is the only check a gossiped proposal gets before honest validators send PREPARE, so validators could spend votes on a block no validator had signed.</p></div>
+    <div class="after"><div class="k">After</div><p>The proposer's signature is verified through the consensus engine. PBFT checks the proposal signature only, because a proposal has no certificate yet. PoA uses its own block signature format. Mocked engines in tests stub the new method.</p></div>
+  </div>
+  <p class="proof">Proof: <code>CommitCertificateTest.proposalSignatureIsVerified</code>.</p>
+</div>
+
+<div class="finding">
+  <div class="head"><span class="sev s-med">MEDIUM</span><h3>HC-066 · Vote signatures were ambiguous</h3></div>
+  <div class="where">PBFTConsensus.PBFTMessage.serializeForSigning</div>
+  <div class="ba">
+    <div class="before"><div class="k">Before</div><p>The signed bytes were the string <code>phase + view + seq + hash + id</code> with no separators. View 1, sequence 23 and view 12, sequence 3 produced identical bytes, so one signature counted for both.</p></div>
+    <div class="after"><div class="k">After</div><p>Votes are signed over a length-prefixed binary encoding with the domain tag <code>HYBRIDCHAIN-PBFT-v2</code>. Each field has a fixed position, and the domain tag separates votes from blocks and checkpoints.</p></div>
+  </div>
+  <p class="proof">Proof: <code>CommitCertificateTest.voteEncodingIsUnambiguous</code>.</p>
+</div>
+
+<div class="finding">
+  <div class="head"><span class="sev s-high">HIGH</span><h3>HC-068 · A node that fell behind never caught up</h3></div>
+  <div class="where">PeerNode.java broadcastPeerList, PEER_DISCOVERY handler, recordPeerHeight, BLOCKS_RESPONSE</div>
+  <div class="ba">
+    <div class="before"><div class="k">Before</div><p>Peer heights were never recorded, because <code>setBlockHeight</code> was never called. Every peer looked like height 0, so the sync loop never requested a block. A node that restarted or missed a round stayed behind for good.</p></div>
+    <div class="after"><div class="k">After</div><p>Each node's peer announcement includes its own height. Peer messages are signed, so a node can only report its own height. Heights are hints only: every block received through sync still goes through full validation and the certificate check, and a peer that sends a bad block loses score.</p></div>
+  </div>
+</div>
+
+<div class="finding">
+  <div class="head"><span class="sev s-med">MEDIUM</span><h3>HC-067 · Sync requests had no size limit</h3></div>
+  <div class="where">PeerNode.java REQUEST_BLOCKS and BLOCKS_RESPONSE handlers · MAX_SYNC_BATCH = 50</div>
+  <div class="ba">
+    <div class="before"><div class="k">Before</div><p>The requesting peer chose the range, so a single request could make a node load and serialise its whole chain into one message. Responses of any size were also accepted.</p></div>
+    <div class="after"><div class="k">After</div><p>Served ranges are clamped to at most 50 blocks the node actually has, starting at height 1 or later. Responses with more than 50 blocks are dropped, and the sender loses score.</p></div>
+  </div>
+</div>
+
+<div class="finding">
+  <div class="head"><span class="sev s-high">HIGH</span><h3>HC-064 · Anyone on the MQTT broker could control gateway-owned devices</h3></div>
+  <div class="where">api/AbstractIoTMessageAdapter.java submitDeviceTx, submitSignedTx · MQTTAdapter · CoAPAdapter</div>
+  <div class="ba">
+    <div class="before"><div class="k">Before</div><p>A message on <code>blockchain/iot/&lt;device&gt;/mgmt</code> became a management transaction signed with the node's own key. Lifecycle checks compare the device owner with the transaction sender. On a gateway that owns its devices, anyone who could publish to the broker (default <code>tcp://localhost:1883</code>, usually with no login) could suspend, revoke or re-flash them, and each message also spent the node's fees.</p></div>
+    <div class="after"><div class="k">After</div><p>The node never signs management actions on someone else's behalf. MQTT <code>/mgmt</code> only relays an <code>IOT_MANAGEMENT</code> transaction signed by the owner, and all the normal ledger checks apply. CoAP <code>/tx</code> uses the same relay, and its rate limit is now per sender instead of one shared counter.</p></div>
+  </div>
+  <p class="proof">Proof: <code>IoTIngressTest</code>, plus the updated HC-004 audit proof.</p>
+</div>
+
+<div class="finding">
+  <div class="head"><span class="sev s-low">LOW</span><h3>HC-063 · WebSocket topics and filters</h3></div>
+  <div class="where">api/EventBus.java</div>
+  <div class="ba">
+    <div class="before"><div class="k">Before</div><p>Any topic name created a map entry that was never removed, so memory grew without limit. A session had one filter shared by all its subscriptions, so a second subscription silently replaced the first one's filter. A filter that could not be applied sent the event anyway.</p></div>
+    <div class="after"><div class="k">After</div><p>There are six fixed topics. Each topic has its own filter, with at most 8 keys. An event that cannot be filtered is not sent.</p></div>
+  </div>
+</div>
+
+<div class="finding">
+  <div class="head"><span class="sev s-low">LOW</span><h3>HC-062 · Contract gas limit could overflow</h3></div>
+  <div class="where">Blockchain.java CONTRACT case</div>
+  <div class="ba">
+    <div class="before"><div class="k">Before</div><p><code>fee * 1000</code> was computed without an overflow check, so a huge fee could wrap around to a negative or garbage limit.</p></div>
+    <div class="after"><div class="k">After</div><p>The multiplication is capped instead of wrapping. WASM also has a hard 10M gas cap (HC-059).</p></div>
+  </div>
+</div>
+
+<div class="finding">
+  <div class="head"><span class="sev s-high">HIGH</span><h3>HC-071 · A published PUF proof could be reused with other readings</h3></div>
+  <div class="where">privacy/ZKProofSystem.java telemetryChallenge, OwnershipProof.createForTelemetry · Blockchain.java TELEMETRY validation</div>
+  <div class="ba">
+    <div class="before"><div class="k">Before</div><p>The prover chose the challenge of a PUF device's ownership proof (the helper used the constant <code>"TEST_CHALLENGE"</code>), and the proof did not cover the payload. The proof is stored on-chain in the transaction data. Anyone could copy it into a new transaction with different readings, and it was accepted as coming from that device.</p></div>
+    <div class="after"><div class="k">After</div><p>The verifier recomputes the challenge from the device ID, the relaying sender, the sender's nonce and the payload, under the domain <code>HYBRIDCHAIN-ZK-TELEMETRY-v1</code>, and requires an exact match. Each proof is valid for exactly one transaction carrying exactly that payload.</p></div>
+  </div>
+  <p class="proof">Proof: <code>TransactionLifecycleTest.testTelemetryProofReplayRejected</code> (payload swapped, and a different sender, are both rejected).</p>
+</div>
+
+<div class="finding">
+  <div class="head"><span class="sev s-med">MEDIUM</span><h3>HC-072 · The private-transfer nullifier could be anything</h3></div>
+  <div class="where">Blockchain.java PRIVATE_TRANSFER validation · ZKProofSystem.privateTransferChallenge, proofNullifier</div>
+  <div class="ba">
+    <div class="before"><div class="k">Before</div><p>The nullifier was a free field next to the proof. A spent nullifier only stopped someone who reused the same value, so the double-spend check meant nothing. The challenge was not tied to the transaction either.</p></div>
+    <div class="after"><div class="k">After</div><p>The proof must use the challenge derived from (sender, nonce), and the nullifier must equal the hash of the proof. Note that private transfers still move no value (see section 6).</p></div>
+  </div>
+</div>
+
+<div class="finding">
+  <div class="head"><span class="sev s-low">LOW</span><h3>HC-073 · A threshold proof without a commitment verified as true</h3></div>
+  <div class="where">ZKProofSystem.ThresholdProof.verify</div>
+  <div class="ba">
+    <div class="before"><div class="k">Before</div><p><code>if (commitment == null) return true</code>. A deserialised proof missing its commitment passed.</p></div>
+    <div class="after"><div class="k">After</div><p>It now fails closed. The code documents that the eligibility gate is unsound by design and must stay disabled (see section 6).</p></div>
+  </div>
+</div>
+
+<div class="finding">
+  <div class="head"><span class="sev s-med">MEDIUM</span><h3>HC-074 · Firmware "verification" verified nothing</h3></div>
+  <div class="where">lifecycle/DeviceLifecycleManager.java updateFirmwareSigned, firmwareDigest · Blockchain.java UPDATE_FIRMWARE</div>
+  <div class="ba">
+    <div class="before"><div class="k">Before</div><p>Any <code>FirmwareProof</code> whose hash matched the installed image counted as verified. Anyone could build one, because it is a commitment only the device secret can open. The on-chain action never passed a proof at all, so every legitimate firmware update cut the device's reputation by 20%.</p></div>
+    <div class="after"><div class="k">After</div><p>An update is VERIFIED only if the device's trusted manufacturer signed <code>firmwareDigest(deviceId, version, hash)</code>. The on-chain action takes an optional <code>manufacturerSignature</code>. A self-made proof, a signature from someone else, or a signature for another version is recorded as UNVERIFIED and penalised.</p></div>
+  </div>
+  <p class="proof">Proof: <code>DeviceActivationTest.firmwareNeedsManufacturerSignature</code>.</p>
+</div>
+
+<div class="finding">
+  <div class="head"><span class="sev s-low">LOW</span><h3>HC-069 and HC-070 · Checkpoint encoding and fast-sync checks</h3></div>
+  <div class="where">Checkpoint.computeCheckpointHash · Blockchain.init fast-sync branch</div>
+  <div class="ba">
+    <div class="before"><div class="k">Before</div><p>The checkpoint hash was a bare concatenation with no domain, signed by the same keys as blocks and votes. Fast-sync loaded the UTXO set without comparing it to the checkpoint's <code>utxoRoot</code>, and never checked that the stored block matched the checkpoint's height, hash and state root.</p></div>
+    <div class="after"><div class="k">After</div><p>The hash is length-prefixed with the domain tag <code>HYBRIDCHAIN-CHECKPOINT-v2</code>. Fast-sync rejects the checkpoint unless the block, the state root and the UTXO root all match. Checkpoints only come from the node's own encrypted storage, so this is defence against a corrupted or tampered disk.</p></div>
+  </div>
+  <p class="proof">HC-070 has no dedicated test yet. The existing checkpoint tests resume from the chain tip and never reach this branch.</p>
+</div>
+
+<div class="finding">
+  <div class="head"><span class="sev s-med">MEDIUM</span><h3>HC-077 · AI state was fed from unaccepted and unauthenticated data</h3></div>
+  <div class="where">Blockchain.java FEDERATED_UPDATE and TELEMETRY_BATCH cases</div>
+  <div class="ba">
+    <div class="before"><div class="k">Before</div><p>Federated-learning updates went into the node-local manager inside the state transition. That transition also runs during block simulation and for rejected blocks, so updates were double-counted or came from blocks that never existed. <code>TELEMETRY_BATCH</code> carries no device signatures, yet it trained the anomaly detector, so any sender could shape any device's baseline.</p></div>
+    <div class="after"><div class="k">After</div><p>Federated-learning updates are applied only after the block is accepted, on the live state. Batch readings no longer touch the detector. Only authenticated <code>TELEMETRY</code> from accepted blocks feeds detection.</p></div>
+  </div>
+</div>
+
+<div class="finding">
+  <div class="head"><span class="sev s-high">HIGH</span><h3>HC-075 · The environment template shipped usable keys</h3></div>
+  <div class="where">.env.example (repository root)</div>
+  <div class="ba">
+    <div class="before"><div class="k">Before</div><p>The template contained a storage key and 20 node private keys derived from a seed written in the same file. Any network started from it had keys anyone could recompute.</p></div>
+    <div class="after"><div class="k">After</div><p>Every value is blank, with instructions to run <code>scripts/generate_keys.sh</code> for each network. The old keys are in git history and must be treated as compromised.</p></div>
+  </div>
+</div>
+
+<div class="finding">
+  <div class="head"><span class="sev s-low">LOW</span><h3>HC-076 · The container ran as root</h3></div>
+  <div class="where">blockchain-java/Dockerfile</div>
+  <div class="ba">
+    <div class="before"><div class="k">Before</div><p>The node ran as root inside the container.</p></div>
+    <div class="after"><div class="k">After</div><p>The node runs as a dedicated system user <code>hybrid</code> that owns <code>/app</code>.</p></div>
+  </div>
+</div>
+</section>
+
+<section id="open">
+<h2>6. What is still open</h2>
+<p class="prose">These items are known and not fixed. Most need a design decision, not a patch. They are ordered by how much they matter for production.</p>
+<div class="tbl"><table>
+<thead><tr><th>#</th><th>Item</th><th>Risk</th><th>Why it is open and what it needs</th></tr></thead>
+<tbody>
+<tr><td class="id">O-1</td><td>No NEW_VIEW step in view change</td><td><span class="sev s-high">HIGH</span></td><td>Safety holds: a node never sends two COMMITs for one height, so two different blocks cannot both reach 2f+1. But if the leader fails after some honest nodes committed to a block, the next leader cannot learn that block, and the height can stall. The fix is the standard PBFT NEW_VIEW message, which carries prepared certificates into the next view so the new leader re-proposes the right block. This is a protocol change and needs its own design and fault-injection tests.</td></tr>
+<tr><td class="id">O-2</td><td>No real multi-node deployment test</td><td><span class="sev s-high">HIGH</span></td><td>Everything has been tested in one process, with in-memory networking. Nothing has run on 4 or more separate machines (for example Raspberry Pis) with real mTLS, real clocks and real packet loss. This is the gate for a production claim.</td></tr>
+<tr><td class="id">O-3</td><td>Rotate the published keys</td><td><span class="sev s-high">HIGH</span></td><td>Any key from the old <code>.env.example</code>, from the old <code>KeygenTool</code> default seed, or derived from a published seed is public. Generate fresh keys per network.</td></tr>
+<tr><td class="id">O-4</td><td>HC-058 contracts read local sensors</td><td><span class="sev s-med">MEDIUM</span></td><td>The bytecode and WASM sensor reads return each node's local hardware value. Today every node returns the same mock value, so nothing breaks. With real sensors, nodes would disagree. Contracts should read committed on-chain telemetry or a signed oracle value.</td></tr>
+<tr><td class="id">O-5</td><td>Misbehaviour evidence is not on-chain</td><td><span class="sev s-med">MEDIUM</span></td><td>Double votes are detected and slashed locally (HC-019 removed slashing from the state transition so nodes cannot diverge). Penalising a validator network-wide needs an evidence transaction carrying both conflicting signed votes.</td></tr>
+<tr><td class="id">O-6</td><td>Private transfers move no value</td><td><span class="sev s-med">MEDIUM</span></td><td><code>PRIVATE_TRANSFER</code> checks the proof, takes the fee and records the nullifier, and that is all. Either build commitment-based balances, or mark the type disabled so nobody relies on it.</td></tr>
+<tr><td class="id">O-7</td><td>ZK leader eligibility is unsound</td><td><span class="sev s-med">MEDIUM</span></td><td>The prover picks the commitment, so the proof says nothing about the validator's real reputation. Eligibility is also kept per node, not agreed by consensus. The gate is off by default and must stay off until the protocol issues the commitment.</td></tr>
+<tr><td class="id">O-8</td><td>Repository hygiene</td><td><span class="sev s-low">LOW</span></td><td>LevelDB folders (<code>blockchain-java/data/</code>, <code>data/chain-db.bak/</code>), all of <code>node_modules</code>, and scratch files (<code>Patcher.java</code>, <code>patch.py</code>, logs) are committed. Untrack them and add them to <code>.gitignore</code>.</td></tr>
+<tr><td class="id">O-9</td><td>Coverage gaps</td><td><span class="sev s-low">LOW</span></td><td>Startup (<code>com.hybrid.App</code>) 0%, <code>iot</code> 0%, <code>api</code> 47%, branch coverage 60.6%. Also missing: a fast-sync load test (HC-070) and a PeerNode-level sync test (HC-067, HC-068).</td></tr>
+<tr><td class="id">O-10</td><td>Smaller items</td><td><span class="sev s-info">INFO</span></td><td><code>GovernanceManager</code> is unused dead code. <code>spring-webmvc</code> 6.2.x has two advisories that only Spring 7 fixes, for features this node does not use. MQTT and CoAP have no TLS (DTLS) of their own. Device revocation has no admin or recovery path.</td></tr>
+</tbody></table></div>
+</section>
+
+<section id="ledger">
+<h2>7. Full finding ledger</h2>
+<p class="prose">All findings from both rounds. Severities for HC-001 to HC-035 are those recorded in the first-round report. Later severities were assigned when each finding was fixed. IDs HC-036 to HC-039 and HC-060 have no findings recorded under them.</p>
+<div class="tbl"><table>
+<thead><tr><th>ID</th><th>Severity</th><th>Finding</th><th>Status</th></tr></thead>
+<tbody>
+<tr><td class="id">HC-001</td><td><span class="sev s-crit">CRITICAL</span></td><td>Eclipse threshold exceeded the available peers, so a 4-validator network never gossiped</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-002</td><td><span class="sev s-crit">CRITICAL</span></td><td>Quorum 2f+1 was unsafe when n ≠ 3f+1 (now ⌈(n+f+1)/2⌉)</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-003</td><td><span class="sev s-high">HIGH</span></td><td>CA signing key was derived from the disk-encryption key</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-004</td><td><span class="sev s-high">HIGH</span></td><td>IoT ingress signed as NODE_ID, so every telemetry transaction was rejected</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-005</td><td><span class="sev s-crit">CRITICAL</span></td><td>CA public key did not match its private key, so production mTLS never worked</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-006</td><td><span class="sev s-high">HIGH</span></td><td>Legacy SSL path installed a trust-all TrustManager</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-007</td><td><span class="sev s-high">HIGH</span></td><td>Pre-authentication handshake allocated a buffer of attacker-chosen size</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-008</td><td><span class="sev s-high">HIGH</span></td><td>A per-node environment variable changed transaction validity</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-009</td><td><span class="sev s-med">MEDIUM</span></td><td>API_PORT was ignored, and an API failure left a zombie node</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-010</td><td><span class="sev s-med">MEDIUM</span></td><td>KeygenTool's default seed gave publicly computable validator keys</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-011</td><td><span class="sev s-med">MEDIUM</span></td><td>Handshake checked key possession but not authorisation</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-012</td><td><span class="sev s-high">HIGH</span></td><td>No socket timeouts, unbounded thread pool, half-open connections not counted</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-013</td><td><span class="sev s-high">HIGH</span></td><td>Unauthenticated telemetry could be attributed to any device</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-014</td><td><span class="sev s-low">LOW</span></td><td>NPE in the proposer loop when no leader was eligible</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-015</td><td><span class="sev s-info">INFO</span></td><td>Test configuration masked production behaviour</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-016</td><td><span class="sev s-crit">CRITICAL</span></td><td>Unlimited MINTs per block, and foreign MINTs included by honest proposers</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-017</td><td><span class="sev s-crit">CRITICAL</span></td><td>Fees of failed transactions were credited to the proposer</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-018</td><td><span class="sev s-crit">CRITICAL</span></td><td>UTXO transactions were unsigned and unowned, and accepted negative outputs</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-019</td><td><span class="sev s-crit">CRITICAL</span></td><td>Node-local equivocation evidence changed the state transition</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-020</td><td><span class="sev s-high">HIGH</span></td><td>Genesis depended on the wall clock</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-021</td><td><span class="sev s-high">HIGH</span></td><td>A same-height block reverted the tip before it was validated</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-022</td><td><span class="sev s-crit">CRITICAL</span></td><td>Fork revert left totalMinted and baseFee advanced</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-023</td><td><span class="sev s-med">MEDIUM</span></td><td>Restart lost totalMinted and history</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-024</td><td><span class="sev s-high">HIGH</span></td><td>A rejected block left persistent side effects</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-025</td><td><span class="sev s-high">HIGH</span></td><td>The honest block producer never included pending ACCOUNT transfers</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-026</td><td><span class="sev s-crit">CRITICAL</span></td><td>TELEMETRY apply read the process-wide anomaly detector</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-027</td><td><span class="sev s-med">MEDIUM</span></td><td>Mempool judged nonce gaps against a stale state</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-028</td><td><span class="sev s-high">HIGH</span></td><td>State root omitted token balances, commitments and ABI</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-029</td><td><span class="sev s-high">HIGH</span></td><td>Transaction ID was taken from the wire</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-030</td><td><span class="sev s-med">MEDIUM</span></td><td>Merkle tree duplicated the odd leaf</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-031</td><td><span class="sev s-med">MEDIUM</span></td><td>Pruning deleted nothing, and snapshots grew without bound</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-032</td><td><span class="sev s-low">LOW</span></td><td>Fast-sync path defects</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-033</td><td><span class="sev s-low">LOW</span></td><td>Unchecked arithmetic and missing per-type checks</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-034</td><td><span class="sev s-med">MEDIUM</span></td><td>Live chain and state exposed without locking</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-035</td><td><span class="sev s-low">LOW</span></td><td>Checkpoint utxoRoot depended on HashMap iteration order</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-040</td><td><span class="sev s-high">HIGH</span></td><td>Signatures covered only the first 32 bytes of a message</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-041</td><td><span class="sev s-med">MEDIUM</span></td><td>Encrypted records could be moved between keys (no AAD)</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-042</td><td><span class="sev s-high">HIGH</span></td><td>The handshake would sign any 32 bytes a peer sent</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-043</td><td><span class="sev s-high">HIGH</span></td><td>Checkpoint signatures were merged without verification</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-044</td><td><span class="sev s-high">HIGH</span></td><td>P2P messages were not authenticated per sender</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-045</td><td><span class="sev s-med">MEDIUM</span></td><td>Discovered peers filled the gossip table without a connection</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-046</td><td><span class="sev s-crit">CRITICAL</span></td><td>One leader signature finalised a block; no commit certificate</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-047</td><td><span class="sev s-high">HIGH</span></td><td>Any sender could activate (claim) a device</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-048</td><td><span class="sev s-med">MEDIUM</span></td><td>Device state was only partly serialised, so clones disagreed</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-049</td><td><span class="sev s-med">MEDIUM</span></td><td>PUF nullifier was not deterministic</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-050</td><td><span class="sev s-med">MEDIUM</span></td><td>Verifiable credentials never expired, and their signing encoding was ambiguous</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-051</td><td><span class="sev s-high">HIGH</span></td><td>Federated-learning models were not integrity-checked and were accepted from any peer</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-052</td><td><span class="sev s-high">HIGH</span></td><td>A public JWT development secret was usable outside DEBUG</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-053</td><td><span class="sev s-med">MEDIUM</span></td><td>Account creation endpoint was open outside DEBUG</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-054</td><td><span class="sev s-med">MEDIUM</span></td><td>REST submission built unsigned transactions and could never submit anything</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-055</td><td><span class="sev s-med">MEDIUM</span></td><td>Federated update over REST could name any node</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-056</td><td><span class="sev s-med">MEDIUM</span></td><td>Unbounded and broken paging on address and telemetry reads</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-057</td><td><span class="sev s-med">MEDIUM</span></td><td>Bytecode VM stack had no limit</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-058</td><td><span class="sev s-med">MEDIUM</span></td><td>Contracts read node-local sensors (latent nondeterminism)</td><td><span class="sev st-open">OPEN</span></td></tr>
+<tr><td class="id">HC-059</td><td><span class="sev s-high">HIGH</span></td><td>WASM gas was charged only on host calls, and a wall-clock timeout could split consensus</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-061</td><td><span class="sev s-low">LOW</span></td><td>WASM module cache had no size limit</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-062</td><td><span class="sev s-low">LOW</span></td><td>Contract gas limit could overflow</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-063</td><td><span class="sev s-low">LOW</span></td><td>Event bus topics had no limit, and filters were shared across subscriptions</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-064</td><td><span class="sev s-high">HIGH</span></td><td>MQTT management messages were signed with the node key for any publisher</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-065</td><td><span class="sev s-high">HIGH</span></td><td>Proposer signature was not verified before voting</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-066</td><td><span class="sev s-med">MEDIUM</span></td><td>Ambiguous PBFT vote signing encoding</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-067</td><td><span class="sev s-med">MEDIUM</span></td><td>Sync requests and responses had no size limit</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-068</td><td><span class="sev s-high">HIGH</span></td><td>Peer heights were never learned, so lagging nodes never synced</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-069</td><td><span class="sev s-low">LOW</span></td><td>Checkpoint hash had no domain or field boundaries</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-070</td><td><span class="sev s-low">LOW</span></td><td>Fast-sync did not check the UTXO root or the checkpoint block</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-071</td><td><span class="sev s-high">HIGH</span></td><td>PUF telemetry proof could be reused with other readings</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-072</td><td><span class="sev s-med">MEDIUM</span></td><td>Private-transfer nullifier was not bound to the proof</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-073</td><td><span class="sev s-low">LOW</span></td><td>Threshold proof with no commitment verified as true</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-074</td><td><span class="sev s-med">MEDIUM</span></td><td>Firmware integrity accepted self-made proofs, and penalised every honest update</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-075</td><td><span class="sev s-high">HIGH</span></td><td>Environment template shipped seed-derived private keys</td><td><span class="sev st-ok">FIXED</span> rotate keys</td></tr>
+<tr><td class="id">HC-076</td><td><span class="sev s-low">LOW</span></td><td>Container ran as root</td><td><span class="sev st-ok">FIXED</span></td></tr>
+<tr><td class="id">HC-077</td><td><span class="sev s-med">MEDIUM</span></td><td>AI state fed from simulated, rejected and unauthenticated data</td><td><span class="sev st-ok">FIXED</span></td></tr>
+</tbody></table></div>
+<p class="prose">Also fixed in earlier rounds without an HC number: MSIG-1 (multisig proposal signatures are now verified), contract storage proofs, explicit UTF-8 for every string-to-bytes conversion, periodic tasks that survive any error, and 20 pentest classes that had never been run by the build.</p>
+</section>
+
+<section id="upgrade">
+<h2>8. Upgrade and rollout</h2>
+<div class="prose">
+<div class="note">This round changes three signed encodings: PBFT votes (v2), checkpoint hashes (v2) and block validity (a commit certificate is required). Nodes on the old code and nodes on the new code cannot agree. Upgrade every validator at once, and start test networks from empty storage.</div>
+<h4>Before any network start</h4>
+<ul class="tight">
+  <li>Generate a fresh key set for each network with <code>blockchain-java/scripts/generate_keys.sh</code>, and keep it in <code>.env</code>, which must never be committed.</li>
+  <li>Set <code>NETWORK_CA_SEED</code> and <code>VALIDATOR_PUBKEYS</code> for at least 4 validators. Keep <code>DEBUG=false</code> outside development.</li>
+  <li>Secure the MQTT broker (authentication and TLS), because device payloads travel over it in plaintext otherwise.</li>
+  <li>Device tooling that sends management actions over MQTT must now send a transaction signed by the owner. Firmware tooling should attach the manufacturer's <code>manufacturerSignature</code>.</li>
+</ul>
+<h4>Repository cleanup (run once, then commit)</h4>
+<pre>git rm -r --cached blockchain-java/data data/chain-db.bak node_modules
+git rm --cached blockchain-java/Patcher.java blockchain-java/patch.py blockchain-java/tmp-failures.txt</pre>
+<p>Then add those paths to <code>.gitignore</code>. Removing them from history as well needs a separate history rewrite, like the one already done for commit trailers.</p>
+</div>
+</section>
+
+<section id="roadmap">
+<h2>9. Road to production</h2>
+<div class="tbl"><table>
+<thead><tr><th>Step</th><th>Work</th><th>Done when</th></tr></thead>
+<tbody>
+<tr><td class="id">1</td><td>NEW_VIEW with prepared certificates (O-1)</td><td>A fault-injection test kills the leader at every phase and the network always commits the next height.</td></tr>
+<tr><td class="id">2</td><td>Multi-machine testnet (O-2)</td><td>4 to 7 validators on separate hosts, including at least one Raspberry Pi, run for 72 hours with restarts, partitions and one faulty validator, and every node ends with the same state root.</td></tr>
+<tr><td class="id">3</td><td>Key rotation and secret handling (O-3)</td><td>No key derived from a published seed exists anywhere. Node keys are loaded from protected files or an HSM.</td></tr>
+<tr><td class="id">4</td><td>Sensor oracle for contracts (O-4)</td><td>Contracts read committed telemetry only, and a test runs two nodes with different local hardware to the same state root.</td></tr>
+<tr><td class="id">5</td><td>On-chain misbehaviour evidence (O-5)</td><td>A transaction carrying two conflicting signed votes slashes the validator on every node.</td></tr>
+<tr><td class="id">6</td><td>Decide the experimental features (O-6, O-7)</td><td>Private transfers and ZK eligibility are either built properly or disabled at the protocol level.</td></tr>
+<tr><td class="id">7</td><td>Coverage and startup tests (O-9)</td><td>Startup, the IoT package and the API reach at least 70% line coverage, and fast-sync and sync have dedicated tests.</td></tr>
+<tr><td class="id">8</td><td>External review</td><td>An independent party reviews consensus and cryptography against this report.</td></tr>
+</tbody></table></div>
+</section>
+
+<footer>
+  HybridChain Security Audit II · 18 October 2026 · Evidence: 687 passing tests and 30 audit proof tests in <code>blockchain-java/src/test/java</code>. First-round report: <code>docs/audit/HYBRIDCHAIN_AUDIT.md</code>.
+</footer>
+</main>
+</div>

@@ -27,7 +27,7 @@ public class DoubleSpendAttackTest {
         
         when(consensus.isValidator(any())).thenReturn(true);
         when(consensus.getValidators()).thenReturn(new ArrayList<>(Collections.singletonList(new Validator("ValidatorA", new byte[33]))));
-        when(consensus.verifyBlock(any(), any())).thenReturn(true);
+        when(consensus.verifyBlock(any(), any())).thenReturn(true); when(consensus.verifyProposerSignature(any(), any())).thenReturn(true);
 
         blockchain = new Blockchain(storage, mempool, consensus);
         blockchain.init();

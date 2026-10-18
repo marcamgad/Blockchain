@@ -98,7 +98,7 @@ public class Blockchain {
             Object snapHeightObj = storage.getMeta("lastSnapshotHeight");
             Integer snapHeight = null;
             if (snapHeightObj instanceof Number) snapHeight = ((Number) snapHeightObj).intValue();
-            
+
             if (snapHeight != null) {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> snap = storage.get("snapshot:" + snapHeight, Map.class);
@@ -138,10 +138,10 @@ public class Blockchain {
                 if (state == null) state = new AccountState();
                 Object diffObj = storage.getMeta("difficulty");
                 if (diffObj instanceof Number) difficulty = ((Number) diffObj).intValue();
-                
+
                 Object mintedObj = storage.getMeta("totalMinted");
                 if (mintedObj instanceof Number) totalMinted = ((Number) mintedObj).longValue();
-                
+
                 log.info("[INIT] Resumed from height {} (totalMinted: {})", tip.getIndex(), totalMinted);
                 return;
             }
@@ -150,19 +150,19 @@ public class Blockchain {
             com.hybrid.blockchain.Checkpoint latestCp = storage.loadLatestCheckpoint();
             if (latestCp != null) {
                 log.info("[INIT] Fast sync from checkpoint at height {}", latestCp.getBlockHeight());
-                
+
                 int n = consensus.getValidators().size();
                 int f = (n - 1) / 3;
                 int requiredSignatures = com.hybrid.blockchain.consensus.PBFTConsensus.quorumSize(n);   // [HC-002]
-                
+
                 int validSignatureCount = 0;
                 String cpHashHex = latestCp.computeCheckpointHash();
                 byte[] messageBytes = Crypto.hexToBytes(cpHashHex);
-                
+
                 for (Map.Entry<String, String> entry : latestCp.getValidatorSignatures().entrySet()) {
                     String valId = entry.getKey();
                     String hexSig = entry.getValue();
-                    
+
                     Validator validator = null;
                     for (Validator v : consensus.getValidators()) {
                         if (v.getId().equals(valId)) {
@@ -182,9 +182,16 @@ public class Blockchain {
                         }
                     }
                 }
-                
+
                 if (validSignatureCount >= requiredSignatures) {
                     Block cpBlock = storage.loadBlockByHash(latestCp.getBlockHash());
+                    // [HC-070] the stored block must be the one the checkpoint names
+                    if (cpBlock != null && (cpBlock.getIndex() != latestCp.getBlockHeight()
+                            || !latestCp.getBlockHash().equals(cpBlock.calculateHash())
+                            || !latestCp.getStateRoot().equals(cpBlock.getStateRoot()))) {
+                        log.warn("[INIT] Checkpoint block does not match the checkpoint; ignoring it");
+                        cpBlock = null;
+                    }
                     if (cpBlock != null) {
                         // Load snapshot instead of tip state if tip state is missing or outdated
                         // [HC-032] Build the candidate state in LOCALS and commit only if it matches
@@ -203,7 +210,10 @@ public class Blockchain {
                         }
                         if (candidateState == null) candidateState = new AccountState();
 
-                        if (candidateState.calculateStateRoot().equals(latestCp.getStateRoot())) {
+                        // [HC-070] the UTXO set is part of the checkpoint too; it used to be loaded unchecked
+                        boolean utxoOk = candidateUtxo != null && latestCp.getUtxoRoot() != null
+                                && latestCp.getUtxoRoot().equals(Crypto.bytesToHex(candidateUtxo.canonicalHash()));
+                        if (utxoOk && candidateState.calculateStateRoot().equals(latestCp.getStateRoot())) {
                             state = candidateState;
                             utxo = candidateUtxo;
                             chain.add(cpBlock);
@@ -262,11 +272,11 @@ public class Blockchain {
             throw new Exception("Invalid signature");
         if (tx.getNetworkId() != Config.NETWORK_ID)
             throw new Exception("Wrong networkId");
-        
+
         // Ensure destination is present unless it's a contract creation, burn, telemetry, IoT management, or federated
-        if (tx.getTo() == null && 
-            tx.getType() != Transaction.Type.CONTRACT && 
-            tx.getType() != Transaction.Type.BURN && 
+        if (tx.getTo() == null &&
+            tx.getType() != Transaction.Type.CONTRACT &&
+            tx.getType() != Transaction.Type.BURN &&
             tx.getType() != Transaction.Type.TOKEN_BURN &&
             tx.getType() != Transaction.Type.TOKEN_REGISTER &&
             tx.getType() != Transaction.Type.TELEMETRY &&
@@ -328,7 +338,7 @@ public class Blockchain {
                 } catch (ArithmeticException e) {
                     throw new Exception("Invalid amount overflow", e);
                 }
-                
+
                 if (balance < accountTotal)
                     throw new Exception("Insufficient funds");
 
@@ -338,7 +348,7 @@ public class Blockchain {
                     if (tx.getNonce() > currentNonce + Config.MAX_NONCE_GAP) {
                         throw new IllegalArgumentException("Nonce too far in future: gap exceeds " + Config.MAX_NONCE_GAP);
                     }
-                    
+
                     long expectedNonce = currentNonce + 1;
                     if (this.mempool != null) {
                         for (Transaction ptx : mempool.toArray()) {
@@ -358,11 +368,11 @@ public class Blockchain {
                 case CONTRACT:
                     if (!Config.ENABLE_SMART_CONTRACTS)
                         throw new Exception("Contracts disabled");
-                    
+
                     // [SECURITY] Audit check for contract creation
                     if (tx.getTo() == null && tx.getData() != null && tx.getData().length > 0) {
                         if (!Config.BYPASS_CONTRACT_AUDIT) {
-                            com.hybrid.blockchain.ai.SmartContractAuditor.AuditResult audit = 
+                            com.hybrid.blockchain.ai.SmartContractAuditor.AuditResult audit =
                                 com.hybrid.blockchain.ai.SmartContractAuditor.audit(tx.getData());
                             if (audit.isRejected()) {
                                 throw new Exception("Contract rejected by AI Audit: " + String.join(", ", audit.getFindings()));
@@ -436,10 +446,18 @@ public class Blockchain {
                 // [PHASE-0] FIX-6: ZKP Private Transfer validation
                 if (tx.getFrom() == null) throw new Exception("PRIVATE_TRANSFER must have a from address");
                 try {
-                    com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof proof = 
+                    com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof proof =
                         MAPPER.readValue(tx.getData(), com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof.class);
                     if (!com.hybrid.blockchain.privacy.ZKProofSystem.verifyOwnership(state.getCommitment(tx.getFrom()), proof)) {
                         throw new Exception("ZKP Ownership validation failed");
+                    }
+                    // [HC-072] the proof must be for THIS (sender, nonce) and its nullifier must be
+                    // derived from it - a free-form nullifier made the double-spend check meaningless
+                    if (!java.util.Arrays.equals(proof.getChallenge(),
+                            com.hybrid.blockchain.privacy.ZKProofSystem.privateTransferChallenge(tx.getFrom(), tx.getNonce()))
+                            || proof.getProof() == null
+                            || !com.hybrid.blockchain.privacy.ZKProofSystem.proofNullifier(proof.getProof()).equals(proof.getNullifier())) {
+                        throw new Exception("ZKP proof not bound to this transaction");
                     }
                     if (state.isNullifierSpent(proof.getNullifier())) {
                         throw new Exception("ZKP Nullifier already spent");
@@ -447,7 +465,7 @@ public class Blockchain {
                 } catch (Exception e) {
                     throw new Exception("Private transfer validation failed: " + e.getMessage());
                 }
-                
+
                 if (!skipNonce) {
                     long expectedPriNonce = state.getNonce(tx.getFrom()) + 1;
                     if (tx.getNonce() != expectedPriNonce) throw new IllegalArgumentException("Invalid nonce: expected " + expectedPriNonce + " got " + tx.getNonce());
@@ -504,7 +522,7 @@ public class Blockchain {
                     com.hybrid.blockchain.identity.SSIManager ssi = state.getSSIManager();
                     String deviceId = tx.getTo();
                     boolean isOperational = false;
-                    
+
                      boolean hasRecord = false;
                      try {
                          if (deviceId != null) {
@@ -519,7 +537,7 @@ public class Blockchain {
                             com.hybrid.blockchain.lifecycle.DeviceLifecycleManager.DeviceRecord record = lcm.getDeviceRecord(deviceId);
                              String did = record.getDid();
                             boolean authorized = false;
-                            
+
                             // Check if sender is owner
                             if (record.getOwner() != null && record.getOwner().equals(tx.getFrom())) {
                                 authorized = true;
@@ -533,11 +551,17 @@ public class Blockchain {
 
                                         // [PHASE-1] P1-C: PUF-ZKP verification
                                         if (record.getPufNullifier() != null) {
-                                            com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof proof = 
+                                            com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof proof =
                                                 MAPPER.readValue(tx.getData(), com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof.class);
-                                            
+
                                             if (!com.hybrid.blockchain.privacy.ZKProofSystem.verifyOwnership(pkBytes, proof)) {
                                                 throw new Exception("PUF-ZKP ownership verification failed");
+                                            }
+                                            // [HC-071] proof must be bound to this tx and this payload
+                                            if (proof.getPayload() == null || !java.util.Arrays.equals(proof.getChallenge(),
+                                                    com.hybrid.blockchain.privacy.ZKProofSystem.telemetryChallenge(
+                                                            deviceId, tx.getFrom(), tx.getNonce(), proof.getPayload()))) {
+                                                throw new Exception("PUF-ZKP proof not bound to this transaction/payload");
                                             }
                                             if (!record.getPufNullifier().equals(proof.getNullifier())) {
                                                 throw new Exception("PUF-ZKP nullifier mismatch");
@@ -796,7 +820,7 @@ public class Blockchain {
 
     private void applyBlockInternal(Block block, Block latest) throws Exception {
         validateBlock(block);
-        
+
         if (!block.getPrevHash().equals(latest.getHash()))
             throw new Exception("Hash mismatch: block " + block.getIndex() + " references " + block.getPrevHash() + " but tip is " + latest.getHash());
         if (block.getTimestamp() > System.currentTimeMillis() + Config.MAX_TIMESTAMP_DRIFT)
@@ -805,7 +829,7 @@ public class Blockchain {
             throw new Exception("Block timestamp older than previous block");
         if (!calculateTxRoot(block.getTransactions()).equals(block.getTxRoot()))
             throw new Exception("Invalid tx root");
-        
+
         if (!consensus.isValidator(block.getValidatorId()))
             throw new Exception("Unknown validator");
 
@@ -987,7 +1011,7 @@ public class Blockchain {
         storage.saveBlock(block.getHash(), block);
         storage.saveUTXO(utxo.toJSON());
         storage.saveState(state);
-        
+
         // Save snapshot for fork resolution (save at height index to allow revert from index+1)
         // [HC-022] the snapshot also carries the chain-level counters revertTip must restore
         Map<String, Object> snapState = state.toJSON();
@@ -997,16 +1021,16 @@ public class Blockchain {
         // [HC-031] bounded retention: drop the snapshot that just fell out of the window
         long expired = block.getIndex() - Config.SNAPSHOT_RETENTION;
         if (expired > 0) storage.del("snapshot:" + expired);
-        
+
         pruneBlock(block);
-        
+
         // Record monitoring metrics
         if (monitor != null) {
             monitor.recordMetric("blocks.validated", 1);
             monitor.recordMetric("blocks.size", block.serializeCanonical().length);
             monitor.recordMetric("transactions.validated", block.getTransactions().size());
         }
-        
+
         // Audit log block creation
         if (auditLogger != null) {
             java.util.HashMap<String, Object> metadata = new java.util.HashMap<>();
@@ -1077,7 +1101,7 @@ public class Blockchain {
             // Balance check: must account for pending transactions in mempool
             if (tx.getFrom() != null) {
                 long balance = getBalance(tx.getFrom());
-                
+
                 // Effective balance = committed balance - pending spends in mempool
                 long pendingSpend = 0;
                 for (Transaction ptx : mempool.toArray()) {
@@ -1108,7 +1132,7 @@ public class Blockchain {
             if (eventBus != null) {
                 try { eventBus.publish("transactions", tx); } catch (Exception ignored) {}
             }
-            
+
             // Record monitoring and audit for transaction submission
             if (monitor != null) {
                 monitor.recordMetric("transactions.submitted", 1);
@@ -1125,7 +1149,7 @@ public class Blockchain {
                     "Transaction submitted: " + tx.getId(),
                     metadata);
             }
-            
+
             return true;
         } finally {
             lock.writeLock().unlock();
@@ -1177,7 +1201,7 @@ public class Blockchain {
             int nextIndex = prev.getIndex() + 1;
             List<Transaction> candidateTxs = mempool.getReadyTransactions(maxTx, state);
             List<Transaction> txsToInclude = new ArrayList<>();
-            
+
             // Miner reward simulation for post-state root calculation
             long totalMintedSim = Tokenomics.getTotalMinted(this);
             long blockRewardSim = Tokenomics.getCurrentReward(nextIndex, totalMintedSim);
@@ -1205,7 +1229,7 @@ public class Blockchain {
                 }
             } catch (Exception ignored) {
             }
-            
+
             // Enforce block size limit (2 MB)
             int blockBytesUsed = 0;
             validationTimestamp = timestamp;   // [HC-013] validate candidates at the block's time
@@ -1223,12 +1247,12 @@ public class Blockchain {
                         throw new Exception("nonce " + tx.getNonce() + " is not next for " + tx.getFrom());
                     byte[] serializedTx = tx.serializeCanonical();
                     int txSize = serializedTx.length;
-                    
+
                     if (blockBytesUsed + txSize > Config.MAX_BLOCK_SIZE) {
                         log.warn("[Blockchain] Block full at {}/{} bytes. Stopping tx inclusion.", blockBytesUsed, Config.MAX_BLOCK_SIZE);
-                        break; 
+                        break;
                     }
-                    
+
                     applyTransactionToState(clonedState, clonedUtxo, tx, nextIndex, timestamp, tempHash, new ArrayList<>());
                     txsToInclude.add(tx);
                     blockBytesUsed += txSize;
@@ -1236,7 +1260,7 @@ public class Blockchain {
                     log.debug("[Blockchain] Candidate tx {} validation failed: {}", tx.getId(), e.getMessage());
                 }
             }
-            
+
             validationTimestamp = 0;
             // FIX 12: Do NOT double-credit the miner here.
             // The MINT tx already credited the block reward via applyTransactionToState().
@@ -1382,13 +1406,13 @@ public class Blockchain {
                 {
                     targetState.debit(tx.getFrom(), tx.getFee());
                     targetState.incrementNonce(tx.getFrom());
-                    
+
                     // Run AI Anomaly Detection
                     // Attempt to extract payload from ZKP envelope if present
                     byte[] rawData = tx.getData();
                     byte[] telemetryPayload = rawData;
                     try {
-                        com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof proof = 
+                        com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof proof =
                             MAPPER.readValue(rawData, com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof.class);
                         if (proof.getPayload() != null) {
                             telemetryPayload = proof.getPayload();
@@ -1440,7 +1464,7 @@ public class Blockchain {
                         if (targetDeviceId == null || targetState.getLifecycleManager().getDeviceRecord(targetDeviceId) == null) {
                             targetDeviceId = tx.getFrom(); // Simplified/Legacy fallback
                         }
-                        
+
                         if (targetState == this.state) {
                             final String telemDevice = targetDeviceId;   // [HC-024] deferred write
                             pendingWrites.add(() -> storage.saveTelemetry(telemDevice, (int) blockIndex, tx.getId(), toStore));
@@ -1456,12 +1480,22 @@ public class Blockchain {
                 {
                     targetState.debit(tx.getFrom(), tx.getFee());
                     targetState.incrementNonce(tx.getFrom());
-                    
-                    try {
-                        double[] weights = MAPPER.readValue(tx.getData(), double[].class);
-                        com.hybrid.blockchain.ai.FederatedLearningManager.getInstance().submitUpdate(tx.getFrom(), weights);
-                    } catch (Exception e) {
-                        log.warn("[FedLearn] Failed to parse update from {}: {}", tx.getFrom(), e.getMessage());
+
+                    // [HC-077] The FL manager is node-local. Feeding it here also ran during block
+                    // simulation (createBlock) and for blocks that were later rejected, so updates were
+                    // double-counted or came from blocks that never existed. Feed it only for the live
+                    // state, after the block is accepted.
+                    if (targetState == this.state) {
+                        final String flFrom = tx.getFrom();
+                        final byte[] flData = tx.getData();
+                        pendingWrites.add(() -> {
+                            try {
+                                double[] weights = MAPPER.readValue(flData, double[].class);
+                                com.hybrid.blockchain.ai.FederatedLearningManager.getInstance().submitUpdate(flFrom, weights);
+                            } catch (Exception e) {
+                                log.warn("[FedLearn] Failed to parse update from {}: {}", flFrom, e.getMessage());
+                            }
+                        });
                     }
                 }
                 return new ExecutionResult(0, null, null, transactionEvents);
@@ -1583,7 +1617,7 @@ public class Blockchain {
                     targetState.incrementNonce(tx.getFrom());
                 }
                 try {
-                    com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof proof = 
+                    com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof proof =
                         MAPPER.readValue(tx.getData(), com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof.class);
                     targetState.recordNullifier(proof.getNullifier());
                     // Logic to update private commitments would go here in a full implementation.
@@ -1602,20 +1636,16 @@ public class Blockchain {
                 try {
                     @SuppressWarnings("unchecked")
                     List<Map<String, Object>> tuples = MAPPER.readValue(tx.getData(), List.class);
-                    com.hybrid.blockchain.ai.TelemetryAnomalyDetector detector =
-                            com.hybrid.blockchain.ai.TelemetryAnomalyDetector.getInstance();
-                    int anomalyCount = 0;
+                    // [HC-077] The batch carries NO device signatures, so its readings must not train
+                    // the anomaly detector: any sender could otherwise shape the baseline of any device
+                    // (and this also ran during simulation and for rejected blocks, mutating a
+                    // node-local window). Authenticated TELEMETRY feeds detection after acceptance.
+                    int wellFormed = 0;
                     for (Map<String, Object> tuple : tuples) {
-                        String deviceId = (String) tuple.get("deviceId");
-                        Object valObj = tuple.get("value");
-                        if (deviceId == null || !(valObj instanceof Number)) continue;
-                        double value = ((Number) valObj).doubleValue();
-                        long ts = tuple.get("timestamp") instanceof Number
-                                ? ((Number) tuple.get("timestamp")).longValue() : timestamp;
-                        if (detector.check(deviceId, value, ts)) anomalyCount++;
+                        if (tuple.get("deviceId") instanceof String && tuple.get("value") instanceof Number) wellFormed++;
                     }
-                    log.info("[TELEMETRY_BATCH] Gateway {} submitted {} readings, {} anomalies",
-                            tx.getFrom(), tuples.size(), anomalyCount);
+                    log.info("[TELEMETRY_BATCH] Gateway {} submitted {} readings ({} well-formed, unauthenticated)",
+                            tx.getFrom(), tuples.size(), wellFormed);
                 } catch (Exception e) {
                     log.warn("[TELEMETRY_BATCH] Decode error: {}", e.getMessage());
                 }
@@ -1689,7 +1719,10 @@ public class Blockchain {
                 lifecycle.revokeDevice((String) data.get("deviceId"), from, (String) data.get("reason"));
                 break;
             case "UPDATE_FIRMWARE":
-                lifecycle.updateFirmware((String) data.get("deviceId"), (String) data.get("version"), HexUtils.decode((String) data.get("hash")), from);
+                // [HC-074] optional manufacturer signature over firmwareDigest -> VERIFIED
+                lifecycle.updateFirmwareSigned((String) data.get("deviceId"), (String) data.get("version"),
+                        HexUtils.decode((String) data.get("hash")), from,
+                        data.get("manufacturerSignature") == null ? null : HexUtils.decode((String) data.get("manufacturerSignature")));
                 break;
         }
     }
@@ -1827,7 +1860,7 @@ public class Blockchain {
 
     public boolean isWasm(byte[] data) {
         // WASM magic bytes: \0asm (0x00 0x61 0x73 0x6D)
-        return data != null && data.length >= 4 && 
+        return data != null && data.length >= 4 &&
                data[0] == 0x00 && data[1] == 0x61 && data[2] == 0x73 && data[3] == 0x6D;
     }
 
@@ -1855,6 +1888,18 @@ public class Blockchain {
             throw new BlockValidationException("Unknown validator: " + block.getValidatorId(), block.getHash(), block.getIndex());
         if (block.getSignature() == null)
             throw new BlockValidationException("Block has no signature", block.getHash(), block.getIndex());
+        // [HC-065] the signature used to be checked only for PRESENCE here, and this is the only
+        // check a proposal gets before validators PREPARE-vote on it
+        Validator proposer = consensus.getValidators().stream()
+                .filter(v -> v.getId().equals(block.getValidatorId())).findFirst().orElse(null);
+        boolean signed;
+        try {
+            signed = proposer != null && consensus.verifyProposerSignature(block, proposer);
+        } catch (Exception e) {
+            signed = false;
+        }
+        if (!signed)
+            throw new BlockValidationException("Invalid proposer signature", block.getHash(), block.getIndex());
         lock.readLock().lock();
         try {
             Block latest = getLatestBlock();

@@ -31,7 +31,7 @@ public class ConsensusTest {
         // Wait for timeout (100ms) + buffer
         Thread.sleep(300);
 
-        // To make the view actually advance in a single-instance test, 
+        // To make the view actually advance in a single-instance test,
         // we simulate receiving VC votes from others after the timeout
         consensus.addViewChangeVote(1, 0, v2.getAddress(), signViewChange(1, 0, v2));
         consensus.addViewChangeVote(1, 0, v3.getAddress(), signViewChange(1, 0, v3));
@@ -54,17 +54,17 @@ public class ConsensusTest {
         validatorSet.put(v4.getAddress(), v4.getPublicKey());
 
         PBFTConsensus consensus = new PBFTConsensus(validatorSet, v1.getAddress(), v1.getPrivateKey());
-        
+
         // Set v1 reputation high
         consensus.updateReputation(v1.getAddress(), 9.0); // 1.0 + 9.0 = 10.0
-        
+
         int v1Count = 0;
         for (int i = 0; i < 100; i++) {
             if (consensus.selectLeader(i).equals(v1.getAddress())) {
                 v1Count++;
             }
         }
-        
+
         // v1 has 10.0 weight, others have 1.0 each. Total = 13.0.
         // v1 probability = 10/13 ~= 77%. Expected count > 50.
         assertThat(v1Count).isGreaterThan(50);
@@ -82,17 +82,17 @@ public class ConsensusTest {
         validatorSet.put(v2.getAddress(), v2.getPublicKey());
         validatorSet.put(v3.getAddress(), v3.getPublicKey());
         validatorSet.put(v4.getAddress(), v4.getPublicKey());
-        
+
         PBFTConsensus consensus = new PBFTConsensus(validatorSet, v1.getAddress(), v1.getPrivateKey());
-        
+
         long height = 1;
         String blockHash = "0000000000000000000000000000000000000000000000000000000000000000";
-        
+
         consensus.addPrepareVote(height, blockHash, v1.getAddress(), signVote(PBFTConsensus.Phase.PREPARE, 0, height, blockHash, v1));
         consensus.addPrepareVote(height, blockHash, v2.getAddress(), signVote(PBFTConsensus.Phase.PREPARE, 0, height, blockHash, v2));
-        
+
         assertThat(consensus.hasQuorum(height, PBFTConsensus.Phase.PREPARE)).isFalse();
-        
+
         consensus.addPrepareVote(height, blockHash, v3.getAddress(), signVote(PBFTConsensus.Phase.PREPARE, 0, height, blockHash, v3));
         assertThat(consensus.hasQuorum(height, PBFTConsensus.Phase.PREPARE)).isTrue();
     }
@@ -103,18 +103,18 @@ public class ConsensusTest {
         TestKeyPair v1 = new TestKeyPair(1);
         Validator val = new Validator(v1.getAddress(), v1.getPublicKey());
         PoAConsensus poa = new PoAConsensus(java.util.Collections.singletonList(val));
-        
+
         String zeroHash = "0000";
         Block b1 = new Block(1, 1000L, new java.util.ArrayList<>(), zeroHash, 0, zeroHash);
         b1.setValidatorId(v1.getAddress());
         poa.signBlock(b1, val, v1.getPrivateKey());
-        poa.verifyBlock(b1, val); 
-        
+        poa.verifyBlock(b1, val);
+
         Block b2 = new Block(1, 2000L, new java.util.ArrayList<>(), zeroHash, 0, zeroHash);
         b2.setValidatorId(v1.getAddress());
         poa.signBlock(b2, val, v1.getPrivateKey());
         poa.verifyBlock(b2, val);
-        
+
         assertThat(poa.getSlashedValidators()).contains(v1.getAddress());
     }
 
@@ -167,12 +167,12 @@ public class ConsensusTest {
     }
 
     private byte[] signViewChange(long view, long seq, TestKeyPair kp) {
-        String data = PBFTConsensus.Phase.VIEW_CHANGE.name() + view + seq + "VIEW_CHANGE_PROOF" + kp.getAddress();
-        return com.hybrid.blockchain.Crypto.sign(com.hybrid.blockchain.Crypto.hash(data.getBytes()), kp.getPrivateKey());
+        return signVote(PBFTConsensus.Phase.VIEW_CHANGE, view, seq, "VIEW_CHANGE_PROOF", kp);
     }
 
     private byte[] signVote(PBFTConsensus.Phase phase, long view, long height, String hash, TestKeyPair kp) {
-        String data = phase.name() + view + height + hash + kp.getAddress();
-        return com.hybrid.blockchain.Crypto.sign(com.hybrid.blockchain.Crypto.hash(data.getBytes()), kp.getPrivateKey());
+        PBFTConsensus.PBFTMessage m = new PBFTConsensus.PBFTMessage(phase, view, height, hash, kp.getAddress());
+        m.sign(kp.getPrivateKey());
+        return m.signature;
     }
 }

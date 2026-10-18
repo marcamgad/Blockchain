@@ -41,7 +41,7 @@ public class ForkResolutionTest {
         // [HC-016] block 1's MINT must pay its proposer, so the funded sender is also a validator
         mockValidators.add(new Validator(new TestKeyPair(1).getAddress(), new byte[33]));
         when(consensus.getValidators()).thenReturn(mockValidators);
-        when(consensus.verifyBlock(any(), any())).thenReturn(true);
+        when(consensus.verifyBlock(any(), any())).thenReturn(true); when(consensus.verifyProposerSignature(any(), any())).thenReturn(true);
 
         blockchain = new Blockchain(storage, mempool, consensus);
         blockchain.init();

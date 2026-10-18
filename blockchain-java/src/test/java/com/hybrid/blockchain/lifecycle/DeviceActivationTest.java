@@ -89,4 +89,33 @@ class DeviceActivationTest {
         assertThat(b.getMetadata()).isEqualTo(a.getMetadata());
         assertThat(b.getLastActivityBlock()).isEqualTo(a.getLastActivityBlock());
     }
+
+    @Test
+    @DisplayName("HC-074: firmware is VERIFIED only with the manufacturer's signature; anything else is penalised")
+    void firmwareNeedsManufacturerSignature() {
+        String id = "d-fw";
+        DeviceLifecycleManager lcm = provisioned(id);
+        lcm.activateDevice(id, OWNER.getAddress(), DEVICE.getPublicKey(), 1L, OWNER.getAddress(),
+                consent(id, OWNER.getAddress(), DEVICE));
+        byte[] fw = Crypto.hash("fw-2.0".getBytes(StandardCharsets.UTF_8));
+        double start = lcm.getDeviceRecord(id).getReputationScore();
+
+        byte[] good = Crypto.sign(DeviceLifecycleManager.firmwareDigest(id, "2.0", fw), MAN.getPrivateKey());
+        lcm.updateFirmwareSigned(id, "2.0", fw, OWNER.getAddress(), good);
+        assertThat(lcm.getDeviceRecord(id).getReputationScore()).isEqualTo(start);
+
+        // signed by someone other than the manufacturer, or for another version -> penalty
+        byte[] forged = Crypto.sign(DeviceLifecycleManager.firmwareDigest(id, "3.0", fw), OWNER.getPrivateKey());
+        lcm.updateFirmwareSigned(id, "3.0", fw, OWNER.getAddress(), forged);
+        double afterForged = lcm.getDeviceRecord(id).getReputationScore();
+        assertThat(afterForged).isLessThan(start);
+        lcm.updateFirmwareSigned(id, "4.0", fw, OWNER.getAddress(), good);   // signature was for 2.0
+        assertThat(lcm.getDeviceRecord(id).getReputationScore()).isLessThan(afterForged);
+
+        // a self-made FirmwareProof is no longer accepted as verification
+        double beforeProof = lcm.getDeviceRecord(id).getReputationScore();
+        lcm.updateFirmware(id, "5.0", fw, OWNER.getAddress(),
+                com.hybrid.blockchain.privacy.ZKProofSystem.FirmwareProof.create(fw, new byte[32]));
+        assertThat(lcm.getDeviceRecord(id).getReputationScore()).isLessThan(beforeProof);
+    }
 }

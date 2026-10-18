@@ -12,7 +12,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * Device Lifecycle Manager for IoT devices.
  * Manages device states: PROVISIONING → ACTIVE → SUSPENDED → REVOKED →
  * DECOMMISSIONED
- * 
+ *
  * Enforces:
  * - Manufacturer attestation at provisioning
  * - Secure firmware updates with audit trails
@@ -448,14 +448,57 @@ public class DeviceLifecycleManager {
             throw new SecurityException("Only device owner can update firmware: " + deviceId);
         }
 
-        // PAPER-IMPL: P1-D — zk-IoT
-        boolean integrityVerified = false;
-        if (proof != null && Arrays.equals(proof.getFirmwareHash(), firmwareHash)) {
-            // In a real implementation, we'd verify against a secret or manufacturer PK
-            // For now, we assume any provided proof for the correct hash is valid for demonstration
-            integrityVerified = true;
-        }
+        // [HC-074] A FirmwareProof is a commitment that can only be checked with the device secret,
+        // so it cannot prove anything to a validator. It used to count as "VERIFIED" whenever its
+        // hash matched the one being installed (i.e. always, for whoever built it). It is now
+        // recorded but never treated as verification; see updateFirmwareSigned.
+        applyFirmwareUpdate(record, deviceId, newVersion, firmwareHash, caller,
+                false, proof != null ? proof.getCommitment() : null);
+    }
 
+    /**
+     * [HC-074] Digest a manufacturer signs to vouch for a firmware image for one device.
+     */
+    public static byte[] firmwareDigest(String deviceId, String version, byte[] firmwareHash) {
+        try {
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            java.io.DataOutputStream out = new java.io.DataOutputStream(bos);
+            out.write("HYBRIDCHAIN-FIRMWARE-v1\0".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            for (byte[] f : new byte[][]{deviceId.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                    version.getBytes(java.nio.charset.StandardCharsets.UTF_8), firmwareHash}) {
+                out.writeInt(f.length);
+                out.write(f);
+            }
+            out.flush();
+            return com.hybrid.blockchain.Crypto.hash(bos.toByteArray());
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /**
+     * [HC-074] Firmware update whose integrity is checked: the device's (trusted) manufacturer
+     * signed {@link #firmwareDigest}. Without a valid signature the update is still applied by
+     * the owner but marked UNVERIFIED and the reputation penalty applies.
+     */
+    public void updateFirmwareSigned(String deviceId, String newVersion, byte[] firmwareHash, String caller,
+            byte[] manufacturerSignature) {
+        DeviceRecord record = getDeviceRecord(deviceId);
+        if (record.getStatus() != DeviceStatus.ACTIVE) {
+            throw new IllegalStateException("Device not active: " + deviceId);
+        }
+        if (!caller.equals(record.getOwner())) {
+            throw new SecurityException("Only device owner can update firmware: " + deviceId);
+        }
+        byte[] mfKey = trustedManufacturers.get(record.getManufacturer());
+        boolean verified = manufacturerSignature != null && mfKey != null && firmwareHash != null
+                && com.hybrid.blockchain.Crypto.verify(firmwareDigest(deviceId, newVersion, firmwareHash),
+                        manufacturerSignature, mfKey);
+        applyFirmwareUpdate(record, deviceId, newVersion, firmwareHash, caller, verified, null);
+    }
+
+    private void applyFirmwareUpdate(DeviceRecord record, String deviceId, String newVersion, byte[] firmwareHash,
+            String caller, boolean integrityVerified, byte[] commitment) {
         if (!integrityVerified) {
             log.warn("[Lifecycle] ZK-Firmware integrity proof missing or invalid for device {}. Applying penalty.", deviceId);
             double penalty = record.getReputationScore() * 0.20;
@@ -466,11 +509,11 @@ public class DeviceLifecycleManager {
         }
 
         // Create firmware update record with commitment
-        FirmwareUpdate update = new FirmwareUpdate(newVersion, firmwareHash, currentBlockHeight, caller, proof != null ? proof.getCommitment() : null);
+        FirmwareUpdate update = new FirmwareUpdate(newVersion, firmwareHash, currentBlockHeight, caller, commitment);
         record.addFirmwareUpdate(update);
         record.setLastActivityBlock(currentBlockHeight);
 
-        log.info("[Lifecycle] Updated firmware for device: {} to version: {} (Integrity: {})", 
+        log.info("[Lifecycle] Updated firmware for device: {} to version: {} (Integrity: {})",
                 deviceId, newVersion, integrityVerified ? "VERIFIED" : "UNVERIFIED");
     }
 
@@ -796,7 +839,7 @@ public class DeviceLifecycleManager {
                                 m.get("commitment") == null ? null : com.hybrid.blockchain.HexUtils.decode((String) m.get("commitment"))));
                     }
                 }
-                
+
                 manager.deviceRegistry.put(entry.getKey(), record);
             }
         }

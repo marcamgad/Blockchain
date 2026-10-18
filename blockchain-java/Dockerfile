@@ -9,6 +9,11 @@ RUN apt-get update && apt-get install -y curl && \
     mkdir -p /app/data /app/logs && \
     rm -rf /var/lib/apt/lists/*
 
+# [HC-076] do not run the node as root: a compromise of the JVM would otherwise own the container
+RUN groupadd --system hybrid && useradd --system --gid hybrid --home-dir /app --shell /usr/sbin/nologin hybrid && \
+    chown -R hybrid:hybrid /app
+USER hybrid
+
 # Expose P2P port and REST API port
 EXPOSE 6001 8000
 

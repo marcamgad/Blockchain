@@ -33,7 +33,7 @@ import org.slf4j.LoggerFactory;
  */
 public class PeerNode implements PBFTConsensus.PBFTMessenger {
     private static final Logger log = LoggerFactory.getLogger(PeerNode.class);
-    
+
     private final int port;
     private final ExecutorService executor;
     private final ScheduledExecutorService peerSyncScheduler;
@@ -46,7 +46,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
     private Blockchain blockchain;
     private Consensus consensus;
     private SSLContext sslContext;
-    
+
     private final PeerManager peerManager;
     private final GossipEngine gossipEngine;
     private final Map<String, DataOutputStream> peerConnections = new java.util.concurrent.ConcurrentHashMap<>();
@@ -102,6 +102,15 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
 
     // [HC-042] v2: handshake signatures are domain-separated (see handshakeDigest).
     private static final int PROTOCOL_VERSION = 2;
+    /** [HC-067] most blocks served or accepted per sync message */
+    static final int MAX_SYNC_BATCH = 50;
+
+    /** [HC-068] Peer heights are hints only: every synced block is still fully verified. */
+    void recordPeerHeight(String peerId, long height) {
+        PeerManager.PeerInfo info = peerManager.getPeer(peerId);
+        if (info != null && height > info.getBlockHeight()) info.setBlockHeight(height);
+    }
+
     /** [HC-043] A checkpoint matches our chain if we hold that block with that hash and state root. */
     boolean matchesLocalChain(Checkpoint cp) {
         Block local = blockchain.getStorage().loadBlockByHeight(cp.getBlockHeight());
@@ -177,7 +186,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
 
     /**
      * Create a PeerNode with legacy self-signed certificates.
-     * 
+     *
      * @param port the P2P port
      * @param blockchain the blockchain instance
      * @param consensus the consensus instance
@@ -195,7 +204,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
         this.localDID = com.hybrid.blockchain.security.IdentityUtils.addressToDID(localAddress);
         this.blockchain = blockchain;
         this.consensus = consensus;
-        
+
         this.peerManager = new PeerManager();
         this.gossipEngine = new GossipEngine(peerManager, 3); // Fan-out = 3
 
@@ -205,11 +214,11 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
             // Use real blockchain private key for TLS identity
             X9ECParameters ecParams = CustomNamedCurves.getByName(Config.EC_CURVE);
             ECParameterSpec spec = new ECParameterSpec(ecParams.getCurve(), ecParams.getG(), ecParams.getN(), ecParams.getH());
-            
+
             KeyFactory kf = KeyFactory.getInstance("EC", "BC");
             PrivateKey ecPrivateKey = kf.generatePrivate(new ECPrivateKeySpec(privateKey, spec));
             PublicKey ecPublicKey = kf.generatePublic(new ECPublicKeySpec(ecParams.getG().multiply(privateKey), spec));
-            
+
             KeyPair tlsKeyPair = new KeyPair(ecPublicKey, ecPrivateKey);
             this.sslContext = com.hybrid.blockchain.security.SSLUtils.createSSLContext(tlsKeyPair, localAddress, trustedCerts);
         } catch (Exception e) {
@@ -227,7 +236,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
 
     /**
      * Create a PeerNode with CA-signed certificates (recommended for production).
-     * 
+     *
      * @param port the P2P port
      * @param blockchain the blockchain instance
      * @param consensus the consensus instance
@@ -235,7 +244,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
      * @param nodeKeyPair the node's TLS certificate keypair
      * @param ca the CertificateAuthority for mTLS
      */
-    public PeerNode(int port, Blockchain blockchain, Consensus consensus, BigInteger privateKey, 
+    public PeerNode(int port, Blockchain blockchain, Consensus consensus, BigInteger privateKey,
                     KeyPair nodeKeyPair, CertificateAuthority ca) {
         this.port = port;
         this.executor = Executors.newCachedThreadPool();
@@ -247,7 +256,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
         this.localDID = com.hybrid.blockchain.security.IdentityUtils.addressToDID(localAddress);
         this.blockchain = blockchain;
         this.consensus = consensus;
-        
+
         this.peerManager = new PeerManager();
         this.gossipEngine = new GossipEngine(peerManager, 3); // Fan-out = 3
 
@@ -338,6 +347,13 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                 List<Map<String, Object>> peerList = mapper.readValue(msg.getPayload(), List.class);
                 for (Map<String, Object> p : peerList) {
                     String id = (String) p.get("id");
+                    // [HC-068] the sender's own entry carries its height (the message is signed by
+                    // the sender, so it can only speak for itself). Heights were never recorded,
+                    // so every peer looked like height 0 and a lagging node never synced.
+                    if (id != null && id.equals(msg.getSenderId()) && p.get("height") instanceof Number) {
+                        recordPeerHeight(id, ((Number) p.get("height")).longValue());
+                        continue;
+                    }
                     String addr = (String) p.get("address");
                     int port = ((Number) p.get("port")).intValue();
                     // [HC-045] Discovered peers are only CANDIDATES. They used to be inserted into the
@@ -360,14 +376,18 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                 Map<String, Object> req = mapper.readValue(msg.getPayload(), Map.class);
                 long from = ((Number) req.get("fromHeight")).longValue();
                 long to = ((Number) req.get("toHeight")).longValue();
-                
+                // [HC-067] the requester chose the range: one message could make us load and
+                // serialise the whole chain. Clamp to MAX_SYNC_BATCH blocks of what we have.
+                from = Math.max(1, from);
+                to = Math.min(Math.min(to, from + MAX_SYNC_BATCH - 1), blockchain.getHeight());
+
                 List<Block> blocks = new ArrayList<>();
                 for (long i = from; i <= to; i++) {
                     Block b = blockchain.getStorage().loadBlockByHeight((int) i);
                     if (b != null) blocks.add(b);
                     else break;
                 }
-                
+
                 if (!blocks.isEmpty()) {
                     byte[] payload = mapper.writeValueAsBytes(blocks);
                     P2PMessage resp = P2PMessage.create(localAddress, privateKey, P2PMessage.Type.BLOCKS_RESPONSE, payload);
@@ -384,14 +404,20 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                 ObjectMapper mapper = new ObjectMapper();
                 @SuppressWarnings("unchecked")
                 List<Map<String, Object>> rawBlocks = mapper.readValue(msg.getPayload(), List.class);
+                if (rawBlocks.size() > MAX_SYNC_BATCH) {
+                    peerManager.updatePeerScore(msg.getSenderId(), -5.0);
+                    return;
+                }
                 for (Map<String, Object> raw : rawBlocks) {
                     Block b = mapper.convertValue(raw, Block.class);
                     if (b.getIndex() == blockchain.getHeight() + 1) {
                         try {
                             blockchain.validateBlock(b);
+                            // [HC-046] applyBlock -> verifyBlock requires the commit certificate
                             blockchain.applyBlock(b);
-                        } catch (BlockValidationException ve) {
-                            log.warn("[P2P] Sync block validation failed: {}", ve.getMessage());
+                            recordPeerHeight(msg.getSenderId(), b.getIndex());
+                        } catch (Exception ve) {
+                            log.warn("[P2P] Sync block {} rejected: {}", b.getIndex(), ve.getMessage());
                             peerManager.updatePeerScore(msg.getSenderId(), -5.0);
                             break; // Stop processing this response
                         }
@@ -406,7 +432,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
             try {
                 ObjectMapper mapper = new ObjectMapper();
                 Checkpoint cp = mapper.readValue(msg.getPayload(), Checkpoint.class);
-                
+
                 if (cp.getValidatorSignatures().isEmpty()) {
                     // This is a signature request
                     // [HC-043] sign only a checkpoint that matches OUR chain at that height
@@ -415,7 +441,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                         String hash = cp.computeCheckpointHash();
                         byte[] sig = Crypto.sign(HexUtils.decode(hash), privateKey);
                         cp.getValidatorSignatures().put(localAddress, HexUtils.encode(sig));
-                        
+
                         byte[] payload = mapper.writeValueAsBytes(cp);
                         P2PMessage resp = P2PMessage.create(localAddress, privateKey, P2PMessage.Type.CHECKPOINT, payload);
                         DataOutputStream out = peerConnections.get(msg.getSenderId());
@@ -427,7 +453,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                     Checkpoint pending = pendingCheckpoints.get(cp.getBlockHeight());
                     if (pending == null) return;
                     mergeVerifiedSignatures(pending, cp);
-                    
+
                     if (consensus instanceof PBFTConsensus) {
                         PBFTConsensus pbft = (PBFTConsensus) consensus;
                         int quorum = pbft.quorumSize();   // [HC-002] same bound as commit
@@ -527,18 +553,18 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
     /**
      * Attempt to synchronize blocks with connected peers.
      * Requests missing blocks starting from local tip height.
-     * 
+     *
      * @return true if progress was made, false otherwise
      */
     private boolean syncBlocksWithPeers() {
         try {
             long localHeight = blockchain.getLatestBlock().getIndex();
             Collection<PeerManager.PeerInfo> peers = peerManager.getAllPeers();
-            
+
             if (peers.isEmpty()) {
                 return false; // No peers to sync with
             }
-            
+
             // Find peer with highest block height
             long maxHeight = localHeight;
             PeerManager.PeerInfo bestPeer = null;
@@ -548,12 +574,12 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                     bestPeer = peer;
                 }
             }
-            
+
             // If behind, request blocks
             if (bestPeer != null && localHeight < maxHeight) {
                 return requestBlocksFromPeer(bestPeer, localHeight + 1, maxHeight);
             }
-            
+
             return false;
         } catch (Exception e) {
             log.warn("[SYNC] Error syncing blocks: {}", e.getMessage());
@@ -563,7 +589,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
 
     /**
      * Request missing blocks from a peer.
-     * 
+     *
      * @param peer the peer to request from
      * @param fromHeight the starting block height (inclusive)
      * @param toHeight the ending block height (inclusive)
@@ -576,21 +602,21 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                 log.debug("[SYNC] No connection to peer {}, skipping block request", peer.getId());
                 return false;
             }
-            
+
             Map<String, Object> data = new HashMap<>();
             data.put("fromHeight", fromHeight);
             data.put("toHeight", Math.min(toHeight, fromHeight + 49)); // Request max 50 blocks at a time
-            
+
             String payloadJson = new ObjectMapper().writeValueAsString(data);
             byte[] payload = payloadJson.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            
+
             // Create and send REQUEST_BLOCKS message
-            P2PMessage msg = P2PMessage.create(localAddress, privateKey, 
+            P2PMessage msg = P2PMessage.create(localAddress, privateKey,
                     P2PMessage.Type.REQUEST_BLOCKS, payload);
-            
+
             sendMessage(out, msg);
             log.debug("[SYNC] Requested blocks {} to {} from peer {}", fromHeight, data.get("toHeight"), peer.getId());
-            
+
             return true;
         } catch (Exception e) {
             log.warn("[SYNC] Error requesting blocks from peer: {}", e.getMessage());
@@ -601,6 +627,10 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
     public void broadcastPeerList() {  // public: also called by App.java (com.hybrid) seed broadcaster
         try {
             List<Map<String, Object>> list = new ArrayList<>();
+            Map<String, Object> self = new HashMap<>();   // [HC-068] advertise our height
+            self.put("id", localAddress);
+            self.put("height", blockchain.getHeight());
+            list.add(self);
             for (PeerManager.PeerInfo p : peerManager.getTopPeers(10)) {
                 Map<String, Object> map = new HashMap<>();
                 map.put("id", p.getId());
@@ -627,7 +657,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                 try {
                     Socket client = serverSocket.accept();
                     String remoteIp = client.getInetAddress().getHostAddress();
-                    
+
                     // Enforce global peer limit
                     if (peerConnections.size() >= Config.MAX_PEERS) {
                         log.warn("[P2P] Rejecting connection from {}: global peer limit reached", remoteIp);
@@ -707,9 +737,9 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                 }
 
                 peerConnections.put(remotePeerId, out);
-                log.info("[P2P] Secure session established with {} ID: {} (Local: {})", 
+                log.info("[P2P] Secure session established with {} ID: {} (Local: {})",
                         socket.getInetAddress(), remotePeerId, localDID);
-                
+
                 peerManager.addPeer(remotePeerId, socket.getInetAddress().getHostAddress(), socket.getPort());
 
                 ObjectMapper mapper = new ObjectMapper();
@@ -720,7 +750,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
 
                     byte[] jsonBytes = new byte[payloadLen];
                     in.readFully(jsonBytes);
-                    
+
                     P2PMessage msg = mapper.readValue(jsonBytes, P2PMessage.class);
                     gossipEngine.onMessageReceived(msg, remotePeerId);
                 }
@@ -849,7 +879,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                 PBFTConsensus pbft = (PBFTConsensus) consensus;
                 ObjectMapper mapper = new ObjectMapper();
                 Map<String, Object> data = mapper.readValue(msg.getPayload(), Map.class);
-                
+
                 String valId = (String) data.get("validatorId");
                 byte[] sig = HexUtils.decode((String) data.get("signature"));
                 String msgSubtype = (String) data.get("subtype");
@@ -901,7 +931,8 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                     // sitting in pendingBlocks[seq]. Without this check a node could apply a
                     // block that no quorum ever voted for.
                     String quorumHash = pbft.getQuorumHash(seq, PBFTConsensus.Phase.COMMIT);
-                    if (quorumHash != null && !quorumHash.equals(block.getHash())) {
+                    // [HC-046] no quorum at all is also a rejection (null used to fall through)
+                    if (quorumHash == null || !quorumHash.equals(block.getHash()) || block.getIndex() != seq) {
                         log.error("[CONSENSUS] REJECTED block {} at seq {}: commit quorum was for {}",
                                 block.getHash(), seq, quorumHash);
                         appliedSequences.get(seq).set(false); // allow the correct block later
@@ -909,6 +940,9 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                     }
                     // Bug 1 fix: mark committed BEFORE applyBlock so that
                     // Blockchain.verifyBlock() finds the block in committedBlocks
+                    // [HC-046] the certificate is stored with the block, so peers that sync it
+                    // later can verify the quorum themselves
+                    block.setCommitCertificate(pbft.buildCommitCertificate(seq, block.getHash()));
                     pbft.markCommitted(block.getHash(), seq, block.getValidatorId());
                     blockchain.applyBlock(block);
                     log.info("[CONSENSUS] Applied block {} hash: {}", seq, block.getHash());
@@ -1021,7 +1055,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
 
     /**
      * Broadcast a block to all connected peers via gossip.
-     * 
+     *
      * @param block the block to broadcast
      */
     public void broadcastBlock(Block block) {
@@ -1052,7 +1086,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
     /**
      * Disconnect a specific peer by ID.
      * Used for administrative peer management.
-     * 
+     *
      * @param peerId the ID of the peer to disconnect
      */
     public void disconnectPeer(String peerId) {
@@ -1070,18 +1104,18 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
 
     /**
      * Gracefully stop the P2P node, closing all peer connections and shutting down the executor.
-     * 
+     *
      * @throws IOException if an I/O error occurs
      */
     public void stop() throws IOException {
         log.info("[P2P] Stopping peer node...");
-        
+
         // Close server socket to stop accepting new connections
         if (serverSocket != null && !serverSocket.isClosed()) {
             serverSocket.close();
             log.debug("[P2P] Server socket closed");
         }
-        
+
         // Close all peer connections
         for (DataOutputStream out : peerConnections.values()) {
             try {
@@ -1090,7 +1124,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
         }
         peerConnections.clear();
         log.debug("[P2P] All peer connections closed");
-        
+
         // Shut down executor
         if (peerSyncTask != null) {
             peerSyncTask.cancel(true);
@@ -1105,7 +1139,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
 
     /**
      * Shutdown method for backward compatibility. Delegates to stop().
-     * 
+     *
      * @throws IOException if an I/O error occurs
      */
     public void shutdown() throws IOException {
@@ -1115,7 +1149,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
 
     /**
      * Connect to a peer via mTLS and initiate a peer connection.
-     * 
+     *
      * @param host the peer's hostname or IP address
      * @param port the peer's P2P port
      */
@@ -1129,7 +1163,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                 SSLSocketFactory sf = sslContext.getSocketFactory();
                 SSLSocket socket = (SSLSocket) sf.createSocket(host, port);
                 socket.startHandshake();
-                
+
                 handleConnection(socket, false);
                 log.info("[P2P] Connected to peer via mTLS: {}:{}", host, port);
             } catch (IOException e) {

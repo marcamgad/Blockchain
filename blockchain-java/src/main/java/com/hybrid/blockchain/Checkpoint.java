@@ -73,8 +73,26 @@ public class Checkpoint {
      *
      * @return SHA-256 hash as hex string
      */
+    /**
+     * [HC-069] Domain-separated, length-prefixed. It was the bare concatenation
+     * height+blockHash+stateRoot+utxoRoot, signed with the same validator key as blocks and
+     * votes and without any field boundaries.
+     */
     public String computeCheckpointHash() {
-        String data = blockHeight + blockHash + stateRoot + utxoRoot;
-        return Crypto.bytesToHex(Crypto.hash(data.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        try {
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            java.io.DataOutputStream out = new java.io.DataOutputStream(bos);
+            out.write("HYBRIDCHAIN-CHECKPOINT-v2\0".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            out.writeInt(blockHeight);
+            for (String f : new String[]{blockHash, stateRoot, utxoRoot}) {
+                byte[] b = f == null ? new byte[0] : f.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                out.writeInt(f == null ? -1 : b.length);
+                out.write(b);
+            }
+            out.flush();
+            return Crypto.bytesToHex(Crypto.hash(bos.toByteArray()));
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException(e);
+        }
     }
 }

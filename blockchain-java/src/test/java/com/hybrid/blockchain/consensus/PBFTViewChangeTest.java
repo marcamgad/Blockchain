@@ -34,8 +34,8 @@ public class PBFTViewChangeTest {
         assertEquals("V1", pbft.getCurrentLeader(), "Leader should not change without quorum");
         
         // Add votes from V2 and V3
-        pbft.addViewChangeVote(1, 0, "V2", Crypto.sign(generatePayload(1, 0, "V2"), BigInteger.valueOf(200)));
-        pbft.addViewChangeVote(1, 0, "V3", Crypto.sign(generatePayload(1, 0, "V3"), BigInteger.valueOf(300)));
+        pbft.addViewChangeVote(1, 0, "V2", sign(1, 0, "V2", BigInteger.valueOf(200)));
+        pbft.addViewChangeVote(1, 0, "V3", sign(1, 0, "V3", BigInteger.valueOf(300)));
         
         // Now quorum (2f+1 = 3) is reached
         assertEquals("V4", pbft.getCurrentLeader(), "Leader should change to V4 after view change quorum");
@@ -49,8 +49,10 @@ public class PBFTViewChangeTest {
         // Let's just verify the logic of triggerViewChange manually here
     }
 
-    private byte[] generatePayload(long view, long lastSeq, String valId) {
-        String data = PBFTConsensus.Phase.VIEW_CHANGE.name() + view + lastSeq + "VIEW_CHANGE_PROOF" + valId;
-        return Crypto.hash(data.getBytes());
+    private byte[] sign(long view, long lastSeq, String valId, BigInteger key) {
+        PBFTConsensus.PBFTMessage m = new PBFTConsensus.PBFTMessage(
+                PBFTConsensus.Phase.VIEW_CHANGE, view, lastSeq, "VIEW_CHANGE_PROOF", valId);
+        m.sign(key);
+        return m.signature;
     }
 }

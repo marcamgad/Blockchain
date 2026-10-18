@@ -36,7 +36,7 @@ public class StateRollbackTest {
         mempool = new Mempool(100);
         PBFTConsensus consensus = Mockito.mock(PBFTConsensus.class);
         when(consensus.isValidator(any())).thenReturn(true);
-        when(consensus.verifyBlock(any(), any())).thenReturn(true);
+        when(consensus.verifyBlock(any(), any())).thenReturn(true); when(consensus.verifyProposerSignature(any(), any())).thenReturn(true);
         List<Validator> vals = new ArrayList<>();
         vals.add(new Validator("ValidatorA", new byte[33]));
         when(consensus.getValidators()).thenReturn(vals);

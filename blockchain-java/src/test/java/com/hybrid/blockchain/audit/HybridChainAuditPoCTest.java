@@ -328,9 +328,18 @@ public class HybridChainAuditPoCTest {
 
         Method handle = MQTTAdapter.class.getDeclaredMethod("handleMessage", String.class, String.class);
         handle.setAccessible(true);
-        // management topic: same build+sign path; telemetry additionally requires a device
-        // signature since HC-013 and is rejected before a transaction is built
+        // [HC-064] an unsigned management message is no longer turned into a node-signed tx
         handle.invoke(adapter, "blockchain/iot/sensor-7/mgmt", "{\"deviceId\":\"sensor-7\",\"action\":\"RESUME\"}");
+        Mockito.verify(chain, Mockito.never()).addTransaction(Mockito.any());
+
+        // management now arrives as a transaction signed by the owner, and is relayed as-is
+        TestKeyPair owner = new TestKeyPair(7004);
+        Transaction signed = new Transaction.Builder().type(Transaction.Type.IOT_MANAGEMENT).fee(10)
+                .from(owner.getAddress()).nonce(1)
+                .data("{\"deviceId\":\"sensor-7\",\"action\":\"RESUME\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                .sign(owner.getPrivateKey(), owner.getPublicKey());
+        Mockito.when(chain.deserializeTransaction(Mockito.any())).thenReturn(signed);
+        handle.invoke(adapter, "blockchain/iot/sensor-7/mgmt", "{\"signed\":true}");
 
         ArgumentCaptor<Transaction> captor = ArgumentCaptor.forClass(Transaction.class);
         Mockito.verify(chain).addTransaction(captor.capture());

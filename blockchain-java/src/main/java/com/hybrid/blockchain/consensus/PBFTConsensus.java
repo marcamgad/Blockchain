@@ -86,11 +86,40 @@ public class PBFTConsensus implements Consensus {
             return Crypto.verify(serializeForSigning(), signature, publicKey);
         }
 
+        /**
+         * [HC-066] Length-prefixed, domain-separated encoding. It used to be the plain string
+         * concatenation phase+view+seq+hash+id, which is ambiguous: (view=1, seq=23) and
+         * (view=12, seq=3) produced the same bytes, so one signed vote verified for both.
+         */
         private byte[] serializeForSigning() {
-            // Keep canonical payload aligned with existing tests and network peers.
-            String data = phase.name() + viewNumber + sequenceNumber + blockHash + validatorId;
-            return Crypto.hash(data.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            try {
+                java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                java.io.DataOutputStream out = new java.io.DataOutputStream(bos);
+                out.write(SIGNING_DOMAIN);
+                writeField(out, phase.name());
+                out.writeLong(viewNumber);
+                out.writeLong(sequenceNumber);
+                writeField(out, blockHash);
+                writeField(out, validatorId);
+                out.flush();
+                return Crypto.hash(bos.toByteArray());
+            } catch (java.io.IOException e) {
+                throw new IllegalStateException(e);
+            }
         }
+
+        private static void writeField(java.io.DataOutputStream out, String s) throws java.io.IOException {
+            if (s == null) {
+                out.writeInt(-1);
+                return;
+            }
+            byte[] b = s.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            out.writeInt(b.length);
+            out.write(b);
+        }
+
+        private static final byte[] SIGNING_DOMAIN =
+                "HYBRIDCHAIN-PBFT-v2\0".getBytes(java.nio.charset.StandardCharsets.UTF_8);
     }
 
     // ── state ────────────────────────────────────────────────────────────────
@@ -245,7 +274,7 @@ public class PBFTConsensus implements Consensus {
                 committee.put(id, validators.get(id));
             }
         }
-        log.debug("[PBFT] Committee formed: {}/{} validators with rep>={}", 
+        log.debug("[PBFT] Committee formed: {}/{} validators with rep>={}",
                 committee.size(), validators.size(), minRepThreshold);
         return committee;
     }
@@ -384,19 +413,68 @@ public class PBFTConsensus implements Consensus {
      * Called by {@code Blockchain.applyBlockInternal()} — requires
      * {@link #markCommitted} to have been called BEFORE {@code applyBlock()}.
      */
+    /**
+     * [HC-046] A block is final only with a quorum behind it. Before, a block that had not gone
+     * through this node's commit path was accepted on the CURRENT leader's signature alone - one
+     * validator could finalise any block, and blocks from earlier views (sync) were refused.
+     *
+     * <p>Now: the proposer's signature must always verify, AND either this node observed the
+     * commit quorum itself ({@link #markCommitted}) or the block carries a valid commit
+     * certificate from {@link #quorumSize()} distinct validators. In a single-validator network
+     * the quorum is 1, so the proposer's signature is the whole quorum.</p>
+     */
     @Override
     public boolean verifyBlock(Block block, Validator validator) {
+        if (!verifyProposerSignature(block, validator)) return false;
         if (committedBlocks.contains(block.getHash())) return true;
-        
-        // Fail-safe for unit tests: if not committed via P2P quorum, 
-        // at least verify it's from the correct leader and has a valid signature.
-        String leader = selectLeader(viewNumber);
-        if (leader == null || !leader.equals(block.getValidatorId())) return false;
-        
-        byte[] pubKey = validators.get(leader);
-        if (pubKey == null || block.getSignature() == null) return false;
-        
-        return Crypto.verify(Crypto.hash(block.serializeCanonical()), block.getSignature(), pubKey);
+        if (quorumSize() <= 1) return true;
+        return verifyCommitCertificate(block);
+    }
+
+    /** [HC-065] proposer signature only: what a proposal must satisfy before anyone votes on it */
+    @Override
+    public boolean verifyProposerSignature(Block block, Validator validator) {
+        if (block == null || block.getValidatorId() == null || block.getSignature() == null) return false;
+        byte[] proposerKey = validators.get(block.getValidatorId());
+        if (proposerKey == null) return false;
+        return Crypto.verify(Crypto.hash(block.serializeCanonical()), block.getSignature(), proposerKey);
+    }
+
+    /**
+     * [HC-046] True iff the block's certificate holds valid COMMIT signatures (for this index and
+     * hash) from at least {@link #quorumSize()} distinct, known, non-slashed validators.
+     */
+    public boolean verifyCommitCertificate(Block block) {
+        List<Block.CommitSignature> cert = block.getCommitCertificate();
+        if (cert == null || cert.isEmpty() || cert.size() > 4 * validators.size()) return false;
+        Set<String> valid = new HashSet<>();
+        for (Block.CommitSignature cs : cert) {
+            if (cs == null || cs.validatorId == null || cs.signature == null || valid.contains(cs.validatorId)) continue;
+            if (slashedValidators.contains(cs.validatorId)) continue;
+            byte[] key = validators.get(cs.validatorId);
+            if (key == null) continue;
+            PBFTMessage m = new PBFTMessage(Phase.COMMIT, cs.view, block.getIndex(), block.getHash(), cs.validatorId);
+            try {
+                m.signature = com.hybrid.blockchain.HexUtils.decode(cs.signature);
+            } catch (Exception e) {
+                continue;
+            }
+            if (m.verify(key)) valid.add(cs.validatorId);
+        }
+        return valid.size() >= quorumSize();
+    }
+
+    /** [HC-046] The COMMIT votes this node holds for (seq, blockHash), as a certificate. */
+    public List<Block.CommitSignature> buildCommitCertificate(long seq, String blockHash) {
+        List<Block.CommitSignature> cert = new ArrayList<>();
+        Map<Phase, Map<String, PBFTMessage>> seqLog = messageLog.get(seq);
+        if (seqLog == null || seqLog.get(Phase.COMMIT) == null) return cert;
+        for (PBFTMessage m : seqLog.get(Phase.COMMIT).values()) {
+            if (m != null && blockHash.equals(m.blockHash) && m.signature != null) {
+                cert.add(new Block.CommitSignature(m.validatorId, m.viewNumber, com.hybrid.blockchain.HexUtils.encode(m.signature)));
+            }
+        }
+        return cert;
     }
 
     @Override

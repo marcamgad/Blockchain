@@ -238,7 +238,7 @@ public class ZKProofSystem {
         public boolean verify() {
             return new ZKProofSystem().verifyRangeProof(commitment, proof, min, max);
         }
-        
+
         public byte[] getCommitment() { return commitment; }
     }
 
@@ -281,6 +281,23 @@ public class ZKProofSystem {
             return create(privKey, pubKey, null);
         }
 
+        /** [HC-071] A telemetry proof bound to one transaction; the caller sets the PUF nullifier. */
+        public static OwnershipProof createForTelemetry(byte[] privKey, byte[] pubKey, String deviceId,
+                String sender, long nonce, byte[] payload) {
+            return createWithChallenge(privKey, pubKey, telemetryChallenge(deviceId, sender, nonce, payload), payload);
+        }
+
+        /** [HC-072] A private-transfer proof bound to (sender, nonce). */
+        public static OwnershipProof createForPrivateTransfer(byte[] privKey, byte[] pubKey, String sender, long nonce) {
+            return createWithChallenge(privKey, pubKey, privateTransferChallenge(sender, nonce), null);
+        }
+
+        private static OwnershipProof createWithChallenge(byte[] privKey, byte[] pubKey, byte[] challenge, byte[] payload) {
+            String did = "did:hybrid:" + Crypto.bytesToHex(Crypto.hash(pubKey));
+            byte[] proof = new ZKProofSystem().createOwnershipProof(did, new java.math.BigInteger(1, privKey), pubKey, challenge);
+            return new OwnershipProof(did, proof, challenge, proofNullifier(proof), payload);
+        }
+
         public static OwnershipProof create(byte[] privKey, byte[] pubKey, byte[] payload) {
             // Test compatibility: use fixed DID and challenge for simple create(privKey, pubKey) API
             String did = "did:hybrid:" + Crypto.bytesToHex(Crypto.hash(pubKey));
@@ -300,6 +317,49 @@ public class ZKProofSystem {
     public static boolean verifyOwnership(byte[] commitment, OwnershipProof proof) {
         if (commitment == null || proof == null) return false;
         return proof.verify(commitment);
+    }
+
+    /**
+     * [HC-071] The challenge a TELEMETRY ownership proof must carry. Before, the prover chose the
+     * challenge (the API used the constant "TEST_CHALLENGE") and the payload was not covered, and
+     * the proof is published inside the transaction - so anyone could copy a device's proof into
+     * a new transaction with different readings and be accepted as that device. Binding the
+     * challenge to (device, relaying sender, sender nonce, payload) makes each proof valid for
+     * exactly one transaction carrying exactly that payload.
+     */
+    public static byte[] telemetryChallenge(String deviceId, String sender, long nonce, byte[] payload) {
+        return boundChallenge("HYBRIDCHAIN-ZK-TELEMETRY-v1", deviceId, sender, nonce, payload);
+    }
+
+    /** [HC-072] Same binding for PRIVATE_TRANSFER: one proof, one (sender, nonce). */
+    public static byte[] privateTransferChallenge(String sender, long nonce) {
+        return boundChallenge("HYBRIDCHAIN-ZK-PRIVATE-TRANSFER-v1", "", sender, nonce, new byte[0]);
+    }
+
+    private static byte[] boundChallenge(String domain, String deviceId, String sender, long nonce, byte[] payload) {
+        try {
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            java.io.DataOutputStream out = new java.io.DataOutputStream(bos);
+            out.write((domain + "\0").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            for (String s : new String[]{deviceId, sender}) {
+                byte[] b = (s == null ? "" : s).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                out.writeInt(b.length);
+                out.write(b);
+            }
+            out.writeLong(nonce);
+            byte[] p = payload == null ? new byte[0] : payload;
+            out.writeInt(p.length);
+            out.write(p);
+            out.flush();
+            return Crypto.hash(bos.toByteArray());
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** Nullifier derived from the proof itself, so it cannot be chosen freely. */
+    public static String proofNullifier(byte[] proofBytes) {
+        return com.hybrid.blockchain.HexUtils.encode(Crypto.hash(proofBytes));
     }
 
     /**
@@ -339,8 +399,15 @@ public class ZKProofSystem {
             return new ThresholdProof(commitment, proof, threshold);
         }
 
+        /**
+         * [HC-073] Fails closed: a deserialised proof without a commitment used to verify as TRUE.
+         * NOTE: the commitment is chosen by the prover and is not bound to the validator's real
+         * reputation, so this proves only "I know SOME value above the bar". The leader
+         * eligibility gate built on it (PBFTConsensus.setZkEligibilityRequired) is off by default
+         * and must stay off until the commitment is issued/anchored by the protocol.
+         */
         public boolean verify() {
-            if (commitment == null) return true; // Handled by dummy above
+            if (commitment == null || proof == null) return false;
             return new ZKProofSystem().verifyThresholdProof(commitment, proof, threshold);
         }
 
@@ -397,26 +464,26 @@ public class ZKProofSystem {
 
         public static EqualityProof create(long v1, long v2) {
             if (v1 != v2) throw new IllegalArgumentException("Values not equal");
-            
+
             BigInteger r1 = ZKProofSystem.randomScalar();
             BigInteger r2 = ZKProofSystem.randomScalar();
             ZKProofSystem zk = new ZKProofSystem();
             byte[] C1 = zk.createCommitment(v1, r1);
             byte[] C2 = zk.createCommitment(v2, r2);
-            
+
             // Proof of knowledge of (r1 - r2) for point (C1 - C2)
             BigInteger deltaR = r1.subtract(r2).mod(N);
             BigInteger k = ZKProofSystem.randomScalar();
             Point R = mul(H(), k);
             Point Diff = add(decodePoint(C1), neg(decodePoint(C2)));
-            
+
             BigInteger e = hashToScalar(C1, C2, pointBytes(R));
             BigInteger s = k.subtract(deltaR.multiply(e)).mod(N);
-            
+
             byte[] proofData = new byte[65 + 32];
             System.arraycopy(pointBytes(R), 0, proofData, 0, 65);
             System.arraycopy(ZKProofSystem.toBytes32(s), 0, proofData, 65, 32);
-            
+
             return new EqualityProof(C1, C2, proofData);
         }
 
@@ -426,10 +493,10 @@ public class ZKProofSystem {
                 Point pC2 = decodePoint(C2);
                 Point R = decodePoint(Arrays.copyOfRange(proof, 0, 65));
                 BigInteger s = new BigInteger(1, Arrays.copyOfRange(proof, 65, 97));
-                
+
                 BigInteger e = hashToScalar(C1, C2, pointBytes(R));
                 Point Diff = add(pC1, neg(pC2));
-                
+
                 // s*H + e*Diff == R
                 Point lhs = add(mul(H(), s), mul(Diff, e));
                 return lhs.x != null && R.x != null && lhs.x.equals(R.x) && lhs.y.equals(R.y);
