@@ -262,6 +262,12 @@ public class FederatedLearningManager {
         int effectiveContributors = (contributors != null && contributors >= 0) ? contributors : 0;
 
         if (committed.length > 0) {
+            // [HC-051] the weights must actually hash to the claimed modelHash; before, any hash
+            // could be paired with arbitrary weights (on-chain commit or P2P broadcast)
+            if (!computeModelHash(committed).equals(modelHash)) {
+                log.warn("[FedLearn] Rejected model: weights do not match modelHash {}", modelHash);
+                return;
+            }
             this.currentModel = committed;
             this.currentModelHash = modelHash;
             this.lastAggregatedTimestamp = now;
@@ -478,6 +484,11 @@ public class FederatedLearningManager {
             return out;
         }
         return new double[0];
+    }
+
+    /** [HC-051] Canonical model hash (SHA-256 over big-endian doubles), for clients and verifiers. */
+    public static String modelHash(double[] model) {
+        return computeModelHash(model);
     }
 
     private static String computeModelHash(double[] model) {

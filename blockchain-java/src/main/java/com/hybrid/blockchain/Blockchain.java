@@ -18,6 +18,9 @@ import org.slf4j.LoggerFactory;
 public class Blockchain {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Logger log = LoggerFactory.getLogger(Blockchain.class);
+    /** [HC-022] keys under which a block snapshot records chain-level counters. */
+    static final String SNAP_TOTAL_MINTED = "_totalMinted";
+    static final String SNAP_BASE_FEE = "_baseFee";
 
     protected List<Block> chain;
     private Mempool mempool;
@@ -29,12 +32,26 @@ public class Blockchain {
     protected Consensus consensus;
     private final HardwareManager hardwareManager;
     private final RateLimiter transactionRateLimiter;
-    private boolean paused = false;
+    private volatile boolean paused = false;   // [HC-034] written by REST, read by the proposer thread
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
     private TokenRegistry tokenRegistry;
     private com.hybrid.blockchain.api.EventBus eventBus;
     private PeerNode peerNode;
     private long totalMinted = 0;
+    /**
+     * [HC-024] Storage side effects of the block being applied (receipts, indexes, telemetry,
+     * FL model). Flushed only after the block passes the state-root check; discarded if it fails.
+     */
+    private final List<Runnable> pendingWrites = new ArrayList<>();
+    /**
+     * [HC-013] Time used by time-dependent validation rules: the block timestamp while a block is
+     * applied or built (consensus-agreed), 0 = "now" at mempool admission. Guarded by {@link #lock}.
+     */
+    private long validationTimestamp = 0;
+
+    private long validationTime() {
+        return validationTimestamp != 0 ? validationTimestamp : System.currentTimeMillis();
+    }
     private com.hybrid.blockchain.monitoring.BlockchainMonitor monitor;
     private com.hybrid.blockchain.audit.AuditLogger auditLogger;
 
@@ -55,7 +72,8 @@ public class Blockchain {
         this.tokenRegistry = new TokenRegistry(this.storage);
         this.monitor = com.hybrid.blockchain.monitoring.BlockchainMonitor.getInstance();
         // AUDIT-FIX: FIX-8 — wire live state into mempool for nonce-gap Sybil protection
-        this.mempool.setStateRef(this.state);
+        // [HC-027] a supplier, not a reference: init/rollback/revertTip replace this.state
+        this.mempool.setStateSupplier(() -> this.state);
     }
 
     public void setTokenRegistry(TokenRegistry registry) { this.tokenRegistry = registry; }
@@ -92,6 +110,11 @@ public class Blockchain {
                     Map<String, Object> rawUTXO = (Map<String, Object>) snap.get("utxo");
                     state = AccountState.fromMap(rawState);
                     utxo = UTXOSet.fromMap(rawUTXO);
+                    // [HC-023] restore the supply counter on this path too (it was only read on
+                    // the tip-hash path, so every restart reset totalMinted to 0)
+                    Object snapMinted = rawState == null ? null : rawState.get(SNAP_TOTAL_MINTED);
+                    if (snapMinted == null) snapMinted = storage.getMeta("totalMinted");
+                    if (snapMinted instanceof Number) totalMinted = ((Number) snapMinted).longValue();
                     Block tip = storage.loadBlockByHeight(snapHeight);
                     if (tip != null) {
                         chain.add(tip);
@@ -130,7 +153,7 @@ public class Blockchain {
                 
                 int n = consensus.getValidators().size();
                 int f = (n - 1) / 3;
-                int requiredSignatures = 2 * f + 1;
+                int requiredSignatures = com.hybrid.blockchain.consensus.PBFTConsensus.quorumSize(n);   // [HC-002]
                 
                 int validSignatureCount = 0;
                 String cpHashHex = latestCp.computeCheckpointHash();
@@ -164,22 +187,30 @@ public class Blockchain {
                     Block cpBlock = storage.loadBlockByHash(latestCp.getBlockHash());
                     if (cpBlock != null) {
                         // Load snapshot instead of tip state if tip state is missing or outdated
+                        // [HC-032] Build the candidate state in LOCALS and commit only if it matches
+                        // the checkpoint. Before, state/utxo were replaced and cpBlock appended first,
+                        // so a mismatch fell through to genesis with an unverified state and a chain
+                        // of [cpBlock, genesis].
                         Map<String, Object> snap = storage.get("snapshot:" + latestCp.getBlockHeight(), Map.class);
+                        AccountState candidateState;
+                        UTXOSet candidateUtxo;
                         if (snap != null) {
-                            state = AccountState.fromMap((Map<String, Object>) snap.get("state"));
-                            utxo = UTXOSet.fromMap((Map<String, Object>) snap.get("utxo"));
+                            candidateState = AccountState.fromMap((Map<String, Object>) snap.get("state"));
+                            candidateUtxo = UTXOSet.fromMap((Map<String, Object>) snap.get("utxo"));
                         } else {
-                            state = storage.loadState();
-                            utxo = UTXOSet.fromMap(storage.loadUTXO());
+                            candidateState = storage.loadState();
+                            candidateUtxo = UTXOSet.fromMap(storage.loadUTXO());
                         }
-                        if (state == null) state = new AccountState();
-                        
-                        chain.add(cpBlock);
-                        if (state.calculateStateRoot().equals(latestCp.getStateRoot())) {
+                        if (candidateState == null) candidateState = new AccountState();
+
+                        if (candidateState.calculateStateRoot().equals(latestCp.getStateRoot())) {
+                            state = candidateState;
+                            utxo = candidateUtxo;
+                            chain.add(cpBlock);
                             log.info("[INIT] Fast sync successful at height {}", latestCp.getBlockHeight());
                             return;
                         } else {
-                            log.warn("[INIT] Checkpoint state root mismatch! Falling back to genesis.");
+                            log.warn("[INIT] Checkpoint state root mismatch! Falling back to genesis (state untouched).");
                         }
                     }
                 } else {
@@ -188,7 +219,9 @@ public class Blockchain {
             }
 
             log.info("[INIT] Creating genesis block");
-            Block genesis = new Block(0, System.currentTimeMillis(), new ArrayList<>(), "0000000000000000000000000000000000000000000000000000000000000000", difficulty, state.calculateStateRoot());
+            // [HC-020] deterministic genesis: fixed timestamp and protocol-constant difficulty, so
+            // every node started from empty storage computes the same genesis hash
+            Block genesis = new Block(0, Config.GENESIS_TIMESTAMP, new ArrayList<>(), "0000000000000000000000000000000000000000000000000000000000000000", Config.INITIAL_DIFFICULTY, state.calculateStateRoot());
             genesis.setHash(genesis.calculateHash());
             chain.add(genesis);
             storage.saveBlock(genesis.getHash(), genesis);
@@ -215,7 +248,7 @@ public class Blockchain {
 
     public boolean isPaused() { return paused; }
     public void setPaused(boolean paused) { this.paused = paused; }
-    private boolean skipRateLimit = false;
+    private volatile boolean skipRateLimit = false;   // [HC-034]
     public void setSkipRateLimit(boolean skipRateLimit) { this.skipRateLimit = skipRateLimit; }
     public UTXOSet getUtxoSet() { return this.utxo; }
 
@@ -253,26 +286,37 @@ public class Blockchain {
             throw new Exception("Transaction expired");
 
         switch (tx.getType()) {
-            case UTXO:
-                if (tx.getInputs() == null || tx.getOutputs() == null)
+            case UTXO: {
+                // [HC-018] A UTXO spend must be signed, every input must belong to the signer and
+                // appear once, and every output must be positive. Before, an unsigned tx with no
+                // inputs and outputs [-X, +X] passed "0 >= 0" and created X from nothing.
+                if (tx.getFrom() == null || !tx.verify())
+                    throw new Exception("UTXO transaction must be signed by the owner of its inputs");
+                if (tx.getInputs() == null || tx.getInputs().isEmpty()
+                        || tx.getOutputs() == null || tx.getOutputs().isEmpty())
                     throw new Exception("UTXO transaction missing inputs/outputs");
+                java.util.Set<String> seenInputs = new java.util.HashSet<>();
                 long totalInput = 0;
                 for (UTXOInput inp : tx.getInputs()) {
+                    String key = inp.getTxid() + ":" + inp.getIndex();
+                    if (!seenInputs.add(key))
+                        throw new Exception("Duplicate UTXO input " + key);
                     if (!utxo.isUnspent(inp.getTxid(), inp.getIndex()))
                         throw new Exception("UTXO input not available");
-                    long inputAmount = utxo.getAmount(inp.getTxid(), inp.getIndex());
-                    if (inputAmount < 0) {
-                        throw new Exception("UTXO input amount unavailable");
-                    }
-                    totalInput += inputAmount;
+                    if (!tx.getFrom().equals(utxo.getOwner(inp.getTxid(), inp.getIndex())))
+                        throw new Exception("UTXO input " + key + " is not owned by the signer");
+                    totalInput = Math.addExact(totalInput, utxo.getAmount(inp.getTxid(), inp.getIndex()));
                 }
                 long totalOutput = 0;
                 for (UTXOOutput out : tx.getOutputs()) {
-                    totalOutput += out.getAmount();
+                    if (out.getAmount() <= 0 || out.getAddress() == null || out.getAddress().isBlank())
+                        throw new Exception("UTXO outputs must be positive and addressed");
+                    totalOutput = Math.addExact(totalOutput, out.getAmount());
                 }
-                if (totalInput < (totalOutput + tx.getFee()))
+                if (totalInput < Math.addExact(totalOutput, tx.getFee()))
                     throw new Exception("Insufficient UTXO input sum");
                 break;
+            }
 
             case ACCOUNT:
                 if (tx.getFrom() == null)
@@ -298,7 +342,8 @@ public class Blockchain {
                     long expectedNonce = currentNonce + 1;
                     if (this.mempool != null) {
                         for (Transaction ptx : mempool.toArray()) {
-                            if (tx.getFrom().equals(ptx.getFrom())) {
+                            // [HC-025] a pending tx must not count itself
+                            if (tx.getFrom().equals(ptx.getFrom()) && !ptx.getId().equals(tx.getId())) {
                                 expectedNonce = Math.max(expectedNonce, ptx.getNonce() + 1);
                             }
                         }
@@ -515,7 +560,18 @@ public class Blockchain {
                                     // Fallback for missing/corrupt DID docs on non-PUF devices
                                 }
                             }
-                            
+
+                            // [HC-013] A gateway may relay a reading the DEVICE itself signed with
+                            // its registered key (end-to-end authenticity; the relaying sender only
+                            // pays the fee). The timestamp window bounds replay of old readings.
+                            if (!authorized) {
+                                com.hybrid.blockchain.lifecycle.DeviceReading reading =
+                                        com.hybrid.blockchain.lifecycle.DeviceReading.parse(tx.getData());
+                                if (reading != null && reading.verify(state, deviceId, validationTime())) {
+                                    authorized = true;
+                                }
+                            }
+
                             if (!authorized) {
                                 throw new Exception("TELEMETRY rejected: sender " + tx.getFrom() + " not authorized for device " + deviceId);
                             }
@@ -605,6 +661,17 @@ public class Blockchain {
             default:
                 throw new Exception("Unknown transaction type: " + tx.getType());
         }
+
+        // [HC-033] Uniform fee rule for every signed transaction. Eight types (CONTRACT,
+        // IOT_MANAGEMENT, FEDERATED_*, TOKEN_REGISTER/MINT/BURN, PRIVATE_TRANSFER, TELEMETRY_BATCH)
+        // never checked fee >= baseFee, and the token types never checked the sender can pay it.
+        if (tx.getFrom() != null && tx.getType() != Transaction.Type.UTXO) {
+            long baseFee = feeMarket.getCurrentBaseFee(storage);
+            if (tx.getFee() < baseFee)
+                throw new Exception("Fee " + tx.getFee() + " below baseFee " + baseFee);
+            if (state.getBalance(tx.getFrom()) < tx.getFee())
+                throw new Exception("Insufficient native balance for fee");
+        }
     }
 
     // Apply block to chain, update UTXO and account state
@@ -634,11 +701,33 @@ public class Blockchain {
         // stateRoot, timestamp), all of which are committed in the hash. Validator-ID hashing
         // (the previous approach) was biased toward specific validator identities.
         if (block.getHash().compareTo(tip.getHash()) > 0) {
+            // [HC-021] Check the competitor BEFORE touching the tip. Previously the tip was reverted
+            // first and the competitor validated afterwards, so any block carrying a large hash
+            // string (even unsigned, from an unknown validator) undid the committed tip.
+            if (!block.getHash().equals(block.calculateHash()))
+                throw new BlockValidationException("Fork candidate hash mismatch", block.getHash(), block.getIndex());
+            if (!tip.getPrevHash().equals(block.getPrevHash()))
+                throw new BlockValidationException("Fork candidate does not share the tip's parent", block.getHash(), block.getIndex());
+            if (block.getValidatorId() == null || !consensus.isValidator(block.getValidatorId()))
+                throw new BlockValidationException("Fork candidate from unknown validator", block.getHash(), block.getIndex());
+            Validator proposer = consensus.getValidators().stream()
+                    .filter(v -> v.getId().equals(block.getValidatorId())).findFirst()
+                    .orElseThrow(() -> new BlockValidationException("Fork candidate validator not found", block.getHash(), block.getIndex()));
+            if (block.getSignature() == null || !consensus.verifyBlock(block, proposer))
+                throw new BlockValidationException("Fork candidate signature invalid", block.getHash(), block.getIndex());
+
             log.info("[FORK] Block {} wins fork at height {} (lexicographically higher hash)", block.getHash(), block.getIndex());
             // Capture losing tip transactions BEFORE reverting, so we can return them to mempool
             List<Transaction> evictedTxs = new ArrayList<>(tip.getTransactions());
             revertTip();
-            applyBlockInternal(block, getLatestBlock());
+            try {
+                applyBlockInternal(block, getLatestBlock());
+            } catch (Exception e) {
+                // [HC-021] the competitor failed full validation: put the previous tip back
+                log.warn("[FORK] Candidate {} rejected after revert ({}); restoring tip {}", block.getHash(), e.getMessage(), tip.getHash());
+                applyBlockInternal(tip, getLatestBlock());
+                throw e;
+            }
             // Return all non-MINT losing transactions to the mempool
             for (Transaction evicted : evictedTxs) {
                 if (evicted.getType() != Transaction.Type.MINT) {
@@ -666,8 +755,13 @@ public class Blockchain {
         if (snapshot == null) {
             throw new Exception("Critical: Cannot revert tip, no snapshot found for height " + newTip.getIndex());
         }
-        AccountState preConstructedState = AccountState.fromMap((Map<String, Object>) snapshot.get("state"));
+        Map<String, Object> rawSnapState = (Map<String, Object>) snapshot.get("state");
+        AccountState preConstructedState = AccountState.fromMap(rawSnapState);
         UTXOSet preConstructedUTXO = UTXOSet.fromMap((Map<String, Object>) snapshot.get("utxo"));
+        // [HC-022] chain-level counters at the new tip. Older snapshots lack them; then the
+        // counters are left unchanged and the condition is logged (cannot be repaired here).
+        Object snapMinted = rawSnapState == null ? null : rawSnapState.get(SNAP_TOTAL_MINTED);
+        Object snapBaseFee = rawSnapState == null ? null : rawSnapState.get(SNAP_BASE_FEE);
 
         lock.writeLock().lock();
         try {
@@ -675,7 +769,14 @@ public class Blockchain {
             // AUDIT-FIX: pre-construct then atomic-swap.
             this.state = preConstructedState;
             this.utxo = preConstructedUTXO;
-            
+            if (snapMinted instanceof Number && snapBaseFee instanceof Number) {
+                this.totalMinted = ((Number) snapMinted).longValue();
+                storage.putMeta("totalMinted", this.totalMinted);
+                feeMarket.saveBaseFee(storage, ((Number) snapBaseFee).longValue());
+            } else {
+                log.warn("[FORK] snapshot {} has no chain counters; totalMinted/baseFee not restored", newTip.getIndex());
+            }
+
             storage.saveState(this.state);
             storage.saveUTXO(this.utxo.toJSON());
             storage.put("chain:tip", newTip.getHash());
@@ -715,6 +816,18 @@ public class Blockchain {
         if (!consensus.verifyBlock(block, validator))
             throw new Exception("Invalid validator signature");
 
+        // [HC-016] Supply rule: at most one MINT per block, paid to the block's proposer.
+        int mintCount = 0;
+        for (Transaction tx : block.getTransactions()) {
+            if (tx.getType() == Transaction.Type.MINT) {
+                mintCount++;
+                if (!block.getValidatorId().equals(tx.getTo()))
+                    throw new Exception("MINT must pay the block proposer " + block.getValidatorId());
+            }
+        }
+        if (mintCount > 1)
+            throw new Exception("At most one MINT per block, got " + mintCount);
+
         java.util.List<Transaction> sortedTxs = new java.util.ArrayList<>(block.getTransactions());
         sortedTxs.sort(java.util.Comparator
                 .comparingInt((Transaction tx) -> tx.getType() == Transaction.Type.MINT ? 0 : 1)
@@ -733,8 +846,13 @@ public class Blockchain {
                 expectedNonces.put(tx.getFrom(), base + 1);
             }
         }
-        for (Transaction tx : sortedTxs) {
-            validateTransaction(tx, true);
+        validationTimestamp = block.getTimestamp();   // [HC-013] consensus time for validation
+        try {
+            for (Transaction tx : sortedTxs) {
+                validateTransaction(tx, true);
+            }
+        } finally {
+            validationTimestamp = 0;
         }
 
         // [S1-01] Rollback guard. Everything below mutates the LIVE state/utxo, but the
@@ -746,6 +864,8 @@ public class Blockchain {
         AccountState stateBackup = state.cloneState();
         UTXOSet utxoBackup = UTXOSet.fromMap(utxo.toJSON());
         long totalMintedBackup = totalMinted;
+        pendingWrites.clear();   // [HC-024] start each block with an empty side-effect buffer
+        if (tokenRegistry != null) tokenRegistry.beginBlock();
 
         try {
         state.setBlockHeight(block.getIndex());
@@ -774,18 +894,28 @@ public class Blockchain {
                 receiptError = re.getMessage();
                 // Even on revert, some values might be known
                 result = new ExecutionResult(0, null, re.getReturnData(), events);
-            } catch (Exception ex) {
+            } catch (ChargedFailureException cf) {
                 receiptStatus = TransactionReceipt.STATUS_FAILED;
-                receiptError = ex.getMessage();
+                receiptError = cf.getMessage();
                 result = new ExecutionResult(0, null, null, events);
+            } catch (Exception ex) {
+                // [HC-017] A transaction that cannot be applied makes the block invalid. Before,
+                // it got a FAILED receipt while its fee — never debited — was still paid to the
+                // proposer, creating money. Honest producers never include such transactions:
+                // createBlock simulates each candidate and drops the ones that fail.
+                throw new Exception("Block " + block.getIndex() + " contains an inapplicable transaction "
+                        + tx.getId() + ": " + ex.getMessage(), ex);
             }
-            totalFees += tx.getFee();
+            // Reaching here means the fee was debited (success, or a contract REVERT, whose fee
+            // and nonce are charged before execution).
+            totalFees = Math.addExact(totalFees, tx.getFee());
             // Build and save receipt
             TransactionReceipt receipt = new TransactionReceipt(
                     tx.getId(), block.getHash(), (int) block.getIndex(),
                     receiptStatus, gasUsed, receiptError, events, block.getTimestamp(),
                     result.getContractAddress(), result.getReturnData());
-            try {
+            // [HC-024] deferred: written only if the whole block is accepted
+            pendingWrites.add(() -> {
                 storage.saveReceipt(tx.getId(), receipt);
                 storage.indexTransaction(tx.getId(), block.getHash(), (int) block.getIndex());
                 if (tx.getFrom() != null) {
@@ -794,7 +924,7 @@ public class Blockchain {
                 if (tx.getTo() != null) {
                     storage.indexAddressTx(tx.getTo(), tx.getId(), block.getTimestamp());
                 }
-            } catch (Exception ignored) {}
+            });
             appliedTxIds.add(tx.getId());
         }
 
@@ -803,23 +933,12 @@ public class Blockchain {
             state.credit(validator.getId(), totalFees);
         }
 
-        // Slashing: Penalize Byzantine validators
-        for (String slashedId : consensus.getSlashedValidators()) {
-            try {
-                // [PHASE-0] FIX-7: Exponential slashing model
-                int offenseCount = consensus.getSlashCount(slashedId);
-                double rate = Math.min(1.0, 0.10 * Math.pow(3, offenseCount));
-                long penalty = (long)(state.getBalance(slashedId) * rate);
-                
-                if (penalty > 0) {
-                    state.debit(slashedId, penalty);
-                    log.warn("[BLOCKCHAIN] SLASHED validator {}: burned {} tokens", slashedId, penalty);
-                }
-                consensus.clearSlashedValidator(slashedId);
-            } catch (Exception e) {
-                log.error("[ERROR] Failed to slash validator {}: {}", slashedId, e.getMessage());
-            }
-        }
+        // [HC-019] No slashing inside the state transition. The previous loop debited validators
+        // listed in consensus.getSlashedValidators() — evidence only THIS node had observed — so
+        // a node that saw an equivocation computed a different state root from every node that
+        // did not, and rejected blocks the rest of the network committed. Equivocation is still
+        // detected and logged by the consensus engine; economic slashing must come back as an
+        // on-chain evidence transaction that every node applies identically.
 
         // Finality Check: Commit deferred actions for blocks that reached 6
         // confirmations (chain size >= 7 means block at index 0 has 6 confirmations)
@@ -834,6 +953,17 @@ public class Blockchain {
         }
 
         chain.add(block);
+
+        // [HC-024] the block is accepted: now persist its receipts/indexes/telemetry/FL effects
+        if (tokenRegistry != null) tokenRegistry.commitBlock();
+        List<Runnable> writes = new ArrayList<>(pendingWrites);
+        pendingWrites.clear();
+        for (Runnable w : writes) {
+            try { w.run(); } catch (Exception e) { log.warn("[BLOCKCHAIN] deferred write failed: {}", e.getMessage()); }
+        }
+
+        // [HC-026] advisory, off the consensus path: never touches state
+        runAdvisoryAnomalyDetection(block);
 
         // Block is now accepted — safe to evict its transactions from the mempool.
         for (String appliedId : appliedTxIds) {
@@ -859,7 +989,14 @@ public class Blockchain {
         storage.saveState(state);
         
         // Save snapshot for fork resolution (save at height index to allow revert from index+1)
-        storage.saveSnapshot((int)block.getIndex(), state.toJSON(), utxo.toJSON());
+        // [HC-022] the snapshot also carries the chain-level counters revertTip must restore
+        Map<String, Object> snapState = state.toJSON();
+        snapState.put(SNAP_TOTAL_MINTED, totalMinted);
+        snapState.put(SNAP_BASE_FEE, nextBaseFee);
+        storage.saveSnapshot((int)block.getIndex(), snapState, utxo.toJSON());
+        // [HC-031] bounded retention: drop the snapshot that just fell out of the window
+        long expired = block.getIndex() - Config.SNAPSHOT_RETENTION;
+        if (expired > 0) storage.del("snapshot:" + expired);
         
         pruneBlock(block);
         
@@ -888,7 +1025,7 @@ public class Blockchain {
             try {
                 Checkpoint cp = new Checkpoint(
                         (int) block.getIndex(), block.getHash(),
-                        block.getStateRoot(), Crypto.bytesToHex(Crypto.hash(utxo.toJSON().toString().getBytes())),
+                        block.getStateRoot(), Crypto.bytesToHex(utxo.canonicalHash()) /* [HC-035] */,
                         block.getTimestamp(), new HashMap<>());
                 // NOTE: Checkpoint is NOT saved here - it's only saved in PeerNode after quorum is reached
                 log.info("[CHECKPOINT] Broadcasting checkpoint request at height {}", block.getIndex());
@@ -916,6 +1053,8 @@ public class Blockchain {
             // block leaves no partial mutations behind, then propagate the rejection.
             this.state = stateBackup;
             this.utxo = utxoBackup;
+            pendingWrites.clear();   // [HC-024] a rejected block leaves nothing in storage
+            if (tokenRegistry != null) tokenRegistry.rollbackBlock();
             this.totalMinted = totalMintedBackup;
             log.error("[BLOCKCHAIN] Block {} at height {} rejected — rolled back to pre-block state: {}",
                     block.getHash(), block.getIndex(), e.getMessage());
@@ -927,6 +1066,10 @@ public class Blockchain {
     public boolean addTransaction(Transaction tx) throws Exception {
         lock.writeLock().lock();
         try {
+            // [HC-016] Transactions without a sender (MINT, UTXO) are created by the block
+            // producer itself and are never accepted from the network or the API.
+            if (tx.getFrom() == null)
+                throw new Exception("System transactions (from == null) are not accepted from the network");
             // Perform deep validation (including AI audit for contracts).
             validateTransaction(tx, false);
 
@@ -1065,9 +1208,19 @@ public class Blockchain {
             
             // Enforce block size limit (2 MB)
             int blockBytesUsed = 0;
+            validationTimestamp = timestamp;   // [HC-013] validate candidates at the block's time
             for (Transaction tx : candidateTxs) {
                 try {
-                    validateTransaction(tx);
+                    // [HC-025] Block semantics, not mempool semantics. validateTransaction(tx)
+                    // computed the expected nonce from the mempool, which contains this very tx, so
+                    // every pending ACCOUNT transfer failed with "expected n+1 got n" and was dropped.
+                    // Here the nonce must follow the evolving simulated state (so a sender's txs
+                    // n, n+1, ... chain within one block), and applying to the clone below catches
+                    // insufficient balance cumulatively.
+                    validateTransaction(tx, true);
+                    if (tx.getFrom() != null && tx.getType() != Transaction.Type.UTXO
+                            && tx.getNonce() != clonedState.getNonce(tx.getFrom()) + 1)
+                        throw new Exception("nonce " + tx.getNonce() + " is not next for " + tx.getFrom());
                     byte[] serializedTx = tx.serializeCanonical();
                     int txSize = serializedTx.length;
                     
@@ -1084,6 +1237,7 @@ public class Blockchain {
                 }
             }
             
+            validationTimestamp = 0;
             // FIX 12: Do NOT double-credit the miner here.
             // The MINT tx already credited the block reward via applyTransactionToState().
             // The validator fee credit is applied in applyBlockInternal() after block inclusion.
@@ -1101,7 +1255,8 @@ public class Blockchain {
             String postStateRoot = clonedState.calculateStateRoot();
             Block newBlock = new Block((int)nextIndex, timestamp, txsToInclude,
                     prev.getHash(), difficulty, postStateRoot);
-            newBlock.setValidatorId(Config.NODE_ID);
+            // [HC-016] the proposer id must be the address the MINT and the fees are paid to
+            newBlock.setValidatorId(minerAddress);
             newBlock.setHash(newBlock.calculateHash());
             return newBlock;
         } finally {
@@ -1144,7 +1299,7 @@ public class Blockchain {
                 if (contractAddr == null) {
                     String creator = tx.getFrom();
                     long nonce = targetState.getNonce(creator);
-                    contractAddr = Crypto.deriveAddress(Crypto.hash((creator + nonce).getBytes()));
+                    contractAddr = Crypto.deriveAddress(Crypto.hash((creator + nonce).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
                     targetState.ensure(contractAddr);
                     targetState.setCode(contractAddr, code);
                     // Nonce already incremented for fee debit
@@ -1191,8 +1346,9 @@ public class Blockchain {
                         // State changes intentionally discarded — contractSimState is not merged
                         throw re;
                     } catch (Exception e) {
-                        // Execution failed, discard contractSimState
-                        throw e;
+                        // Execution failed (e.g. out of gas): contractSimState is discarded, but the
+                        // fee and nonce above were legitimately charged. [HC-017]
+                        throw new ChargedFailureException(e.getMessage(), e);
                     }
                 }
             case IOT_MANAGEMENT:
@@ -1237,10 +1393,17 @@ public class Blockchain {
                             telemetryPayload = proof.getPayload();
                         }
                     } catch (Exception ignored) {} // Not a ZKP proof, use raw data
+                    // [HC-013] device-signed envelope relayed by a gateway: store the device's payload
+                    com.hybrid.blockchain.lifecycle.DeviceReading relayed =
+                            com.hybrid.blockchain.lifecycle.DeviceReading.parse(rawData);
+                    if (relayed != null) telemetryPayload = relayed.payload();
 
-                    int multiplier = com.hybrid.blockchain.ai.TelemetryAnomalyDetector.getInstance().check(tx.getFrom(), telemetryPayload, timestamp);
-                    multiplier = Math.min(5, multiplier);
-                    boolean isAnomaly = multiplier > 1;
+                    // [HC-026] The anomaly detector is NOT consulted here. Its sliding window lives in
+                    // this JVM's memory (empty after a restart, fed twice on the proposer, fed by the
+                    // REST/AI endpoints), so using it made the same tx produce different post-states on
+                    // different nodes. Detection now runs after the block is accepted, as an advisory
+                    // signal (see runAdvisoryAnomalyDetection), and never changes state.
+                    final boolean isAnomaly = false;
 
                     // P1-D: ZK-Firmware Integrity check
                     try {
@@ -1268,13 +1431,6 @@ public class Blockchain {
                         }
                     } catch (Exception ignored) {}
 
-                    if (isAnomaly) {
-                        try {
-                            targetState.debit(tx.getFrom(), Math.multiplyExact(tx.getFee(), (long)multiplier - 1));
-                        } catch (ArithmeticException e) {
-                            log.error("[TELEMETRY] Penalty fee overflow for {}", tx.getFrom());
-                        }
-                    }
 
                     // Store telemetry data; hash large payloads (>= 1024 bytes)
                     byte[] toStore = telemetryPayload.length >= 1024 ? Crypto.hash(telemetryPayload) : telemetryPayload;
@@ -1285,7 +1441,8 @@ public class Blockchain {
                         }
                         
                         if (targetState == this.state) {
-                            storage.saveTelemetry(targetDeviceId, (int) blockIndex, tx.getId(), toStore);
+                            final String telemDevice = targetDeviceId;   // [HC-024] deferred write
+                            pendingWrites.add(() -> storage.saveTelemetry(telemDevice, (int) blockIndex, tx.getId(), toStore));
                         }
                         // Update device reputation on telemetry result
                         targetState.getLifecycleManager().recordDeviceActivity(targetDeviceId, !isAnomaly);
@@ -1354,12 +1511,26 @@ public class Blockchain {
                         throw new Exception("FEDERATED_COMMIT missing model hash");
                     }
 
-                    com.hybrid.blockchain.ai.FederatedLearningManager.getInstance()
-                            .applyCommittedModel(modelHash, modelWeights, round, contributors, storage);
-
-                    if (peerNode != null && modelWeights != null && modelWeights.length > 0) {
-                        int broadcastRound = com.hybrid.blockchain.ai.FederatedLearningManager.getInstance().getRoundNumber();
-                        peerNode.broadcastFLModel(broadcastRound, modelHash, modelWeights);
+                    // [HC-024] Applying/broadcasting the committed model is a side effect outside the
+                    // state; it runs only for the live state and only once the block is accepted
+                    // (previously it also ran in createBlock's simulation and for rejected blocks).
+                    if (targetState == this.state) {
+                        final String mHash = modelHash;
+                        final double[] mWeights = modelWeights;
+                        final Integer mRound = round;
+                        final Integer mContrib = contributors;
+                        pendingWrites.add(() -> {
+                            try {
+                                com.hybrid.blockchain.ai.FederatedLearningManager.getInstance()
+                                        .applyCommittedModel(mHash, mWeights, mRound, mContrib, storage);
+                            } catch (Exception e) {
+                                log.warn("[FedLearn] applyCommittedModel failed: {}", e.getMessage());
+                            }
+                            if (peerNode != null && mWeights != null && mWeights.length > 0) {
+                                int broadcastRound = com.hybrid.blockchain.ai.FederatedLearningManager.getInstance().getRoundNumber();
+                                peerNode.broadcastFLModel(broadcastRound, mHash, mWeights);
+                            }
+                        });
                     }
                 }
                 return new ExecutionResult(0, null, null, transactionEvents);
@@ -1453,6 +1624,40 @@ public class Blockchain {
         return new ExecutionResult(0, null, null, transactionEvents);  // Default return for any unhandled cases
     }
 
+    /**
+     * [HC-026] Feeds the telemetry of an ACCEPTED block to the anomaly detector for monitoring.
+     * The result is published as an alert event and metric only; it never changes balances,
+     * reputation or any other consensus state, so nodes with different detector history still
+     * agree on every state root.
+     */
+    private void runAdvisoryAnomalyDetection(Block block) {
+        com.hybrid.blockchain.ai.TelemetryAnomalyDetector detector =
+                com.hybrid.blockchain.ai.TelemetryAnomalyDetector.getInstance();
+        for (Transaction tx : block.getTransactions()) {
+            if (tx.getType() != Transaction.Type.TELEMETRY || tx.getData() == null) continue;
+            try {
+                byte[] payload = tx.getData();
+                try {
+                    com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof proof =
+                            MAPPER.readValue(payload, com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof.class);
+                    if (proof.getPayload() != null) payload = proof.getPayload();
+                } catch (Exception notAProof) { /* raw reading */ }
+                String device = tx.getFrom();
+                com.hybrid.blockchain.lifecycle.DeviceReading relayed =
+                        com.hybrid.blockchain.lifecycle.DeviceReading.parse(tx.getData());
+                if (relayed != null) { payload = relayed.payload(); device = relayed.deviceId; }   // [HC-013]
+                if (detector.check(device, payload, block.getTimestamp()) > 1) {
+                    if (monitor != null) monitor.recordMetric("telemetry.anomalies", 1);
+                    if (eventBus != null) {
+                        try { eventBus.publish("anomalies", tx); } catch (Exception ignored) { }
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("[ANOMALY] advisory check failed for {}: {}", tx.getId(), e.getMessage());
+            }
+        }
+    }
+
     private void processIoTTransactionWithState(AccountState targetState, Transaction tx, long blockHeight, long timestamp) throws Exception {
         Map<String, Object> data = MAPPER.readValue(tx.getData(), Map.class);
         String action = (String) data.get("action");
@@ -1468,7 +1673,10 @@ public class Blockchain {
                 lifecycle.provisionDevice((String) data.get("deviceId"), (String) data.get("manufacturer"), (String) data.get("model"), HexUtils.decode((String) data.get("devicePublicKey")), HexUtils.decode(sig), enablePUF);
                 break;
             case "ACTIVATE":
-                lifecycle.activateDevice((String) data.get("deviceId"), (String) data.get("owner"), HexUtils.decode((String) data.get("devicePublicKey")), timestamp);
+                // [HC-047] sender must be the owner; device must sign its consent with its attested key
+                lifecycle.activateDevice((String) data.get("deviceId"), (String) data.get("owner"),
+                        HexUtils.decode((String) data.get("devicePublicKey")), timestamp, from,
+                        data.get("activationSignature") == null ? null : HexUtils.decode((String) data.get("activationSignature")));
                 break;
             case "SUSPEND":
                 lifecycle.suspendDevice((String) data.get("deviceId"), from, (String) data.get("reason"));
@@ -1531,8 +1739,28 @@ public class Blockchain {
         return Crypto.bytesToHex(MerkleTree.computeRoot(leaves));
     }
 
+    /**
+     * [HC-034] Immutable snapshot taken under the read lock. It used to return the live list, which
+     * REST handlers iterated without the lock while applyBlock/revertTip mutated it
+     * (ConcurrentModificationException, torn reads).
+     */
     public List<Block> getChain() {
-        return chain;
+        lock.readLock().lock();
+        try {
+            return List.copyOf(chain);
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    /** Test hook: append a block to the in-memory chain without validation (package-private). */
+    void appendForTest(Block b) {
+        lock.writeLock().lock();
+        try {
+            chain.add(b);
+        } finally {
+            lock.writeLock().unlock();
+        }
     }
 
     public Storage getStorage() {

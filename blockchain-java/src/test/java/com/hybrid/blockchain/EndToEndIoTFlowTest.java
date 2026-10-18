@@ -71,9 +71,10 @@ public class EndToEndIoTFlowTest {
             TelemetryAnomalyDetector.AnomalyStats stats = TelemetryAnomalyDetector.getInstance().getStats(deviceId);
             assertThat(stats.anomaliesDetected).isGreaterThan(0);
             
-            // Reputation should be deducted
+            // [HC-026] detection is advisory only: reputation (consensus state) is not changed by
+            // the node-local detector, so it must not drop because of this reading
             double repAfterAnomaly = chain.getAccountState().getLifecycleManager().getDeviceRecord(deviceId).getReputationScore();
-            assertThat(repAfterAnomaly).isLessThan(repAfterWarmup); 
+            assertThat(repAfterAnomaly).isGreaterThanOrEqualTo(repAfterWarmup);
             
             // 6. Verify Federated Learning Update
             // Telemetry tx should have triggered an update if configured
@@ -82,7 +83,7 @@ public class EndToEndIoTFlowTest {
             Transaction txCommit = new Transaction.Builder()
                 .type(Transaction.Type.FEDERATED_COMMIT)
                 .from(deviceId)
-                .data(new byte[32]) // dummy model hash
+                .data(Crypto.bytesToHex(Crypto.hash("model-round-1".getBytes())).getBytes()) // a real model hash
                 .nonce(17)
                 .fee(100)
                 .sign(device.getPrivateKey(), device.getPublicKey());

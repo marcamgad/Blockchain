@@ -57,13 +57,17 @@ public class MerklePatriciaTrie {
     }
 
     public byte[] get(String key) {
-        return get(Crypto.hash(key.getBytes(StandardCharsets.UTF_8)));
+        return get(key.getBytes(StandardCharsets.UTF_8));
     }
 
+    /**
+     * [HC-033] Hashes the key exactly like put(byte[]) and delete(byte[]). It used NOT to hash,
+     * so put(k, v) followed by get(k) with the same bytes silently returned null.
+     */
     public byte[] get(byte[] keyBytes) {
         lock.readLock().lock();
         try {
-            byte[] nibbles = toNibbles(keyBytes);
+            byte[] nibbles = toNibbles(Crypto.hash(keyBytes));
             return search(root, nibbles);
         } finally {
             lock.readLock().unlock();
@@ -606,28 +610,6 @@ public class MerklePatriciaTrie {
     }
 
     // Compatibility methods for previous HashMap interface
-    public Map<String, byte[]> toMap() {
-        lock.readLock().lock();
-        try {
-            // Because original keys are hashed natively internally, toMap isn't natively possible unless
-            // we maintain an auxiliary data structure. Given this is for storage serialization, we return empty map
-            // and rely on `AccountState` directly instead for exporting or importing raw state, 
-            // since `AccountState` manages the `state` mapping.
-            return new HashMap<>();
-        } finally {
-            lock.readLock().unlock();
-        }
-    }
-
-    public void fromMap(Map<String, byte[]> map) {
-        lock.writeLock().lock();
-        try {
-            root = null;
-            for (Map.Entry<String, byte[]> entry : map.entrySet()) {
-                put(entry.getKey(), entry.getValue());
-            }
-        } finally {
-            lock.writeLock().unlock();
-        }
-    }
+    // [HC-033] toMap()/fromMap() removed: toMap always returned an empty map, so
+    // fromMap(toMap()) silently produced an empty trie. Account state is (de)serialised by AccountState.
 }

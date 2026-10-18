@@ -30,8 +30,12 @@ public class CryptoCompleteTest {
     @DisplayName("C1.3-1.6 — ECDSA sign and verify")
     void testSigning() {
         TestKeyPair keys = new TestKeyPair(1);
-        byte[] message = "secure transaction".getBytes(StandardCharsets.UTF_8);
+        byte[] message = Crypto.hash("secure transaction".getBytes(StandardCharsets.UTF_8));
         byte[] signature = Crypto.sign(message, keys.getPrivateKey());
+        // [HC-040] a raw (non-digest) message is rejected outright instead of silently truncated
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                Crypto.sign("secure transaction".getBytes(StandardCharsets.UTF_8), keys.getPrivateKey()))
+                .isInstanceOf(IllegalArgumentException.class);
         
         assertThat(Crypto.verify(message, signature, keys.getPublicKey()))
                 .as("Signature should be valid for matching keys").isTrue();
@@ -42,7 +46,7 @@ public class CryptoCompleteTest {
                 .as("Signature should fail for wrong public key").isFalse();
                 
         // C1.5: tampered message
-        byte[] tampered = "secure transaction!".getBytes(StandardCharsets.UTF_8);
+        byte[] tampered = Crypto.hash("secure transaction!".getBytes(StandardCharsets.UTF_8));
         assertThat(Crypto.verify(tampered, signature, keys.getPublicKey()))
                 .as("Signature should fail for tampered message").isFalse();
                 

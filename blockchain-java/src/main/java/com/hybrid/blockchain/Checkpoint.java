@@ -75,6 +75,6 @@ public class Checkpoint {
      */
     public String computeCheckpointHash() {
         String data = blockHeight + blockHash + stateRoot + utxoRoot;
-        return Crypto.bytesToHex(Crypto.hash(data.getBytes()));
+        return Crypto.bytesToHex(Crypto.hash(data.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
     }
 }

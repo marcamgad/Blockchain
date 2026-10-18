@@ -47,10 +47,23 @@ public class GossipEngine {
     public boolean validateAndProcess(byte[] payload) {
         if (payload == null) return false;
         P2PMessage msg = new P2PMessage("SYSTEM", "dummy", P2PMessage.Type.GOSSIP, payload);
-        return validateAndProcess(msg);
+        return process(msg);   // local de-duplication utility: not a network message
     }
 
     public boolean validateAndProcess(P2PMessage message) {
+        if (message == null) return false;
+        // Cheap duplicate check first, WITHOUT recording: a flood of copies costs no signature
+        // checks. Recording happens only after verification, so a forged copy (the id does not
+        // cover the signature) cannot pre-empt the genuine message.
+        synchronized (seenMessages) {
+            if (seenMessages.containsKey(message.getMessageId())) return false;
+        }
+        // [HC-044] authenticate the ORIGIN before handlers or relay
+        if (!message.verifyOrigin()) return false;
+        return process(message);
+    }
+
+    private boolean process(P2PMessage message) {
         if (message == null) return false;
         if (message.getPayload() == null || message.getPayload().length > 1024 * 1024) return false;
         

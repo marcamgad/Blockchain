@@ -74,7 +74,7 @@ public class ShadowTests {
         
         // We need a dummy block at tip to revert
         Block dummyBlock = new Block(2, System.currentTimeMillis(), new ArrayList<>(), "0000", 0, "0000");
-        bc.getChain().add(dummyBlock);
+        bc.appendForTest(dummyBlock);
         
         AtomicLong racedBalance = new AtomicLong(-1);
         CountDownLatch startLatch = new CountDownLatch(1);
@@ -93,7 +93,7 @@ public class ShadowTests {
                 for (int i = 0; i < 50; i++) {
                     bc.revertTipForTest();
                     // Add it back so we can revert it again
-                    bc.getChain().add(dummyBlock);
+                    bc.appendForTest(dummyBlock);
                 }
             } catch (Exception e) { e.printStackTrace(); }
         });

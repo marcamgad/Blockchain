@@ -109,21 +109,45 @@ public class MultiSigManager {
      * Sign a proposal (overload with provided signature)
      */
     public void signProposal(String proposalId, String signerAddress, byte[] signature) {
+        // [MSIG-1] This overload stored the given bytes as an owner's approval WITHOUT verifying
+        // them: an owner address plus 64 random bytes counted as a valid signature. A signature
+        // cannot be checked without the signer's public key, so this form is refused.
+        throw new UnsupportedOperationException(
+                "signProposal(id, address, signature) cannot verify the signature; use "
+                + "signProposal(id, address, publicKey, signature)");
+    }
+
+    /**
+     * Records an externally produced approval after verifying it.
+     *
+     * @param publicKey compressed secp256k1 key whose address must equal {@code signerAddress}
+     * @param signature signature over {@link Proposal#getSigningMessage()}
+     */
+    public void signProposal(String proposalId, String signerAddress, byte[] publicKey, byte[] signature) {
         Proposal proposal = proposals.get(proposalId);
         if (proposal == null) throw new IllegalArgumentException("Proposal not found: " + proposalId);
-        
+
         if (proposal.isExpired()) {
             throw new IllegalStateException("Proposal has expired");
         }
         if (proposal.isExecuted()) {
             throw new IllegalStateException("Proposal already executed");
         }
-        
+
         Wallet wallet = wallets.get(proposal.getWalletId());
         if (wallet == null || !wallet.isOwner(signerAddress)) {
-            return; // silently ignore non-owners to prevent bypass and keep test compilation/run clean
+            throw new SecurityException("Signer is not a wallet owner");
         }
-        
+        if (publicKey == null || !com.hybrid.blockchain.Crypto.deriveAddress(publicKey).equals(signerAddress)) {
+            throw new SecurityException("Public key does not belong to " + signerAddress);
+        }
+        if (!com.hybrid.blockchain.Crypto.verify(proposal.getSigningMessage(), signature, publicKey)) {
+            throw new SecurityException("Invalid signature from " + signerAddress);
+        }
+        if (proposal.hasSigned(signerAddress)) {
+            throw new IllegalStateException("Already signed by this address");
+        }
+
         proposal.addSignature(signerAddress, signature);
         
         if (proposal.hasEnoughSignatures()) {
@@ -250,7 +274,7 @@ public class MultiSigManager {
 
     private String generateProposalId(String walletId, ProposalType type, Map<String, Object> data) {
         String combined = walletId + type.name() + System.currentTimeMillis() + data.hashCode();
-        return Crypto.bytesToHex(Crypto.hash(combined.getBytes()));
+        return Crypto.bytesToHex(Crypto.hash(combined.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
     }
 
     /**
@@ -335,7 +359,7 @@ public class MultiSigManager {
                 sb.append(key).append("=").append(data.get(key));
             }
 
-            return Crypto.hash(sb.toString().getBytes());
+            return Crypto.hash(sb.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
         }
 
         public void addSignature(String signer, byte[] signature) {
@@ -430,7 +454,7 @@ public class MultiSigManager {
         
         try {
             if (proposal.getProposalType() == ProposalType.GOV) {
-                String metadata = new String(proposal.getPayload());
+                String metadata = new String(proposal.getPayload(), java.nio.charset.StandardCharsets.UTF_8);
                 if (metadata.startsWith("ADD_VALIDATOR:")) {
                     String[] parts = metadata.split(":");
                     if (blockchain != null && parts.length >= 3) {

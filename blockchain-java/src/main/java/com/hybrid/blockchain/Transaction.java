@@ -47,6 +47,12 @@ public final class Transaction {
     private byte[] dilithiumPublicKey;
     @JsonProperty("dilithiumSignature")
     private byte[] dilithiumSignature;
+    /**
+     * [HC-029] Content hash, computed in the constructor. READ_ONLY: written to JSON for clients,
+     * never read from it. Previously Jackson inferred a mutator from the getter and overwrote this
+     * field with whatever "txid" a peer put in the JSON, while verify() still passed.
+     */
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
     private String txid;
 
     @JsonCreator
@@ -326,7 +332,7 @@ public final class Transaction {
             try {
                 // To avoid storing raw byte-arrays where Keys are needed, we assume 
                 // QuantumResistantCrypto provides a way, or we reconstruct the key:
-                java.security.KeyFactory kf = java.security.KeyFactory.getInstance("Dilithium", "BCPQC");
+                java.security.KeyFactory kf = java.security.KeyFactory.getInstance(com.hybrid.blockchain.security.QuantumResistantCrypto.ALGORITHM, com.hybrid.blockchain.security.QuantumResistantCrypto.PROVIDER);
                 java.security.PublicKey dPubKey = kf.generatePublic(new java.security.spec.X509EncodedKeySpec(dilithiumPublicKey));
                 return com.hybrid.blockchain.security.QuantumResistantCrypto.verifyDilithium(payload, dilithiumSignature, dPubKey);
             } catch (Exception e) {
@@ -398,9 +404,8 @@ public final class Transaction {
         return data;
     }
 
-    public void setData(byte[] data) {
-        this.data = data;
-    }
+    // [HC-029] setData(byte[]) removed: it changed signed content after txid was computed and had
+    // no callers. A transaction is immutable once built.
 
     public byte[] getSignature() {
         return signature;

@@ -83,6 +83,6 @@ public class TransactionReceipt {
      * @param data  the event data payload
      */
     public void addEvent(String topic, String data) {
-        events.add(new ContractEvent(this.contractAddress != null ? this.contractAddress : "test-contract", topic.hashCode(), data != null ? data.getBytes() : new byte[0], this.timestamp));
+        events.add(new ContractEvent(this.contractAddress != null ? this.contractAddress : "test-contract", topic.hashCode(), data != null ? data.getBytes(java.nio.charset.StandardCharsets.UTF_8) : new byte[0], this.timestamp));
     }
 }

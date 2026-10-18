@@ -1,0 +1,89 @@
+group,artifact,version,scope,classifier,jar_bytes,classes,licence,licence_source,dup_classes_with_others,osv_ids,max_severity,osv_summaries,cve_source
+com.fasterxml.jackson.core,jackson-databind,2.22.3,compile,,1709604,812,"The Apache Software License, Version 2.0",jackson-databind-2.22.3.pom,0,,,,OSV.dev querybatch
+com.fasterxml.jackson.core,jackson-annotations,2.22,compile,,84211,78,"The Apache Software License, Version 2.0",jackson-annotations-2.22.pom,1,,,,OSV.dev querybatch
+com.fasterxml.jackson.core,jackson-core,2.22.3,compile,,594776,213,"The Apache Software License, Version 2.0",jackson-core-2.22.3.pom,0,,,,OSV.dev querybatch
+org.apache.commons,commons-lang3,3.21.0,compile,,749083,439,Apache-2.0,inherited from apache-39,0,,,,OSV.dev querybatch
+org.bouncycastle,bcprov-jdk18on,1.86,compile,,7224011,5757,Bouncy Castle Licence,bcprov-jdk18on-1.86.pom,0,,,,OSV.dev querybatch
+org.bouncycastle,bcpkix-jdk18on,1.86,compile,,1341621,1049,Bouncy Castle Licence,bcpkix-jdk18on-1.86.pom,0,,,,OSV.dev querybatch
+org.bouncycastle,bcutil-jdk18on,1.86,compile,,789287,648,Bouncy Castle Licence,bcutil-jdk18on-1.86.pom,0,,,,OSV.dev querybatch
+org.slf4j,slf4j-api,2.0.18,compile,,69982,55,MIT,inherited from slf4j-bom-2.0.18,0,,,,OSV.dev querybatch
+org.iq80.leveldb,leveldb,0.12,compile,,228975,129,Apache License 2.0,inherited from leveldb-project-0.12,0,,,,OSV.dev querybatch
+org.iq80.leveldb,leveldb-api,0.12,compile,,9938,13,Apache License 2.0,inherited from leveldb-project-0.12,13,,,,OSV.dev querybatch
+com.google.guava,guava,33.3.1-jre,compile,,3079289,2017,"Apache License, Version 2.0",inherited from guava-parent-33.3.1-jre,0,,,,OSV.dev querybatch
+com.google.guava,failureaccess,1.0.2,compile,,4740,2,"The Apache Software License, Version 2.0",inherited from guava-parent-26.0-android,0,,,,OSV.dev querybatch
+com.google.guava,listenablefuture,9999.0-empty-to-avoid-conflict-with-guava,compile,,2199,0,"The Apache Software License, Version 2.0",inherited from guava-parent-26.0-android,0,,,,OSV.dev querybatch
+com.google.code.findbugs,jsr305,3.0.2,compile,,19936,35,"The Apache Software License, Version 2.0",jsr305-3.0.2.pom,0,,,,OSV.dev querybatch
+org.checkerframework,checker-qual,3.43.0,compile,,231525,370,The MIT License,checker-qual-3.43.0.pom,1,,,,OSV.dev querybatch
+com.google.errorprone,error_prone_annotations,2.28.0,compile,,19370,27,Apache 2.0,error_prone_annotations-2.28.0.pom,0,,,,OSV.dev querybatch
+com.google.j2objc,j2objc-annotations,3.0.0,compile,,12467,17,"Apache License, Version 2.0",j2objc-annotations-3.0.0.pom,0,,,,OSV.dev querybatch
+org.fusesource.leveldbjni,leveldbjni-all,1.8,compile,,1045744,75,The BSD 3-Clause License,inherited from leveldbjni-project-1.8,13,,,,OSV.dev querybatch
+org.springframework.boot,spring-boot-starter-web,3.5.16,compile,,4805,0,"Apache License, Version 2.0",spring-boot-starter-web-3.5.16.pom,0,,,,OSV.dev querybatch
+org.springframework.boot,spring-boot-starter,3.5.16,compile,,4770,0,"Apache License, Version 2.0",spring-boot-starter-3.5.16.pom,0,,,,OSV.dev querybatch
+org.springframework.boot,spring-boot,3.5.16,compile,,1904513,1136,"Apache License, Version 2.0",spring-boot-3.5.16.pom,0,,,,OSV.dev querybatch
+org.springframework.boot,spring-boot-autoconfigure,3.5.16,compile,,2088460,1483,"Apache License, Version 2.0",spring-boot-autoconfigure-3.5.16.pom,0,,,,OSV.dev querybatch
+org.springframework.boot,spring-boot-starter-logging,3.5.16,compile,,4762,0,"Apache License, Version 2.0",spring-boot-starter-logging-3.5.16.pom,0,,,,OSV.dev querybatch
+ch.qos.logback,logback-classic,1.5.34,compile,,286757,178,EPL-2.0; LGPL-2.1-only,inherited from logback-parent-1.5.34,1,,,,OSV.dev querybatch
+ch.qos.logback,logback-core,1.5.34,compile,,645490,481,EPL-2.0; LGPL-2.1-only,inherited from logback-parent-1.5.34,1,,,,OSV.dev querybatch
+org.apache.logging.log4j,log4j-to-slf4j,2.26.1,compile,,24196,10,Apache-2.0,log4j-to-slf4j-2.26.1.pom,1,,,,OSV.dev querybatch
+org.apache.logging.log4j,log4j-api,2.26.1,compile,,351428,210,Apache-2.0,log4j-api-2.26.1.pom,1,,,,OSV.dev querybatch
+org.slf4j,jul-to-slf4j,2.0.18,compile,,6347,1,MIT,inherited from slf4j-bom-2.0.18,0,,,,OSV.dev querybatch
+org.yaml,snakeyaml,2.4,compile,,339825,234,"Apache License, Version 2.0",snakeyaml-2.4.pom,0,,,,OSV.dev querybatch
+org.springframework.boot,spring-boot-starter-tomcat,3.5.16,compile,,4794,0,"Apache License, Version 2.0",spring-boot-starter-tomcat-3.5.16.pom,0,,,,OSV.dev querybatch
+org.apache.tomcat.embed,tomcat-embed-core,10.1.61,compile,,3730033,1551,"Apache License, Version 2.0",tomcat-embed-core-10.1.61.pom,1,,,,OSV.dev querybatch
+org.apache.tomcat.embed,tomcat-embed-websocket,10.1.61,compile,,289804,179,"Apache License, Version 2.0",tomcat-embed-websocket-10.1.61.pom,1,,,,OSV.dev querybatch
+org.springframework,spring-web,6.2.19,compile,,2096068,1241,"Apache License, Version 2.0",spring-web-6.2.19.pom,0,,,,OSV.dev querybatch
+org.springframework,spring-beans,6.2.19,compile,,891594,452,"Apache License, Version 2.0",spring-beans-6.2.19.pom,0,,,,OSV.dev querybatch
+org.springframework,spring-webmvc,6.2.19,compile,,1095229,547,"Apache License, Version 2.0",spring-webmvc-6.2.19.pom,0,GHSA-j9f9-w8pj-32f8 GHSA-pc63-qcmh-9cmg,CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H,Spring Framework Server Sent Event stream corruption while rendering fragments || Spring Framework Improper Path Limitation in XsltView,OSV.dev querybatch
+org.springframework,spring-context,6.2.19,compile,,1359997,863,"Apache License, Version 2.0",spring-context-6.2.19.pom,0,,,,OSV.dev querybatch
+org.springframework,spring-expression,6.2.19,compile,,321254,156,"Apache License, Version 2.0",spring-expression-6.2.19.pom,0,,,,OSV.dev querybatch
+org.springframework.boot,spring-boot-starter-websocket,3.5.16,compile,,4785,0,"Apache License, Version 2.0",spring-boot-starter-websocket-3.5.16.pom,0,,,,OSV.dev querybatch
+org.springframework,spring-messaging,6.2.19,compile,,618779,338,"Apache License, Version 2.0",spring-messaging-6.2.19.pom,0,,,,OSV.dev querybatch
+org.springframework,spring-websocket,6.2.19,compile,,445410,236,"Apache License, Version 2.0",spring-websocket-6.2.19.pom,0,,,,OSV.dev querybatch
+org.springframework.boot,spring-boot-starter-json,3.5.16,compile,,4749,0,"Apache License, Version 2.0",spring-boot-starter-json-3.5.16.pom,0,,,,OSV.dev querybatch
+com.fasterxml.jackson.datatype,jackson-datatype-jdk8,2.22.3,compile,,36039,22,"The Apache Software License, Version 2.0",inherited from jackson-base-2.22.3,0,,,,OSV.dev querybatch
+com.fasterxml.jackson.datatype,jackson-datatype-jsr310,2.22.3,compile,,136875,64,"The Apache Software License, Version 2.0",inherited from jackson-base-2.22.3,0,,,,OSV.dev querybatch
+com.fasterxml.jackson.module,jackson-module-parameter-names,2.22.3,compile,,10184,4,"The Apache Software License, Version 2.0",inherited from jackson-base-2.22.3,0,,,,OSV.dev querybatch
+org.springframework.boot,spring-boot-starter-validation,3.5.16,compile,,4769,0,"Apache License, Version 2.0",spring-boot-starter-validation-3.5.16.pom,0,,,,OSV.dev querybatch
+org.apache.tomcat.embed,tomcat-embed-el,10.1.61,compile,,266006,155,"Apache License, Version 2.0",tomcat-embed-el-10.1.61.pom,1,,,,OSV.dev querybatch
+org.hibernate.validator,hibernate-validator,8.0.3.Final,compile,,1330712,905,Apache License 2.0,hibernate-validator-8.0.3.Final.pom,0,,,,OSV.dev querybatch
+jakarta.validation,jakarta.validation-api,3.0.2,compile,,93298,144,Apache License 2.0,jakarta.validation-api-3.0.2.pom,1,,,,OSV.dev querybatch
+org.jboss.logging,jboss-logging,3.6.3.Final,compile,,62672,35,Apache License 2.0,jboss-logging-3.6.3.Final.pom,1,,,,OSV.dev querybatch
+com.fasterxml,classmate,1.7.3,compile,,68249,44,"Apache License, Version 2.0",classmate-1.7.3.pom,1,,,,OSV.dev querybatch
+org.springframework.boot,spring-boot-starter-security,3.5.16,compile,,4744,0,"Apache License, Version 2.0",spring-boot-starter-security-3.5.16.pom,0,,,,OSV.dev querybatch
+org.springframework,spring-aop,6.2.19,compile,,420259,289,"Apache License, Version 2.0",spring-aop-6.2.19.pom,0,,,,OSV.dev querybatch
+org.springframework.security,spring-security-config,6.5.11,compile,,2108541,667,"Apache License, Version 2.0",spring-security-config-6.5.11.pom,0,,,,OSV.dev querybatch
+org.springframework.security,spring-security-web,6.5.11,compile,,1058459,694,"Apache License, Version 2.0",spring-security-web-6.5.11.pom,0,,,,OSV.dev querybatch
+org.springframework.security,spring-security-core,6.5.11,compile,,623144,424,"Apache License, Version 2.0",spring-security-core-6.5.11.pom,0,,,,OSV.dev querybatch
+org.springframework.security,spring-security-crypto,6.5.11,compile,,104854,52,"Apache License, Version 2.0",spring-security-crypto-6.5.11.pom,0,,,,OSV.dev querybatch
+org.springframework,spring-core,6.2.19,compile,,1983775,1199,"Apache License, Version 2.0",spring-core-6.2.19.pom,0,,,,OSV.dev querybatch
+org.springframework,spring-jcl,6.2.19,compile,,24495,15,"Apache License, Version 2.0",spring-jcl-6.2.19.pom,0,,,,OSV.dev querybatch
+org.springframework.boot,spring-boot-starter-actuator,3.5.16,compile,,4807,0,"Apache License, Version 2.0",spring-boot-starter-actuator-3.5.16.pom,0,,,,OSV.dev querybatch
+org.springframework.boot,spring-boot-actuator-autoconfigure,3.5.16,compile,,842766,565,"Apache License, Version 2.0",spring-boot-actuator-autoconfigure-3.5.16.pom,0,,,,OSV.dev querybatch
+org.springframework.boot,spring-boot-actuator,3.5.16,compile,,707758,514,"Apache License, Version 2.0",spring-boot-actuator-3.5.16.pom,0,,,,OSV.dev querybatch
+io.micrometer,micrometer-observation,1.15.12,compile,,76264,60,"The Apache Software License, Version 2.0",micrometer-observation-1.15.12.pom,0,,,,OSV.dev querybatch
+io.micrometer,micrometer-commons,1.15.12,compile,,49155,36,"The Apache Software License, Version 2.0",micrometer-commons-1.15.12.pom,0,,,,OSV.dev querybatch
+io.micrometer,micrometer-jakarta9,1.15.12,compile,,32795,24,"The Apache Software License, Version 2.0",micrometer-jakarta9-1.15.12.pom,0,,,,OSV.dev querybatch
+io.micrometer,micrometer-registry-prometheus,1.15.12,compile,,42457,18,"The Apache Software License, Version 2.0",micrometer-registry-prometheus-1.15.12.pom,0,,,,OSV.dev querybatch
+io.micrometer,micrometer-core,1.15.12,compile,,866856,533,"The Apache Software License, Version 2.0",micrometer-core-1.15.12.pom,0,,,,OSV.dev querybatch
+org.hdrhistogram,HdrHistogram,2.2.2,runtime,,177206,97,"Public Domain, per Creative Commons CC0; BSD-2-Clause",HdrHistogram-2.2.2.pom,0,,,,OSV.dev querybatch
+org.latencyutils,LatencyUtils,2.0.3,runtime,,29779,22,"Public Domain, per Creative Commons CC0",LatencyUtils-2.0.3.pom,0,,,,OSV.dev querybatch
+io.prometheus,prometheus-metrics-core,1.3.10,compile,,96261,60,"The Apache Software License, Version 2.0",inherited from client_java_parent-1.3.10,0,,,,OSV.dev querybatch
+io.prometheus,prometheus-metrics-model,1.3.10,compile,,90912,78,"The Apache Software License, Version 2.0",inherited from client_java_parent-1.3.10,0,,,,OSV.dev querybatch
+io.prometheus,prometheus-metrics-config,1.3.10,compile,,33388,23,"The Apache Software License, Version 2.0",inherited from client_java_parent-1.3.10,0,,,,OSV.dev querybatch
+io.prometheus,prometheus-metrics-tracer-common,1.3.10,compile,,3282,1,"The Apache Software License, Version 2.0",inherited from client_java_parent-1.3.10,0,,,,OSV.dev querybatch
+io.prometheus,prometheus-metrics-exposition-formats,1.3.10,runtime,,2097175,810,"The Apache Software License, Version 2.0",inherited from client_java_parent-1.3.10,0,,,,OSV.dev querybatch
+io.prometheus,prometheus-metrics-exposition-textformats,1.3.10,runtime,,23349,10,"The Apache Software License, Version 2.0",inherited from client_java_parent-1.3.10,0,,,,OSV.dev querybatch
+org.codehaus.janino,janino,3.1.12,compile,,956369,519,BSD-3-Clause,inherited from janino-parent-3.1.12,0,,,,OSV.dev querybatch
+org.codehaus.janino,commons-compiler,3.1.12,compile,,171943,144,BSD-3-Clause,inherited from janino-parent-3.1.12,0,,,,OSV.dev querybatch
+jakarta.annotation,jakarta.annotation-api,2.1.1,compile,,26141,18,EPL 2.0; GPL2 w/ CPE,jakarta.annotation-api-2.1.1.pom,1,,,,OSV.dev querybatch
+io.jsonwebtoken,jjwt-api,0.11.5,compile,,77457,81,"Apache License, Version 2.0",inherited from jjwt-root-0.11.5,0,,,,OSV.dev querybatch
+io.jsonwebtoken,jjwt-impl,0.11.5,runtime,,80670,63,"Apache License, Version 2.0",inherited from jjwt-root-0.11.5,0,,,,OSV.dev querybatch
+io.jsonwebtoken,jjwt-jackson,0.11.5,runtime,,8238,4,"Apache License, Version 2.0",inherited from jjwt-root-0.11.5,0,,,,OSV.dev querybatch
+org.eclipse.paho,org.eclipse.paho.client.mqttv3,1.2.5,compile,,241861,110,Eclipse Public License - Version 2.0,inherited from java-parent-1.2.5,0,,,,OSV.dev querybatch
+org.eclipse.californium,californium-core,3.10.0,compile,,562312,295,Eclipse Public License - Version 2.0; Eclipse Distribution License - Version 1.0,inherited from parent-3.10.0,0,,,,OSV.dev querybatch
+org.eclipse.californium,californium-legal,3.10.0,runtime,,41748,0,Eclipse Public License - Version 2.0; Eclipse Distribution License - Version 1.0,inherited from parent-3.10.0,0,,,,OSV.dev querybatch
+org.eclipse.californium,element-connector,3.10.0,compile,,363565,182,Eclipse Public License - Version 2.0; Eclipse Distribution License - Version 1.0,inherited from parent-3.10.0,0,,,,OSV.dev querybatch
+com.dylibso.chicory,runtime,1.0.0,compile,,81027,37,Apache-2.0,inherited from chicory-1.0.0,0,,,,OSV.dev querybatch
+com.dylibso.chicory,wasm,1.0.0,compile,,134028,86,Apache-2.0,inherited from chicory-1.0.0,0,,,,OSV.dev querybatch
+org.msgpack,jackson-dataformat-msgpack,0.9.12,compile,,38670,28,Apache-2.0,jackson-dataformat-msgpack-0.9.12.pom,0,,,,OSV.dev querybatch
+org.msgpack,msgpack-core,0.9.12,compile,,126925,106,Apache-2.0,msgpack-core-0.9.12.pom,0,,,,OSV.dev querybatch

@@ -22,6 +22,9 @@ import java.util.List;
  */
 public class SSLUtils {
 
+    /** [HC-006] System property that re-enables trust-all for legacy network TESTS only. */
+    public static final String INSECURE_TEST_PROPERTY = "hybridchain.tls.insecureForTests";
+
     /**
      * Create SSLContext with a CA-signed node certificate.
      * This is the recommended method for production mTLS where a CA exists.
@@ -96,7 +99,15 @@ public class SSLUtils {
         trustStore.setCertificateEntry("self", cert);
 
         TrustManager[] trustManagers;
-        if (trustedCerts == null || trustedCerts.isEmpty()) {
+        // [HC-006] An empty trust list used to install a trust-ALL manager: any certificate from
+        // anyone was accepted, on every legacy-constructed node. Now an empty list means "trust
+        // only our own certificate" (PKIX via the trust store above). Trust-all survives only as an
+        // explicit, loudly logged opt-in for legacy network tests; production never sets it.
+        boolean insecureForTests = Boolean.getBoolean(INSECURE_TEST_PROPERTY);
+        if (insecureForTests && (trustedCerts == null || trustedCerts.isEmpty())) {
+            org.slf4j.LoggerFactory.getLogger(SSLUtils.class).warn(
+                    "[TLS] {}=true: accepting ANY peer certificate. TEST ONLY - never set this in production.",
+                    INSECURE_TEST_PROPERTY);
             trustManagers = new TrustManager[]{new X509TrustManager() {
                 @Override
                 public void checkClientTrusted(X509Certificate[] chain, String authType) {

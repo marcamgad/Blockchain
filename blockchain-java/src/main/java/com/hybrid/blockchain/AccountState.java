@@ -55,7 +55,9 @@ public class AccountState {
     }
 
     public AccountState(Map<String, Account> obj) {
-        this.state = new HashMap<>(obj);
+        // [HC-034] concurrent, like the no-arg constructor: a restarted/cloned state was a plain
+        // HashMap read by REST threads without the chain lock
+        this.state = new ConcurrentHashMap<>(obj);
         this.mpt = new MerklePatriciaTrie();
         for (Map.Entry<String, Account> entry : obj.entrySet()) {
             updateMpt(entry.getKey(), entry.getValue());
@@ -212,6 +214,7 @@ public class AccountState {
      * @return native token balance
      */
     public long getBalance(String addr) {
+        if (addr == null) return 0;   // [HC-034] ConcurrentHashMap rejects null keys
         Account acc = state.get(addr);
         return acc != null ? acc.getBalance() : 0;
     }
@@ -256,6 +259,7 @@ public class AccountState {
      * @param amount  the amount to credit
      */
     public void creditToken(String addr, String tokenId, long amount) {
+        if (amount < 0) throw new IllegalArgumentException("Invalid amount: cannot credit negative amount");   // [HC-033]
         ensure(addr);
         Account acc = state.get(addr);
         acc.creditToken(tokenId, amount);
@@ -303,6 +307,7 @@ public class AccountState {
      * @return the token balance, or 0 if not found
      */
     public long getTokenBalance(String addr, String tokenId) {
+        if (addr == null) return 0;
         Account acc = state.get(addr);
         return acc != null ? acc.getTokenBalance(tokenId) : 0;
     }
@@ -321,12 +326,13 @@ public class AccountState {
     // ─── Other accessors ─────────────────────────────────────────────────────
 
     public long getNonce(String addr) {
+        if (addr == null) return 0;
         Account acc = state.get(addr);
         return acc != null ? acc.getNonce() : 0;
     }
 
     public Account getAccount(String addr) {
-        return state.get(addr);
+        return addr == null ? null : state.get(addr);
     }
 
     public byte[] getSerializedAccount(String addr) {
@@ -427,6 +433,7 @@ public class AccountState {
     public PrivateDataManager getPrivateDataManager() { return privateDataManager; }
 
     public byte[] getCommitment(String addr) {
+        if (addr == null) return null;
         Account acc = state.get(addr);
         return acc != null ? acc.getCommitment() : null;
     }
@@ -482,7 +489,7 @@ public class AccountState {
      * @return a list of serialized MPT nodes for the account
      */
     public java.util.List<byte[]> getAccountProof(String address) {
-        return mpt.getAccountProof(address.getBytes());
+        return mpt.getAccountProof(address.getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
     /**
@@ -492,7 +499,7 @@ public class AccountState {
      * @return a single byte array containing all proof nodes
      */
     public byte[] getCompactAccountProof(String address) {
-        return mpt.getCompactAccountProof(address.getBytes());
+        return mpt.getCompactAccountProof(address.getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
     public AccountState cloneState() {
@@ -582,6 +589,25 @@ public class AccountState {
             java.io.DataOutputStream dos = new java.io.DataOutputStream(baos);
 
             dos.writeLong(acc.getBalance());
+            // [HC-028] Custom-token balances, the ZK ownership commitment and the ABI are
+            // consensus-relevant, but were not committed: two states differing only in them had
+            // the same root. Encoded deterministically (tokens sorted by id, length-prefixed UTF-8).
+            java.util.TreeMap<String, Long> tokens = new java.util.TreeMap<>(acc.getTokenBalances());
+            tokens.remove("native");
+            tokens.values().removeIf(v -> v == null || v == 0L);   // a zero balance == absent
+            dos.writeInt(tokens.size());
+            for (Map.Entry<String, Long> t : tokens.entrySet()) {
+                byte[] id = t.getKey().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                dos.writeInt(id.length);
+                dos.write(id);
+                dos.writeLong(t.getValue());
+            }
+            byte[] commitment = acc.getCommitment();
+            dos.writeInt(commitment == null ? 0 : commitment.length);
+            if (commitment != null) dos.write(commitment);
+            byte[] abi = acc.getAbi();
+            dos.writeInt(abi == null ? 0 : abi.length);
+            if (abi != null) dos.write(abi);
             dos.writeLong(acc.getNonce());
             dos.writeDouble(acc.getReputation()); // FIX 4: persistent reputation in state root
 
@@ -688,7 +714,7 @@ public class AccountState {
 
         /** Credits the native token. */
         public synchronized void credit(long amount) {
-            tokenBalances.merge("native", amount, (a, b) -> a + b);
+            tokenBalances.merge("native", amount, Math::addExact);   // [HC-033] overflow throws, never wraps
         }
 
         /** Sets a specific token balance. */
@@ -698,7 +724,7 @@ public class AccountState {
 
         /** Credits a specific token. */
         public synchronized void creditToken(String tokenId, long amount) {
-            tokenBalances.merge(tokenId, amount, (a, b) -> a + b);
+            tokenBalances.merge(tokenId, amount, Math::addExact);    // [HC-033]
         }
 
         /** Debits the native token (no balance check). */

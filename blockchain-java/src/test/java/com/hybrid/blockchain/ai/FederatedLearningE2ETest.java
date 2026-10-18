@@ -61,7 +61,7 @@ public class FederatedLearningE2ETest {
         // Submit COMMIT
         String modelHash = manager.getCurrentModelHash();
         Transaction commitTx = new Transaction.Builder()
-                .type(Transaction.Type.FEDERATED_COMMIT)
+                .type(Transaction.Type.FEDERATED_COMMIT).fee(10)   /* [HC-033] fee >= baseFee */
                 .from(tb.getValidatorKey().getAddress())
                 .data(modelHash.getBytes())
                 .nonce(tb.getBlockchain().getAccountState().getNonce(tb.getValidatorKey().getAddress()) + 1)
@@ -134,16 +134,19 @@ public class FederatedLearningE2ETest {
     @DisplayName("C1.6: FEDERATED_COMMIT can distribute full model payload")
     public void testFederatedCommitPayloadDistributesModel() throws Exception {
         TestKeyPair validator = tb.getValidatorKey();
+        tb.getBlockchain().getAccountState().credit(validator.getAddress(), 1000);   // pays the fee (HC-033)
 
         Map<String, Object> payload = new HashMap<>();
-        payload.put("modelHash", "feedface00112233");
+        // [HC-051] the hash must be the real hash of the weights
+        String realHash = FederatedLearningManager.modelHash(new double[]{9.0, 8.0, 7.0});
+        payload.put("modelHash", realHash);
         payload.put("model", List.of(9.0, 8.0, 7.0));
         payload.put("round", 5);
         payload.put("contributors", 3);
 
         byte[] jsonPayload = new ObjectMapper().writeValueAsBytes(payload);
         Transaction commitTx = new Transaction.Builder()
-                .type(Transaction.Type.FEDERATED_COMMIT)
+                .type(Transaction.Type.FEDERATED_COMMIT).fee(10)   /* [HC-033] fee >= baseFee */
                 .from(validator.getAddress())
                 .data(jsonPayload)
                 .nonce(tb.getBlockchain().getAccountState().getNonce(validator.getAddress()) + 1)
@@ -152,9 +155,9 @@ public class FederatedLearningE2ETest {
 
         BlockApplier.createAndApplyBlock(tb, Collections.singletonList(commitTx));
 
-        assertThat(manager.getCurrentModelHash()).isEqualTo("feedface00112233");
+        assertThat(manager.getCurrentModelHash()).isEqualTo(realHash);
         assertThat(manager.getCurrentModel()).containsExactly(9.0, 8.0, 7.0);
-        assertThat(tb.getStorage().getMeta("federated:latest:hash")).isEqualTo("feedface00112233");
+        assertThat(tb.getStorage().getMeta("federated:latest:hash")).isEqualTo(realHash);
     }
 
     private Transaction createUpdateTx(TestKeyPair kp, double[] weights, long nonce) throws Exception {

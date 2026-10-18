@@ -107,14 +107,13 @@ public class UTXOSetCompleteTest {
             
             // Attempt to apply a block with both
             // BlockApplier.createAndApplyBlock will catch the simulation error
-            Block block = BlockApplier.createAndApplyBlock(tb, List.of(tx1, tx2));
-            
-            TransactionReceipt r1 = chain.getStorage().loadReceipt(tx1.getTxId());
-            TransactionReceipt r2 = chain.getStorage().loadReceipt(tx2.getTxId());
-            
-            assertThat(r1.getStatus()).as("First spend should succeed").isEqualTo(TransactionReceipt.STATUS_SUCCESS);
-            assertThat(r2.getStatus()).as("Second spend should fail").isEqualTo(TransactionReceipt.STATUS_FAILED);
-            assertThat(r2.getError()).as("Error should indicate UTXO unavailable").contains("UTXO not found");
+            // [HC-017] a block containing an inapplicable transaction is invalid as a whole
+            // (previously tx2 got a FAILED receipt while its unpaid fee was credited)
+            int heightBefore = chain.getHeight();
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> BlockApplier.createAndApplyBlock(tb, List.of(tx1, tx2)))
+                    .hasMessageContaining("UTXO not found");
+            assertThat(chain.getHeight()).as("double-spend block must not be applied").isEqualTo(heightBefore);
+            assertThat(chain.getUTXOSet().isUnspent(seedTx, 0)).as("seed output untouched").isTrue();
         }
     }
 }

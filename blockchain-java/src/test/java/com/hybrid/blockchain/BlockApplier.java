@@ -77,18 +77,8 @@ public class BlockApplier {
             simState.credit(feeTarget, totalFees);
         }
         
-        // 4. Simulate slashing (if any)
-        for (String slashedId : consensus.getSlashedValidators()) {
-            try {
-                long penalty = 1000;
-                long validatorBalance = simState.getBalance(slashedId);
-                long actualBurn = Math.min(validatorBalance, penalty);
-                if (actualBurn > 0) {
-                    simState.debit(slashedId, actualBurn);
-                }
-            } catch (Exception ignored) {}
-        }
-        
+        // 4. [HC-019] node-local slashing is no longer part of the state transition
+
         // 5. Note: We don't simulate deferred actions since they only commit after finality (chain.size() >= 7)
                 
         String stateRoot = simState.calculateStateRoot();

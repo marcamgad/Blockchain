@@ -186,7 +186,8 @@ public class BlockStructureTest {
     @DisplayName("B1.11 — stateRoot mismatch is detected")
     void testStateRootMismatch() throws Exception {
         Block last = blockchain.getLatestBlock();
-        Block b = new Block(last.getIndex() + 1, System.currentTimeMillis(), List.of(), last.getHash(), 1, "WRONG_STATE");
+        // parent + 1: a wall-clock read can equal the genesis millisecond (flaky "timestamp older" error)
+        Block b = new Block(last.getIndex() + 1, last.getTimestamp() + 1, List.of(), last.getHash(), 1, "WRONG_STATE");
         b.setValidatorId(tb.getValidatorKey().getAddress());
         b.setSignature(Crypto.sign(Crypto.hash(b.serializeCanonical()), tb.getValidatorKey().getPrivateKey()));
         

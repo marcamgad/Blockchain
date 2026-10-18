@@ -72,7 +72,15 @@ public class PeerManager {
     private final Map<String, PeerInfo> peers = new ConcurrentHashMap<>();
     private final Set<String> bannedIps = ConcurrentHashMap.newKeySet();
     private static final int MAX_PEERS = 50;
-    public static final int MIN_PEERS = Integer.parseInt(System.getProperty("MIN_PEERS", "4"));
+    /**
+     * [HC-001] Minimum connected peers before gossip is sent. The old default of 4 exceeded the
+     * 3 peers each node has in the minimum PBFT network (n = 4), so no vote, block or tx was ever
+     * sent unless the test-only -DMIN_PEERS=1 override was present. Withholding messages does not
+     * protect against eclipse (that is peer authorisation, HC-011); default 1, overridable with
+     * -DMIN_PEERS or the MIN_PEERS environment variable.
+     */
+    public static final int MIN_PEERS = Math.max(1, Integer.parseInt(
+            System.getProperty("MIN_PEERS", System.getenv().getOrDefault("MIN_PEERS", "1"))));
 
     private final Map<String, Long> slashedNodes = new ConcurrentHashMap<>(); // ID -> slashedUntil
 

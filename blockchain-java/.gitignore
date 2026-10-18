@@ -82,3 +82,6 @@ temp/
 # TLA+ model checker (auto-downloaded by docs/formal/run_tlc.sh)
 tla2tools.jar
 docs/formal/states/
+
+# LevelDB data written by tests / local runs
+test-batch-data/

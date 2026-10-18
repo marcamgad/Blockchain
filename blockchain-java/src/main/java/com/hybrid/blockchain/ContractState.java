@@ -51,12 +51,14 @@ public class ContractState {
 
     public List<byte[]> getStorageProof(long key) {
         byte[] kb = ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN).putLong(key).array();
-        return storageMpt.getAccountProof(Crypto.hash(kb));
+        // values live at path H(kb) (see put); getAccountProof hashes its argument itself, so pass
+        // the raw key - passing H(kb) looked at H(H(kb)) and no proof ever verified
+        return storageMpt.getAccountProof(kb);
     }
 
     public static boolean verifyStorageProof(long key, long expectedValue, List<byte[]> proof, byte[] stateRoot) {
         byte[] kb = ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN).putLong(key).array();
         byte[] vb = ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN).putLong(expectedValue).array();
-        return MerklePatriciaTrie.verifyAccountProof(Crypto.hash(kb), vb, proof, stateRoot);
+        return MerklePatriciaTrie.verifyAccountProof(kb, vb, proof, stateRoot);   // hashes kb itself
     }
 }

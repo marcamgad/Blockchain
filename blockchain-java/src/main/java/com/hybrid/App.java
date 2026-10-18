@@ -55,8 +55,9 @@ public class App {
         log.info("Validators initialized: {}", validators.size());
 
         // 4. Initialize Certificate Authority for mTLS
-        // The CA is deterministically derived from STORAGE_AES_KEY, ensuring consistency across nodes
-        CertificateAuthority ca = new CertificateAuthority(Config.STORAGE_AES_KEY);
+        // [HC-003] The CA is derived from NETWORK_CA_SEED (same on every node), NOT from the
+        // per-node disk-encryption key
+        CertificateAuthority ca = new CertificateAuthority(Config.requireNetworkCaSeed());
         X509Certificate caCert = ca.getCACertificate();
         log.info("[mTLS] CA initialized with root certificate CN={}", caCert.getSubjectX500Principal().getName());
 
@@ -129,8 +130,8 @@ public class App {
                 try {
                     peerNode.broadcastPeerList();
                     log.debug("[SEED] Broadcast peer list ({} known peers)", peerNode.getPeers().size());
-                } catch (Exception e) {
-                    log.warn("[SEED] Peer-list broadcast failed: {}", e.getMessage());
+                } catch (Throwable t) {   // keep the periodic task alive (see proposer)
+                    log.warn("[SEED] Peer-list broadcast failed: {}", t.getMessage());
                 }
             }, 30_000L, 30_000L, TimeUnit.MILLISECONDS);
             log.info("[SEED] Peer-list broadcast enabled (every 30 s)");
@@ -144,7 +145,17 @@ public class App {
 
         // 18. Start Spring Boot API
 
-        SpringApplication.run(IoTRestAPI.class, args);
+        // [HC-009] Config.API_PORT was never passed to Spring (which always used 8080), and an API
+        // start failure left the node running with no API. Now API_PORT is Spring's default port
+        // (an explicit SERVER_PORT / server.port still takes precedence) and a failure exits.
+        SpringApplication api = new SpringApplication(IoTRestAPI.class);
+        api.setDefaultProperties(java.util.Map.of("server.port", String.valueOf(Config.API_PORT)));
+        try {
+            api.run(args);
+        } catch (Throwable t) {
+            log.error("[API] REST API failed to start on port {}: {} - shutting the node down", Config.API_PORT, t.getMessage());
+            System.exit(1);
+        }
     }
 
     /**
@@ -228,7 +239,7 @@ public class App {
                 if (blockchain.isPaused()) {
                     return;
                 }
-                if (pbft.getCurrentLeader().equals(nodeId)) {
+                if (nodeId.equals(pbft.getCurrentLeader())) {   // [HC-014] null-safe: no leader eligible -> skip slot
                     // Generate a new block
                     Block block = blockchain.createBlock(nodeId, Config.MAX_TRANSACTIONS_PER_BLOCK);
                     
@@ -258,8 +269,10 @@ public class App {
                     
                     log.info("[PROPOSER] Proposed block {} hash: {}", seq, hash);
                 }
-            } catch (Exception e) {
-                log.error("[PROPOSER] Error in block production: {}", e.getMessage(), e);
+            } catch (Throwable t) {
+                // catch Throwable: a periodic task that throws (incl. an Error) is cancelled
+                // silently by the executor, and this node would never propose again
+                log.error("[PROPOSER] Error in block production: {}", t.getMessage(), t);
             }
         }, Config.TARGET_BLOCK_TIME_MS, Config.TARGET_BLOCK_TIME_MS, TimeUnit.MILLISECONDS);
         

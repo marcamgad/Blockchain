@@ -105,8 +105,10 @@ public class SSIManager {
     public void transferOwnership(String did, String newOwner, byte[] signature) {
         DecentralizedIdentifier didDoc = resolveDID(did);
         // Verification: Current owner must sign the intent to transfer
-        // Message is: transfer:<did>:<newOwner>
-        byte[] message = ("transfer:" + did + ":" + newOwner).getBytes();
+        // [HC-040] Signed digest binds BOTH the DID and the new owner (domain-separated,
+        // length-prefixed). The old raw "transfer:<did>:<newOwner>" string was truncated to its
+        // first 32 bytes by ECDSA, so the signature never covered newOwner.
+        byte[] message = transferOwnershipDigest(did, newOwner);
 
         if (!didDoc.verifySignature(message, signature)) {
             throw new SecurityException("Invalid ownership transfer signature for " + did);
@@ -123,7 +125,7 @@ public class SSIManager {
         DecentralizedIdentifier masterDoc = resolveDID(masterDid);
         resolveDID(delegateDid);
 
-        byte[] message = ("delegate:" + masterDid + ":" + delegateDid).getBytes();
+        byte[] message = delegationDigest(masterDid, delegateDid);   // [HC-040]
         if (!masterDoc.verifySignature(message, masterSignature)) {
             throw new SecurityException("Invalid delegation signature from master " + masterDid);
         }
@@ -326,5 +328,15 @@ public class SSIManager {
         int totalCredentials = credentialStore.values().stream().mapToInt(List::size).sum();
         stats.put("totalCredentials", totalCredentials);
         return stats;
+    }
+
+    /** The digest a DID controller signs to transfer ownership of {@code did} to {@code newOwner}. */
+    public static byte[] transferOwnershipDigest(String did, String newOwner) {
+        return com.hybrid.blockchain.Crypto.hashWithDomain("HC-SSI-TRANSFER-v1", did, newOwner);
+    }
+
+    /** The digest a master DID signs to delegate to {@code delegateDid}. */
+    public static byte[] delegationDigest(String masterDid, String delegateDid) {
+        return com.hybrid.blockchain.Crypto.hashWithDomain("HC-SSI-DELEGATE-v1", masterDid, delegateDid);
     }
 }

@@ -29,16 +29,14 @@ public class PrunedBlockchain extends Blockchain {
 
             Block old = ((LinkedList<Block>) chain).removeFirst();
 
-            storage.del("block:" + old.getHash());
+            // [HC-031] delete the body under its real key, its height index and its snapshot.
+            // The previous code deleted a key that never existed and then wrote a FULL snapshot of
+            // the current state labelled with the old height (which also reset lastSnapshotHeight).
+            storage.deleteBlock(old.getHash());
             storage.del("height:" + old.getIndex());
+            storage.del("snapshot:" + old.getIndex());
 
             log.info("[PRUNE] Removed block {}", old.getIndex());
-
-            storage.saveSnapshot(
-                old.getIndex(),
-                state.toJSON(),
-                utxo.toJSON()
-            );
         } catch (Exception e) {
             throw new RuntimeException("Pruning failed", e);
         }

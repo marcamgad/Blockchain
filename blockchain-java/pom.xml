@@ -13,7 +13,71 @@
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- Audit PoC tests (docs/audit) FAIL by design until each finding is fixed. Excluded from
+             the default build; run with: mvn -o test -Dtest=HybridChainAuditPoCTest -Daudit.excluded=none -->
+        <audit.excluded>audit-poc</audit.excluded>
+        <spring-boot.version>3.5.16</spring-boot.version>
+        <tomcat.override.version>10.1.61</tomcat.override.version>
+        <pit.target>com.hybrid.blockchain.Crypto</pit.target>
+        <pit.name>default</pit.name>
     </properties>
+
+    <!-- Dependency versions (audit Ops/Deps, OSV.dev): the Spring Boot BOM manages Spring,
+         Spring Security, Tomcat, Jackson, Logback, Micrometer, JUnit, Mockito ... as one tested set.
+         Non-BOM pins below are security upgrades of transitive libraries. -->
+    <dependencyManagement>
+        <dependencies>
+            <!-- Overrides declared BEFORE the Spring Boot BOM win. Each fixes OSV advisories still
+                 present in Boot 3.5.16's managed versions (audit Ops/Deps). -->
+            <dependency>
+                <groupId>com.fasterxml.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>2.22.3</version> <!-- 2.22.4 is a core-only patch: datatype modules not published -->
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.logging.log4j</groupId>
+                <artifactId>log4j-bom</artifactId>
+                <version>2.26.1</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-lang3</artifactId>
+                <version>3.21.0</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.tomcat.embed</groupId>
+                <artifactId>tomcat-embed-core</artifactId>
+                <version>${tomcat.override.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.tomcat.embed</groupId>
+                <artifactId>tomcat-embed-websocket</artifactId>
+                <version>${tomcat.override.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.tomcat.embed</groupId>
+                <artifactId>tomcat-embed-el</artifactId>
+                <version>${tomcat.override.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- transitive via leveldb; 21.0 has OSV advisories -->
+            <dependency>
+                <groupId>com.google.guava</groupId>
+                <artifactId>guava</artifactId>
+                <version>33.3.1-jre</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
 
@@ -23,7 +87,6 @@
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
-            <version>2.17.1</version>
         </dependency>
 
         <!-- ========================================================= -->
@@ -32,7 +95,6 @@
         <dependency>
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-lang3</artifactId>
-            <version>3.13.0</version>
         </dependency>
 
         <!-- ========================================================= -->
@@ -41,27 +103,21 @@
         <dependency>
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcprov-jdk18on</artifactId>
-            <version>1.78.1</version>
+            <version>1.86</version>
         </dependency>
         <dependency>
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcpkix-jdk18on</artifactId>
-            <version>1.78.1</version>
+            <version>1.86</version>
         </dependency>
 
         <!-- ========================================================= -->
         <!--  Networking (P2P layer will use Netty)                    -->
         <!-- ========================================================= -->
-        <dependency>
-            <groupId>io.netty</groupId>
-            <artifactId>netty-all</artifactId>
-            <version>4.1.98.Final</version>
-        </dependency>
 
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
-            <version>2.0.9</version>
         </dependency>                                            
         <!-- ========================================================= -->
         <!--  LevelDB (pure Java and JNI bindings)                     -->
@@ -84,25 +140,21 @@
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
-            <version>5.9.3</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-params</artifactId>
-            <version>5.9.3</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.awaitility</groupId>
             <artifactId>awaitility</artifactId>
-            <version>4.2.1</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.assertj</groupId>
             <artifactId>assertj-core</artifactId>
-            <version>3.26.3</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -114,68 +166,57 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
-            <version>3.2.1</version> <!-- latest stable version -->
         </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-websocket</artifactId>
-            <version>3.2.1</version>
         </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-json</artifactId>
-            <version>3.2.1</version>
         </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-validation</artifactId>
-            <version>3.2.1</version>
         </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security</artifactId>
-            <version>3.2.1</version>
         </dependency>
 
         <dependency>
             <groupId>org.springframework.security</groupId>
             <artifactId>spring-security-test</artifactId>
-            <version>6.2.1</version>
             <scope>test</scope>
         </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
-            <version>3.2.1</version>
         </dependency>
 
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-registry-prometheus</artifactId>
-            <version>1.12.0</version>
         </dependency>
         
         <dependency>
             <groupId>org.codehaus.janino</groupId>
             <artifactId>janino</artifactId>
-            <version>3.1.10</version>
         </dependency>
 
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>
-            <version>5.14.2</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-junit-jupiter</artifactId>
-            <version>5.14.2</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -187,19 +228,16 @@
         <dependency>
             <groupId>net.bytebuddy</groupId>
             <artifactId>byte-buddy</artifactId>
-            <version>1.15.10</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>net.bytebuddy</groupId>
             <artifactId>byte-buddy-agent</artifactId>
-            <version>1.15.10</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
-            <version>3.2.1</version>
             <scope>test</scope>
             <exclusions>
                 <exclusion>
@@ -211,7 +249,6 @@
         <dependency>
             <groupId>jakarta.annotation</groupId>
             <artifactId>jakarta.annotation-api</artifactId>
-            <version>2.1.1</version>
         </dependency>
         <dependency>
             <groupId>io.jsonwebtoken</groupId>
@@ -269,7 +306,7 @@
         <dependency>
             <groupId>org.msgpack</groupId>
             <artifactId>jackson-dataformat-msgpack</artifactId>
-            <version>0.9.8</version>
+            <version>0.9.12</version>
         </dependency>
     </dependencies>
 
@@ -279,19 +316,26 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
-                <version>2.22.2</version>
+                <version>3.5.3</version> <!-- 2.22.2 cannot launch JUnit Platform 1.12 (0 tests ran) -->
                 <configuration>
                     <!-- Disabled parallel to avoid cross-test state pollution (LevelDB locks, static state) -->
                     <forkCount>1</forkCount>
                     <reuseForks>true</reuseForks>
-                    <argLine>${argLine} -Xmx2g -XX:+UseG1GC -DDEBUG=true -DREQUIRE_QUANTUM_SIG=false -DMIN_PEERS=1 -DSTORAGE_AES_KEY=00112233445566778899aabbccddeeff -Dnet.bytebuddy.experimental=true --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.io=ALL-UNNAMED</argLine>
+                    <!-- [HC-015] -DREQUIRE_QUANTUM_SIG=false is the opposite of the production default:
+                         most unit tests build EC-only transactions. The PRODUCTION rule (EC + ML-DSA
+                         required) is tested in a forked JVM by ProductionSignatureRuleTest; the whole
+                         suite under production defaults runs with -P audit-prod. -->
+                    <argLine>${argLine} -Xmx2g -XX:+UseG1GC -DDEBUG=true -DREQUIRE_QUANTUM_SIG=false -DSTORAGE_AES_KEY=00112233445566778899aabbccddeeff -Dnet.bytebuddy.experimental=true --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.io=ALL-UNNAMED</argLine>
                     <systemPropertyVariables>
                         <NODE_PRIVATE_KEY>1111111111111111111111111111111111111111111111111111111111111111</NODE_PRIVATE_KEY>
                     </systemPropertyVariables>
                     <includes>
                         <include>**/*Test.java</include>
                         <include>**/*Tests.java</include>
+                        <!-- security pentests were never run: *Pentest does not match *Test -->
+                        <include>**/*Pentest.java</include>
                     </includes>
+                    <excludedGroups>${audit.excluded}</excludedGroups>
                     <excludes>
                         <exclude>**/NetworkHardeningScanner.java</exclude>
                         <exclude>**/SeedCheck.java</exclude>
@@ -389,7 +433,7 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
-                <version>3.2.1</version>
+                <version>${spring-boot.version}</version>
                 <configuration>
                     <mainClass>com.hybrid.App</mainClass>
                 </configuration>
@@ -403,4 +447,171 @@
             </plugin>
         </plugins>
     </build>
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         AUDIT PROFILES (docs/audit). None is active by default; the normal build
+         is unchanged. Each produces evidence under target/ for audit/tools.
+         ══════════════════════════════════════════════════════════════════════ -->
+    <profiles>
+        <!-- Real suite under PRODUCTION consensus defaults: no -DMIN_PEERS=1 and
+             no -DREQUIRE_QUANTUM_SIG=false. Failures are recorded, not fatal. -->
+        <profile>
+            <id>audit-prod</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <argLine>${argLine} -Xmx2g -XX:+UseG1GC -DDEBUG=true -DSTORAGE_AES_KEY=00112233445566778899aabbccddeeff -Djdk.net.unixdomain.tmpdir=${project.build.directory} -Dnet.bytebuddy.experimental=true --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.io=ALL-UNNAMED</argLine>
+                            <testFailureIgnore>true</testFailureIgnore>
+                            <reportsDirectory>${project.build.directory}/surefire-reports-prod</reportsDirectory>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- Mutation testing on the security-critical core (pit.target / pit.name). -->
+        <profile>
+            <id>audit-pit</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.pitest</groupId>
+                        <artifactId>pitest-maven</artifactId>
+                        <version>1.15.3</version>
+                        <dependencies>
+                            <dependency>
+                                <groupId>org.pitest</groupId>
+                                <artifactId>pitest-junit5-plugin</artifactId>
+                                <version>1.2.1</version>
+                            </dependency>
+                        </dependencies>
+                        <configuration>
+                            <targetClasses>
+                                <param>${pit.target}</param>
+                            </targetClasses>
+                            <targetTests>
+                                <param>com.hybrid.blockchain.*</param>
+                            </targetTests>
+                            <excludedTestClasses>
+                                <param>com.hybrid.blockchain.audit.*</param>
+                                <param>*Benchmark</param>
+                                <param>*EdgeReadinessProbe</param>
+                                <param>*GossipNetworkTest</param>
+                                <param>*ByzantineFaultInjectionTest</param>
+                                <param>*MTLSSecureNetworkTest</param>
+                                <param>*ConcurrencyStress*</param>
+                                <param>*AdminEndpointsTest</param>
+                            </excludedTestClasses>
+                            <excludedGroups>
+                                <param>audit-poc</param>
+                                <param>benchmark</param>
+                            </excludedGroups>
+                            <threads>4</threads>
+                            <timeoutConstant>10000</timeoutConstant>
+                            <outputFormats>
+                                <param>XML</param>
+                                <param>CSV</param>
+                            </outputFormats>
+                            <timestampedReports>false</timestampedReports>
+                            <reportsDirectory>${project.build.directory}/pit-reports/${pit.name}</reportsDirectory>
+                            <jvmArgs>
+                                <value>-Xmx1g</value>
+                                <value>-DDEBUG=true</value>
+                                <value>-DREQUIRE_QUANTUM_SIG=false</value>
+                                <value>-DSTORAGE_AES_KEY=00112233445566778899aabbccddeeff</value>
+                                <value>-DNODE_PRIVATE_KEY=1111111111111111111111111111111111111111111111111111111111111111</value>
+                                <value>-Djdk.net.unixdomain.tmpdir=${project.build.directory}</value>
+                                <value>--add-opens</value><value>java.base/java.lang=ALL-UNNAMED</value>
+                                <value>--add-opens</value><value>java.base/java.util=ALL-UNNAMED</value>
+                            </jvmArgs>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- SpotBugs + FindSecBugs. -->
+        <profile>
+            <id>audit-static</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>com.github.spotbugs</groupId>
+                        <artifactId>spotbugs-maven-plugin</artifactId>
+                        <version>4.8.6.6</version>
+                        <configuration>
+                            <effort>Max</effort>
+                            <threshold>Low</threshold>
+                            <failOnError>false</failOnError>
+                            <xmlOutput>true</xmlOutput>
+                            <plugins>
+                                <plugin>
+                                    <groupId>com.h3xstream.findsecbugs</groupId>
+                                    <artifactId>findsecbugs-plugin</artifactId>
+                                    <version>1.13.0</version>
+                                </plugin>
+                            </plugins>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- Error Prone compile (overwrites target/classes; run a normal compile after). -->
+        <profile>
+            <id>audit-errorprone</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-compiler-plugin</artifactId>
+                        <configuration>
+                            <fork>true</fork>
+                            <showWarnings>true</showWarnings>
+                            <compilerArgs>
+                                <arg>-XDcompilePolicy=simple</arg>
+                                <arg>-Xmaxwarns</arg>
+                                <arg>100000</arg>
+                                <arg>-Xplugin:ErrorProne -XepDisableWarningsInGeneratedCode -XepAllErrorsAsWarnings</arg>
+                                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED</arg>
+                                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED</arg>
+                                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.main=ALL-UNNAMED</arg>
+                                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.model=ALL-UNNAMED</arg>
+                                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED</arg>
+                                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.processing=ALL-UNNAMED</arg>
+                                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED</arg>
+                                <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED</arg>
+                                <arg>-J--add-opens=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED</arg>
+                                <arg>-J--add-opens=jdk.compiler/com.sun.tools.javac.comp=ALL-UNNAMED</arg>
+                            </compilerArgs>
+                            <annotationProcessorPaths>
+                                <path>
+                                    <groupId>com.google.errorprone</groupId>
+                                    <artifactId>error_prone_core</artifactId>
+                                    <version>2.24.1</version>
+                                </path>
+                            </annotationProcessorPaths>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- CycloneDX SBOM. -->
+        <profile>
+            <id>audit-sbom</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.cyclonedx</groupId>
+                        <artifactId>cyclonedx-maven-plugin</artifactId>
+                        <version>2.7.11</version>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

@@ -19,6 +19,21 @@ public class GossipNetworkTest {
     private List<Integer> allocatedPorts;
     private File runDataRoot;
 
+    // [HC-006] this class tests GOSSIP, not TLS: it uses legacy self-signed node certificates and
+    // opts in to the test-only trust-all mode explicitly (production never sets this property).
+    @org.junit.jupiter.api.BeforeAll
+    static void allowTestTls() {
+        System.setProperty(com.hybrid.blockchain.security.SSLUtils.INSECURE_TEST_PROPERTY, "true");
+        // nodes beyond the 4 validators are observers in this gossip test (HC-011 opt-in)
+        System.setProperty("ALLOW_OBSERVER_PEERS", "true");
+    }
+
+    @org.junit.jupiter.api.AfterAll
+    static void restoreTls() {
+        System.clearProperty(com.hybrid.blockchain.security.SSLUtils.INSECURE_TEST_PROPERTY);
+        System.clearProperty("ALLOW_OBSERVER_PEERS");
+    }
+
     @BeforeEach
     public void setup() throws Exception {
         // Set mock private key for testing
@@ -32,12 +47,18 @@ public class GossipNetworkTest {
         runDataRoot = new File(System.getProperty("java.io.tmpdir"), "gossip-test-" + UUID.randomUUID());
         runDataRoot.mkdirs();
 
-        // PBFT requires 4 validators
+        // PBFT requires 4 validators. [HC-011] They must be the REAL keys of the first four
+        // nodes (the old setup used random public keys, so no node was actually a validator).
+        List<java.math.BigInteger> keys = new ArrayList<>();
+        for (int i = 0; i < NODE_COUNT; i++) {
+            byte[] keyBytes = new byte[32];
+            new java.security.SecureRandom().nextBytes(keyBytes);
+            keys.add(new java.math.BigInteger(1, keyBytes));
+        }
         Map<String, byte[]> validators = new HashMap<>();
         List<String> valIds = new ArrayList<>();
         for (int i = 0; i < 4; i++) {
-            byte[] pub = new byte[33];
-            new java.security.SecureRandom().nextBytes(pub);
+            byte[] pub = Crypto.derivePublicKey(keys.get(i));
             String id = Crypto.deriveAddress(pub);
             validators.put(id, pub);
             valIds.add(id);
@@ -52,10 +73,7 @@ public class GossipNetworkTest {
         }
 
         for (int i = 0; i < NODE_COUNT; i++) {
-            // Generate unique key for each node
-            byte[] keyBytes = new byte[32];
-            new java.security.SecureRandom().nextBytes(keyBytes);
-            java.math.BigInteger privKey = new java.math.BigInteger(1, keyBytes);
+            java.math.BigInteger privKey = keys.get(i);
             nodeKeys.add(privKey);
 
             // Use 16-byte key as required by Storage

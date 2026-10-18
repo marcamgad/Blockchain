@@ -57,12 +57,24 @@ public final class Config {
 
     // ─── Network & P2P ───────────────────────────────────────────────────────
     public static final int P2P_PORT = getIntEnv("P2P_PORT", 6001);
-    public static final int API_PORT = getIntEnv("API_PORT", 8000);
+    /** [HC-009] REST API port, now actually used (default 8080 = the documented port). */
+    public static final int API_PORT = getIntEnv("API_PORT", 8080);
     public static final long PEER_HEARTBEAT_INTERVAL_MS = 3000;
     public static final int MAX_PEERS = 50;
     public static final long MAX_TIMESTAMP_DRIFT = 15000; // 15 sec
     public static final long MAX_NONCE_ATTEMPTS = Long.MAX_VALUE / 2;
     public static final int NETWORK_ID = getIntEnv("NETWORK_ID", 101);
+    /**
+     * [HC-020] Genesis timestamp: part of the genesis block hash, so it must be identical on every
+     * node. Fixed protocol constant (2026-01-01T00:00:00Z), deliberately NOT read from the
+     * environment — a per-node value would give each node its own chain.
+     */
+    public static final long GENESIS_TIMESTAMP = 1_767_225_600_000L;
+    /**
+     * [HC-031] Number of most recent per-block state snapshots kept on disk. revertTip needs only
+     * the parent's; older ones were never deleted and grew storage by a full state copy per block.
+     */
+    public static final int SNAPSHOT_RETENTION = 16;
     public static final String PROTOCOL_VERSION = getEnv("PROTOCOL_VERSION", "1.0.0");
     public static final int MAX_FL_MODEL_BYTES = 10 * 1024 * 1024; // 10MB
     public static final int MIN_FL_CONTRIBUTORS = getIntEnv("MIN_FL_CONTRIBUTORS", 3);
@@ -119,6 +131,31 @@ public final class Config {
                 throw new RuntimeException("STORAGE_AES_KEY must be set in production mode!");
             }
         }
+    }
+
+    /**
+     * [HC-003] Seed of the network-wide mTLS certificate authority (hex, env/property
+     * NETWORK_CA_SEED, at least 32 bytes). It used to be STORAGE_AES_KEY, which forced every node
+     * to share its disk-encryption key and let anyone holding that key mint node certificates.
+     * Every node of one network sets the SAME value; it must differ from STORAGE_AES_KEY.
+     * In DEBUG a fixed development seed is used.
+     */
+    public static byte[] requireNetworkCaSeed() {
+        String hex = getEnv("NETWORK_CA_SEED", null);
+        byte[] seed;
+        if (hex != null && !hex.isBlank()) {
+            seed = HexUtils.decode(hex.trim());
+        } else if (getBooleanEnv("DEBUG", false)) {
+            seed = Crypto.hash("hybridchain-DEVELOPMENT-ONLY-network-ca-seed".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } else {
+            throw new IllegalStateException("NETWORK_CA_SEED must be set (hex, >= 32 bytes, same on every node, "
+                    + "different from STORAGE_AES_KEY)");
+        }
+        if (seed.length < 32)
+            throw new IllegalStateException("NETWORK_CA_SEED must be at least 32 bytes (64 hex chars)");
+        if (STORAGE_AES_KEY != null && java.util.Arrays.equals(seed, STORAGE_AES_KEY))
+            throw new IllegalStateException("NETWORK_CA_SEED must not equal STORAGE_AES_KEY");
+        return seed;
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────

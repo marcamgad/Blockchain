@@ -207,6 +207,14 @@ public class IoTRestAPI {
 
     @PostMapping("/account/create")
     public ResponseEntity<?> createAccount() throws Exception {
+        // [HC-053] This generates the account's PRIVATE KEY on the server and returns it in the
+        // HTTP response (the API is plain HTTP): the node operator and anyone on the path learn
+        // every key. Debug convenience only; real clients generate keys locally and submit signed
+        // transactions.
+        if (!Config.isDebug()) {
+            return ResponseEntity.status(403).body(Map.of("error",
+                    "account/create is disabled outside DEBUG: generate keys on the client"));
+        }
         // Production: Use BouncyCastle to ensure secp256k1
         org.bouncycastle.asn1.x9.X9ECParameters ecParams = org.bouncycastle.crypto.ec.CustomNamedCurves
             .getByName(Config.EC_CURVE);

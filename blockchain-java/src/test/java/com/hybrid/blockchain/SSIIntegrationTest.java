@@ -160,14 +160,14 @@ public class SSIIntegrationTest {
         String did = ssiManager.registerDID(deviceId, devicePublicKey, ownerAddress);
 
         // Sign a message with device key
-        byte[] message = "Test message".getBytes();
+        byte[] message = Crypto.hash("Test message".getBytes());
         byte[] signature = Crypto.sign(message, devicePrivateKey);
 
         // Verify signature using DID
         assertTrue(ssiManager.verifyDIDSignature(did, message, signature));
 
         // Verify wrong signature fails
-        byte[] wrongSignature = Crypto.sign("Wrong message".getBytes(), devicePrivateKey);
+        byte[] wrongSignature = Crypto.sign(Crypto.hash("Wrong message".getBytes()), devicePrivateKey);
         assertFalse(ssiManager.verifyDIDSignature(did, message, wrongSignature));
     }
 

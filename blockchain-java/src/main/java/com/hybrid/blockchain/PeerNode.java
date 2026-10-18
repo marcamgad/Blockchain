@@ -56,6 +56,41 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
     private final Map<Long, AtomicBoolean> sentCommits = new ConcurrentHashMap<>();
     private final Map<Integer, Checkpoint> pendingCheckpoints = new ConcurrentHashMap<>();
 
+    /** [HC-045] bounded list of discovered (unconnected) peers; never used as gossip targets */
+    static final int MAX_DISCOVERED_PEERS = 64;
+    private final Map<String, String> discoveredPeers = java.util.Collections.synchronizedMap(
+            new java.util.LinkedHashMap<String, String>(16, 0.75f, false) {
+                @Override protected boolean removeEldestEntry(Map.Entry<String, String> e) {
+                    return size() > MAX_DISCOVERED_PEERS;
+                }
+            });
+
+    void recordCandidate(String id, String address, int port) {
+        if (address == null || port <= 0 || port > 65535) return;
+        discoveredPeers.put(id, address + ":" + port);
+    }
+
+    /** Discovered peer candidates (id -> host:port), e.g. for an operator or a future dialer. */
+    public Map<String, String> getDiscoveredPeers() {
+        synchronized (discoveredPeers) { return new java.util.HashMap<>(discoveredPeers); }
+    }
+
+    /** [HC-012] unauthenticated-phase bounds */
+    static final int HANDSHAKE_TIMEOUT_MS = 10_000;
+    static final int MAX_PENDING_HANDSHAKES = 16;
+    private final java.util.concurrent.atomic.AtomicInteger pendingHandshakes = new java.util.concurrent.atomic.AtomicInteger();
+
+    /**
+     * [HC-011] Who may join after a successful handshake. Under PBFT: validators only, unless the
+     * operator explicitly allows read-only observer nodes (ALLOW_OBSERVER_PEERS=true).
+     */
+    boolean isAuthorisedPeer(String peerAddress) {
+        if (!(consensus instanceof PBFTConsensus)) return true;
+        if (consensus.isValidator(peerAddress)) return true;
+        String allow = System.getProperty("ALLOW_OBSERVER_PEERS", System.getenv("ALLOW_OBSERVER_PEERS"));
+        return Boolean.parseBoolean(allow);
+    }
+
     /**
      * Message types for peer-to-peer communication.
      */
@@ -65,7 +100,72 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
         REQUEST_BLOCKS, BLOCKS_RESPONSE, CHECKPOINT
     }
 
-    private static final int PROTOCOL_VERSION = 1;
+    // [HC-042] v2: handshake signatures are domain-separated (see handshakeDigest).
+    private static final int PROTOCOL_VERSION = 2;
+    /** [HC-043] A checkpoint matches our chain if we hold that block with that hash and state root. */
+    boolean matchesLocalChain(Checkpoint cp) {
+        Block local = blockchain.getStorage().loadBlockByHeight(cp.getBlockHeight());
+        return local != null && local.getHash().equals(cp.getBlockHash())
+                && local.getStateRoot() != null && local.getStateRoot().equals(cp.getStateRoot());
+    }
+
+    /**
+     * [HC-043] Adds to {@code pending} only the signatures in {@code incoming} that are by a known
+     * validator and verify over the SAME checkpoint content. Before, any signature map was merged
+     * unverified (and across different checkpoints of one height), so fabricated entries could
+     * "finalise" a checkpoint. Returns the number of signatures added.
+     */
+    int mergeVerifiedSignatures(Checkpoint pending, Checkpoint incoming) {
+        if (!pending.computeCheckpointHash().equals(incoming.computeCheckpointHash())) return 0;
+        byte[] digest = HexUtils.decode(pending.computeCheckpointHash());
+        int added = 0;
+        for (Map.Entry<String, String> e : incoming.getValidatorSignatures().entrySet()) {
+            Validator v = consensus.getValidators().stream()
+                    .filter(x -> x.getId().equals(e.getKey())).findFirst().orElse(null);
+            if (v == null || pending.getValidatorSignatures().containsKey(e.getKey())) continue;
+            if (Crypto.verify(digest, HexUtils.decode(e.getValue()), v.getPublicKey())) {
+                pending.getValidatorSignatures().put(e.getKey(), e.getValue());
+                added++;
+            }
+        }
+        return added;
+    }
+
+    /** HELLO body: version (4) + network id (4) + rule flags (4) + nonce (32). */
+    private static final int HELLO_LENGTH = 4 + 4 + 4 + 32;
+
+    /**
+     * [HC-008] Consensus-rule flags a node must agree on with its peers. REQUIRE_QUANTUM_SIG is read
+     * per node from the environment and changes which transactions are valid; two nodes configured
+     * differently would fork on the first EC-only transaction. Now they refuse to connect instead.
+     */
+    static int ruleFlags() {
+        return Config.REQUIRE_QUANTUM_SIG ? 1 : 0;
+    }
+
+    private static void checkRuleFlags(int remote) throws IOException {
+        if (remote != ruleFlags())
+            throw new IOException("Consensus rule mismatch (REQUIRE_QUANTUM_SIG local=" + Config.REQUIRE_QUANTUM_SIG
+                    + ", remote=" + ((remote & 1) == 1) + ")");
+    }
+
+    /** [HC-007] fixed CHALLENGE payload size: compressed secp256k1 key (33) + signature (64). */
+    private static final int CHALLENGE_LENGTH = 33 + 64;
+
+    /**
+     * [HC-042] Digest a node signs to prove key possession during the handshake.
+     *
+     * <p>Previously the node signed the peer-chosen 32-byte nonce directly with its consensus key.
+     * Because transaction payloads and block hashes are also 32-byte digests, a peer could send one
+     * of those as its "nonce" and receive a valid transaction or block signature. The domain tag
+     * makes a handshake signature unusable for anything else, and binding both identities and the
+     * network id stops it being relayed to a third party.
+     */
+    static byte[] handshakeDigest(byte[] nonce, String signerAddress, int networkId) {
+        return Crypto.hashWithDomain("HC-P2P-HANDSHAKE-v2", nonce,
+                signerAddress.getBytes(StandardCharsets.UTF_8),
+                java.nio.ByteBuffer.allocate(4).putInt(networkId).array());
+    }
 
     public PeerNode(int port, Blockchain blockchain, Consensus consensus) {
         this(port, blockchain, consensus, Config.getNodePrivateKey(), new ArrayList<>());
@@ -239,9 +339,13 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                 for (Map<String, Object> p : peerList) {
                     String id = (String) p.get("id");
                     String addr = (String) p.get("address");
-                    int port = (int) p.get("port");
-                    if (!id.equals(localAddress)) {
-                        peerManager.addPeer(id, addr, port);
+                    int port = ((Number) p.get("port")).intValue();
+                    // [HC-045] Discovered peers are only CANDIDATES. They used to be inserted into the
+                    // gossip peer table without any connection: they filled its 50 slots (so real
+                    // authenticated peers could no longer be added) and were picked as gossip
+                    // targets that silently dropped every message.
+                    if (id != null && !id.equals(localAddress)) {
+                        recordCandidate(id, addr, port);
                     }
                 }
             } catch (Exception e) {
@@ -305,7 +409,9 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                 
                 if (cp.getValidatorSignatures().isEmpty()) {
                     // This is a signature request
-                    if (consensus instanceof PBFTConsensus && ((PBFTConsensus) consensus).isValidator(localAddress)) {
+                    // [HC-043] sign only a checkpoint that matches OUR chain at that height
+                    if (consensus instanceof PBFTConsensus && ((PBFTConsensus) consensus).isValidator(localAddress)
+                            && matchesLocalChain(cp)) {
                         String hash = cp.computeCheckpointHash();
                         byte[] sig = Crypto.sign(HexUtils.decode(hash), privateKey);
                         cp.getValidatorSignatures().put(localAddress, HexUtils.encode(sig));
@@ -317,12 +423,14 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                     }
                 } else {
                     // This is a signature response or a finalized checkpoint
-                    Checkpoint pending = pendingCheckpoints.computeIfAbsent(cp.getBlockHeight(), k -> cp);
-                    pending.getValidatorSignatures().putAll(cp.getValidatorSignatures());
+                    // [HC-043] only for a checkpoint WE requested, same content, verified signatures
+                    Checkpoint pending = pendingCheckpoints.get(cp.getBlockHeight());
+                    if (pending == null) return;
+                    mergeVerifiedSignatures(pending, cp);
                     
                     if (consensus instanceof PBFTConsensus) {
                         PBFTConsensus pbft = (PBFTConsensus) consensus;
-                        int quorum = (2 * pbft.getValidators().size() / 3) + 1;
+                        int quorum = pbft.quorumSize();   // [HC-002] same bound as commit
                         if (pending.getValidatorSignatures().size() >= quorum) {
                             blockchain.getStorage().saveCheckpoint(pending);
                             log.info("[CHECKPOINT] Finalized checkpoint at height {} with quorum", pending.getBlockHeight());
@@ -345,6 +453,11 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                     return;
                 }
 
+                // [HC-051] only validators may distribute models (sender authenticated by HC-044)
+                if (consensus == null || !consensus.isValidator(msg.getSenderId())) {
+                    log.warn("[FL] Ignoring model broadcast from non-validator {}", msg.getSenderId());
+                    return;
+                }
                 int round = Integer.parseInt(parts[0]);
                 String modelHash = parts[1].trim();
                 double[] weights = bytesToWeights(Base64.getDecoder().decode(parts[2]));
@@ -405,8 +518,8 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                 }
 
                 broadcastPeerList();
-            } catch (Exception e) {
-                log.warn("[SYNC] Error during sync: {}", e.getMessage());
+            } catch (Throwable t) {   // a throwing periodic task is cancelled silently
+                log.warn("[SYNC] Error during sync: {}", t.getMessage());
             }
         }, 30, 30, TimeUnit.SECONDS);
     }
@@ -469,7 +582,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
             data.put("toHeight", Math.min(toHeight, fromHeight + 49)); // Request max 50 blocks at a time
             
             String payloadJson = new ObjectMapper().writeValueAsString(data);
-            byte[] payload = payloadJson.getBytes();
+            byte[] payload = payloadJson.getBytes(java.nio.charset.StandardCharsets.UTF_8);
             
             // Create and send REQUEST_BLOCKS message
             P2PMessage msg = P2PMessage.create(localAddress, privateKey, 
@@ -557,16 +670,42 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                     socket.close();
                     return;
                 }
-                
-                remotePeerId = !isInbound ? performOutboundHandshake(in, out, localNonce)
-                        : performInboundHandshake(in, out, localNonce);
-                
+
+                // [HC-012] Bound the unauthenticated phase: at most MAX_PENDING_HANDSHAKES at once,
+                // each must complete within HANDSHAKE_TIMEOUT_MS. Before, there was no timeout at
+                // all, so a peer that opened a socket and sent nothing held a thread forever, and
+                // half-open connections were not counted against any limit.
+                if (pendingHandshakes.incrementAndGet() > MAX_PENDING_HANDSHAKES) {
+                    pendingHandshakes.decrementAndGet();
+                    log.warn("[P2P] Rejecting connection: {} handshakes already pending", MAX_PENDING_HANDSHAKES);
+                    socket.close();
+                    return;
+                }
+                try {
+                    socket.setSoTimeout(HANDSHAKE_TIMEOUT_MS);
+                    remotePeerId = !isInbound ? performOutboundHandshake(in, out, localNonce)
+                            : performInboundHandshake(in, out, localNonce);
+                } finally {
+                    pendingHandshakes.decrementAndGet();
+                }
+                socket.setSoTimeout(0);   // authenticated peers may legitimately stay quiet
+
                 if (peerManager.isBanned(socket.getInetAddress().getHostAddress())) {
                     log.warn("[P2P] Rejecting banned peer {}", remotePeerId);
                     socket.close();
                     return;
                 }
-                
+
+                // [HC-011] The handshake proves the peer holds the key for remotePeerId; under PBFT
+                // only validators may join the validator network. Before, any key holder was admitted
+                // (Sybil identities filling the peer table, eclipse).
+                if (!isAuthorisedPeer(remotePeerId)) {
+                    log.warn("[P2P] Rejecting {}: not in the validator set", remotePeerId);
+                    socket.close();
+                    remotePeerId = null;   // nothing registered yet; skip cleanup in finally
+                    return;
+                }
+
                 peerConnections.put(remotePeerId, out);
                 log.info("[P2P] Secure session established with {} ID: {} (Local: {})", 
                         socket.getInetAddress(), remotePeerId, localDID);
@@ -617,24 +756,30 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
     private String performInboundHandshake(DataInputStream in, DataOutputStream out, byte[] localNonce) throws Exception {
         if (in.readInt() != MsgType.HELLO.ordinal())
             throw new IOException("Expected HELLO");
-        in.readInt(); // discard len
+        if (in.readInt() != HELLO_LENGTH)
+            throw new IOException("Bad HELLO length");
         if (in.readInt() != PROTOCOL_VERSION || in.readInt() != Config.NETWORK_ID)
             throw new IOException("Mismatch");
+        checkRuleFlags(in.readInt());
         byte[] remoteNonce = new byte[32];
         in.readFully(remoteNonce);
 
         sendHello(out, localNonce);
-        sendChallenge(out, localPubKey, Crypto.sign(remoteNonce, privateKey));
+        sendChallenge(out, localPubKey, Crypto.sign(handshakeDigest(remoteNonce, localAddress, Config.NETWORK_ID), privateKey));
 
         if (in.readInt() != MsgType.CHALLENGE.ordinal())
             throw new IOException("Expected CHALLENGE");
         int challengeLen = in.readInt();
+        // [HC-007] a CHALLENGE is exactly a 33-byte compressed key + a 64-byte signature; reject
+        // any other length BEFORE allocating (the peer-chosen length used to size the buffer)
+        if (challengeLen != CHALLENGE_LENGTH)
+            throw new IOException("Bad CHALLENGE length " + challengeLen);
         byte[] remotePubKey = new byte[33];
         in.readFully(remotePubKey);
         byte[] remoteSig = new byte[challengeLen - 33];
         in.readFully(remoteSig);
 
-        if (!Crypto.verify(localNonce, remoteSig, remotePubKey))
+        if (!Crypto.verify(handshakeDigest(localNonce, Crypto.deriveAddress(remotePubKey), Config.NETWORK_ID), remoteSig, remotePubKey))
             throw new IOException("Identity verification failed");
 
         out.writeInt(MsgType.HANDSHAKE_OK.ordinal());
@@ -649,24 +794,30 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
 
         if (in.readInt() != MsgType.HELLO.ordinal())
             throw new IOException("Expected HELLO");
-        in.readInt();
+        if (in.readInt() != HELLO_LENGTH)
+            throw new IOException("Bad HELLO length");
         if (in.readInt() != PROTOCOL_VERSION || in.readInt() != Config.NETWORK_ID)
             throw new IOException("Mismatch");
+        checkRuleFlags(in.readInt());
         byte[] remoteNonce = new byte[32];
         in.readFully(remoteNonce);
 
         if (in.readInt() != MsgType.CHALLENGE.ordinal())
             throw new IOException("Expected CHALLENGE");
         int challengeLen = in.readInt();
+        // [HC-007] a CHALLENGE is exactly a 33-byte compressed key + a 64-byte signature; reject
+        // any other length BEFORE allocating (the peer-chosen length used to size the buffer)
+        if (challengeLen != CHALLENGE_LENGTH)
+            throw new IOException("Bad CHALLENGE length " + challengeLen);
         byte[] remotePubKey = new byte[33];
         in.readFully(remotePubKey);
         byte[] remoteSig = new byte[challengeLen - 33];
         in.readFully(remoteSig);
 
-        if (!Crypto.verify(localNonce, remoteSig, remotePubKey))
+        if (!Crypto.verify(handshakeDigest(localNonce, Crypto.deriveAddress(remotePubKey), Config.NETWORK_ID), remoteSig, remotePubKey))
             throw new IOException("Identity verification failed");
 
-        sendChallenge(out, localPubKey, Crypto.sign(remoteNonce, privateKey));
+        sendChallenge(out, localPubKey, Crypto.sign(handshakeDigest(remoteNonce, localAddress, Config.NETWORK_ID), privateKey));
 
         if (in.readInt() != MsgType.HANDSHAKE_OK.ordinal())
             throw new IOException("Peer rejected handshake");
@@ -676,9 +827,10 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
 
     private void sendHello(DataOutputStream out, byte[] nonce) throws IOException {
         out.writeInt(MsgType.HELLO.ordinal());
-        out.writeInt(40);
+        out.writeInt(HELLO_LENGTH);
         out.writeInt(PROTOCOL_VERSION);
         out.writeInt(Config.NETWORK_ID);
+        out.writeInt(ruleFlags());   // [HC-008]
         out.write(nonce);
         out.flush();
     }
@@ -881,7 +1033,15 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
     public void broadcastCheckpointRequest(Checkpoint cp) {
         try {
             pendingCheckpoints.put(cp.getBlockHeight(), cp);
-            byte[] payload = new ObjectMapper().writeValueAsBytes(cp);
+            // [HC-043] count our own signature (the local "response" had no connection to go to)
+            if (consensus instanceof PBFTConsensus && consensus.isValidator(localAddress) && matchesLocalChain(cp)) {
+                cp.getValidatorSignatures().put(localAddress,
+                        HexUtils.encode(Crypto.sign(HexUtils.decode(cp.computeCheckpointHash()), privateKey)));
+            }
+            // the REQUEST carries no signatures (an empty map is what marks it as a request)
+            Checkpoint request = new Checkpoint(cp.getBlockHeight(), cp.getBlockHash(), cp.getStateRoot(),
+                    cp.getUtxoRoot(), cp.getTimestamp(), new HashMap<>());
+            byte[] payload = new ObjectMapper().writeValueAsBytes(request);
             P2PMessage msg = P2PMessage.create(localAddress, privateKey, P2PMessage.Type.CHECKPOINT, payload);
             gossipEngine.onMessageReceived(msg, localAddress);
         } catch (Exception e) {

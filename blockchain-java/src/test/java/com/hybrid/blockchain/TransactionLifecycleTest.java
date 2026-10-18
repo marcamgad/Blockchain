@@ -205,19 +205,20 @@ public class TransactionLifecycleTest {
     void testMintTransactionSuccess() throws Exception {
         int nextHeight = blockchain.getHeight() + 1;
         long expectedReward = Tokenomics.getCurrentReward(nextHeight, blockchain.getTotalMinted());
-        String miner = "0xminer";
-        
+        // [HC-016] the only MINT in a block is the proposer's reward (BlockApplier adds it)
+        String miner = tb.getValidatorKey().getAddress();
         Transaction mintTx = new Transaction.Builder()
                 .type(Transaction.Type.MINT)
                 .to(miner)
                 .amount(expectedReward)
                 .nonce(nextHeight)
                 .build();
-        
-        blockchain.validateTransaction(mintTx);
-        BlockApplier.createAndApplyBlock(tb, List.of(mintTx));
-        
-        assertThat(blockchain.getBalance(miner)).as("Miner should receive exact reward").isEqualTo(expectedReward);
+        blockchain.validateTransaction(mintTx);   // schedule check still passes for the exact amount
+
+        long before = blockchain.getBalance(miner);
+        BlockApplier.createAndApplyBlock(tb, List.of());
+
+        assertThat(blockchain.getBalance(miner) - before).as("Miner should receive exact reward").isEqualTo(expectedReward);
     }
 
     @Test
@@ -439,10 +440,10 @@ public class TransactionLifecycleTest {
         blockchain.getAccountState().credit(alice.getAddress(), INITIAL_BALANCE);
         
         String tokenId = "TF";
-        BlockApplier.createAndApplyBlock(tb, List.of(TestTransactionFactory.createTokenRegister(owner, "TF", "TF", tokenId, 1000L, 0, 1)));
+        BlockApplier.createAndApplyBlock(tb, List.of(TestTransactionFactory.createTokenRegister(owner, "TF", "TF", tokenId, 1000L, 10, 1)));
         
         Transaction mintTx = new Transaction.Builder()
-                .type(Transaction.Type.TOKEN_MINT)
+                .type(Transaction.Type.TOKEN_MINT).fee(10)   /* [HC-033] fee >= baseFee */
                 .from(owner.getAddress())
                 .to(alice.getAddress())
                 .amount(500)
@@ -512,10 +513,10 @@ public class TransactionLifecycleTest {
         blockchain.getAccountState().credit(alice.getAddress(), INITIAL_BALANCE);
         
         String tokenId = "TBN";
-        BlockApplier.createAndApplyBlock(tb, List.of(TestTransactionFactory.createTokenRegister(owner, "TBN", "TBN", tokenId, 1000L, 0, 1)));
+        BlockApplier.createAndApplyBlock(tb, List.of(TestTransactionFactory.createTokenRegister(owner, "TBN", "TBN", tokenId, 1000L, 10, 1)));
         
         Transaction mintTx = new Transaction.Builder()
-                .type(Transaction.Type.TOKEN_MINT)
+                .type(Transaction.Type.TOKEN_MINT).fee(10)   /* [HC-033] fee >= baseFee */
                 .from(owner.getAddress())
                 .to(alice.getAddress())
                 .amount(500)
@@ -543,7 +544,7 @@ public class TransactionLifecycleTest {
     void testTokenBurnExceeds() throws Exception {
         TestKeyPair alice = new TestKeyPair(240);
         Transaction burnTx = new Transaction.Builder()
-                .type(Transaction.Type.TOKEN_BURN)
+                .type(Transaction.Type.TOKEN_BURN).fee(10)   /* [HC-033] fee >= baseFee */
                 .from(alice.getAddress())
                 .amount(100)
                 .data("LOST".getBytes())
@@ -724,6 +725,9 @@ public class TransactionLifecycleTest {
         data.put("deviceId", deviceId);
         data.put("owner", owner.getAddress());
         data.put("devicePublicKey", Crypto.bytesToHex(deviceKey.getPublicKey()));
+        // [HC-047] the device consents (proof of possession) with its attested key
+        data.put("activationSignature", Crypto.bytesToHex(Crypto.sign(
+                com.hybrid.blockchain.lifecycle.DeviceLifecycleManager.activationDigest(deviceId, owner.getAddress()), deviceKey.getPrivateKey())));
         
         Transaction tx = new Transaction.Builder()
                 .type(Transaction.Type.IOT_MANAGEMENT)
@@ -884,8 +888,11 @@ public class TransactionLifecycleTest {
         data.clear();
         data.put("action", "ACTIVATE");
         data.put("deviceId", deviceId);
-        data.put("owner", "OWNER1");
+        // [HC-047] activation is sent by the owner it names (was: manufacturer naming "OWNER1")
+        data.put("owner", manufacturer.getAddress());
         data.put("devicePublicKey", Crypto.bytesToHex(deviceKey.getPublicKey()));
+        data.put("activationSignature", Crypto.bytesToHex(Crypto.sign(
+                com.hybrid.blockchain.lifecycle.DeviceLifecycleManager.activationDigest(deviceId, manufacturer.getAddress()), deviceKey.getPrivateKey())));
         
         Transaction aTx = new Transaction.Builder()
                 .type(Transaction.Type.IOT_MANAGEMENT)

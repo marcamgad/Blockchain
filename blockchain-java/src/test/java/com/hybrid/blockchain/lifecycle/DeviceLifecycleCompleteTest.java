@@ -51,6 +51,7 @@ public class DeviceLifecycleCompleteTest {
         assertThat(manager.getDeviceRecord(deviceId).getStatus()).isEqualTo(DeviceLifecycleManager.DeviceStatus.PROVISIONING);
         
         // 2. ACTIVATE
+        activatingDevice = device;   // [HC-047] device signs its consent
         applyAction("ACTIVATE", owner, deviceId, null, null, device.getPublicKey(), owner.getAddress());
         assertThat(manager.getDeviceRecord(deviceId).getStatus()).isEqualTo(DeviceLifecycleManager.DeviceStatus.ACTIVE);
         
@@ -87,8 +88,12 @@ public class DeviceLifecycleCompleteTest {
         blockchain.getAccountState().credit(man.getAddress(), 1000L);
         manager.registerManufacturer("M", man.getPublicKey());
         applyAction("PROVISION", man, deviceId, "M", "M1", device.getPublicKey(), null);
+        activatingDevice = device;
         applyAction("ACTIVATE", man, deviceId, null, null, device.getPublicKey(), man.getAddress());
     }
+
+    /** Device whose key signs the next ACTIVATE (HC-047 proof of possession). */
+    private TestKeyPair activatingDevice;
 
     private void applyAction(String action, TestKeyPair actor, String deviceId, String man, String model, byte[] devPub, String owner) throws Exception {
         java.util.Map<String, Object> data = new java.util.HashMap<>();
@@ -98,6 +103,10 @@ public class DeviceLifecycleCompleteTest {
         if (model != null) data.put("model", model);
         if (devPub != null) data.put("devicePublicKey", Crypto.bytesToHex(devPub));
         if (owner != null) data.put("owner", owner);
+        if (action.equals("ACTIVATE") && activatingDevice != null && owner != null) {
+            data.put("activationSignature", Crypto.bytesToHex(Crypto.sign(
+                    DeviceLifecycleManager.activationDigest(deviceId, owner), activatingDevice.getPrivateKey())));
+        }
         
         if (action.equals("PROVISION")) {
             byte[] message = (deviceId + man + model).getBytes();
@@ -108,7 +117,7 @@ public class DeviceLifecycleCompleteTest {
         }
         
         Transaction tx = new Transaction.Builder()
-                .type(Transaction.Type.IOT_MANAGEMENT)
+                .type(Transaction.Type.IOT_MANAGEMENT).fee(10)   /* [HC-033] fee >= baseFee */
                 .from(actor.getAddress())
                 .data(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsBytes(data))
                 .nonce(blockchain.getAccountState().getNonce(actor.getAddress()) + 1)

@@ -1,8 +1,8 @@
 package com.hybrid.blockchain.security;
 
 import com.hybrid.blockchain.Crypto;
-import org.bouncycastle.pqc.jcajce.provider.BouncyCastlePQCProvider;
-import org.bouncycastle.pqc.jcajce.spec.DilithiumParameterSpec;
+import org.bouncycastle.jcajce.spec.MLDSAParameterSpec;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
 
 import java.security.*;
 import java.security.spec.X509EncodedKeySpec;
@@ -27,10 +27,16 @@ import java.util.Arrays;
  */
 public class QuantumResistantCrypto {
 
+    /** JCA names of the post-quantum signature scheme (ML-DSA, FIPS 204). */
+    public static final String ALGORITHM = "ML-DSA";
+    public static final String PROVIDER = "BC";
+
     static {
         // Register Bouncy Castle PQC provider
-        if (Security.getProvider("BCPQC") == null) {
-            Security.addProvider(new BouncyCastlePQCProvider());
+        // ML-DSA (FIPS 204, the standardised Dilithium) lives in the main BC provider; the
+        // pre-standard "Dilithium"/BCPQC classes were removed in Bouncy Castle 1.8x
+        if (Security.getProvider(PROVIDER) == null) {
+            Security.addProvider(new BouncyCastleProvider());
         }
     }
 
@@ -41,22 +47,22 @@ public class QuantumResistantCrypto {
      * @return KeyPair with quantum-resistant keys
      */
     public static KeyPair generateDilithiumKeyPair(int strength) throws Exception {
-        DilithiumParameterSpec spec;
+        MLDSAParameterSpec spec;
         switch (strength) {
             case 2:
-                spec = DilithiumParameterSpec.dilithium2;
+                spec = MLDSAParameterSpec.ml_dsa_44;   // Dilithium2 -> ML-DSA-44
                 break;
             case 3:
-                spec = DilithiumParameterSpec.dilithium3;
+                spec = MLDSAParameterSpec.ml_dsa_65;   // Dilithium3 -> ML-DSA-65
                 break;
             case 5:
-                spec = DilithiumParameterSpec.dilithium5;
+                spec = MLDSAParameterSpec.ml_dsa_87;   // Dilithium5 -> ML-DSA-87
                 break;
             default:
                 throw new IllegalArgumentException("Strength must be 2, 3, or 5");
         }
 
-        KeyPairGenerator keyGen = KeyPairGenerator.getInstance("Dilithium", "BCPQC");
+        KeyPairGenerator keyGen = KeyPairGenerator.getInstance(ALGORITHM, PROVIDER);
         keyGen.initialize(spec, new SecureRandom());
         return keyGen.generateKeyPair();
     }
@@ -65,7 +71,7 @@ public class QuantumResistantCrypto {
      * Sign message with Dilithium (quantum-resistant)
      */
     public static byte[] signDilithium(byte[] message, PrivateKey privateKey) throws Exception {
-        Signature signature = Signature.getInstance("Dilithium", "BCPQC");
+        Signature signature = Signature.getInstance(ALGORITHM, PROVIDER);
         signature.initSign(privateKey);
         signature.update(message);
         return signature.sign();
@@ -75,7 +81,7 @@ public class QuantumResistantCrypto {
      * Verify Dilithium signature
      */
     public static boolean verifyDilithium(byte[] message, byte[] signature, PublicKey publicKey) throws Exception {
-        Signature sig = Signature.getInstance("Dilithium", "BCPQC");
+        Signature sig = Signature.getInstance(ALGORITHM, PROVIDER);
         sig.initVerify(publicKey);
         sig.update(message);
         return sig.verify(signature);
@@ -98,6 +104,11 @@ public class QuantumResistantCrypto {
             this.dilithiumSignature = dilithiumSignature;
         }
 
+        /** [HC-040] Digest the ECDSA half of a hybrid signature is computed over. */
+        static byte[] ecdsaDigest(byte[] message) {
+            return Crypto.hashWithDomain("HC-HYBRID-SIG-v1", message);
+        }
+
         /**
          * Create hybrid signature
          */
@@ -106,7 +117,9 @@ public class QuantumResistantCrypto {
                 java.math.BigInteger ecdsaPrivateKey,
                 PrivateKey dilithiumPrivateKey) throws Exception {
             // Classical ECDSA signature
-            byte[] ecdsaSig = Crypto.sign(message, ecdsaPrivateKey);
+            // [HC-040] ECDSA signs a domain-separated digest of the WHOLE message (Dilithium below
+            // signs the message itself); previously ECDSA silently covered only its first 32 bytes.
+            byte[] ecdsaSig = Crypto.sign(ecdsaDigest(message), ecdsaPrivateKey);
 
             // Quantum-resistant Dilithium signature
             byte[] dilithiumSig = signDilithium(message, dilithiumPrivateKey);
@@ -119,7 +132,7 @@ public class QuantumResistantCrypto {
          */
         public boolean verify(byte[] message, byte[] ecdsaPublicKey, PublicKey dilithiumPublicKey) throws Exception {
             // Verify ECDSA
-            boolean ecdsaValid = Crypto.verify(message, ecdsaSignature, ecdsaPublicKey);
+            boolean ecdsaValid = Crypto.verify(ecdsaDigest(message), ecdsaSignature, ecdsaPublicKey);
 
             // Verify Dilithium
             boolean dilithiumValid = verifyDilithium(message, dilithiumSignature, dilithiumPublicKey);
@@ -193,7 +206,7 @@ public class QuantumResistantCrypto {
      */
     public static byte[] deriveQuantumResistantKey(byte[] seed, String context) throws Exception {
         MessageDigest sha3 = MessageDigest.getInstance("SHA3-512", "BC");
-        sha3.update(context.getBytes());
+        sha3.update(context.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         sha3.update(seed);
         return sha3.digest();
     }

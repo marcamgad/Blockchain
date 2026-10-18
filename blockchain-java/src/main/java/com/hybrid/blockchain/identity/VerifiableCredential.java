@@ -50,7 +50,7 @@ public class VerifiableCredential {
         this();
         this.id = "urn:uuid:" + UUID.randomUUID().toString();
         this.issuer = issuerDID;
-        this.issuanceDate = new Date().toString();
+        this.issuanceDate = java.time.Instant.now().toString();   // [HC-050] ISO-8601 UTC
         this.credentialSubject = new CredentialSubject(subjectDID, claims);
     }
 
@@ -159,31 +159,40 @@ public class VerifiableCredential {
      * Check if credential has expired
      */
     public boolean isExpired() {
+        // [HC-050] This always returned false, so expired credentials stayed valid forever
+        // (SSIManager.hasCredential trusts it). An unparseable expiry fails CLOSED.
         if (expirationDate == null) {
             return false;
         }
-        // Simplified - in production, parse date properly
-        return false;
+        try {
+            return !java.time.Instant.now().isBefore(java.time.Instant.parse(expirationDate));
+        } catch (java.time.format.DateTimeParseException e) {
+            return true;
+        }
     }
 
     /**
      * Set expiration date (milliseconds from now)
      */
     public void setExpiration(long durationMs) {
-        long expirationTime = System.currentTimeMillis() + durationMs;
-        this.expirationDate = new Date(expirationTime).toString();
+        // [HC-050] ISO-8601 UTC instead of Date.toString(), whose text depends on the JVM's
+        // timezone/locale and cannot be parsed back reliably
+        this.expirationDate = java.time.Instant.now().plusMillis(durationMs).toString();
     }
 
     /**
      * Serialize credential for signing (canonical form)
      */
     private byte[] serializeForSigning() {
-        ByteBuffer buf = ByteBuffer.allocate(4096).order(ByteOrder.BIG_ENDIAN);
+        // [HC-050] growable buffer (a fixed 4 KB threw BufferOverflowException for large claims)
+        java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
 
         // Serialize in deterministic order
         putString(buf, id);
         putString(buf, issuer);
         putString(buf, issuanceDate);
+        // [HC-050] explicit presence flag: "no expiry" and "expiry" can no longer share an encoding
+        buf.write(expirationDate != null ? 1 : 0);
         if (expirationDate != null) {
             putString(buf, expirationDate);
         }
@@ -198,20 +207,16 @@ public class VerifiableCredential {
             putString(buf, credentialSubject.claims.get(key).toString());
         }
 
-        buf.flip();
-        byte[] result = new byte[buf.remaining()];
-        buf.get(result);
-        return result;
+        return buf.toByteArray();
     }
 
-    private static void putString(ByteBuffer buf, String s) {
-        if (s == null) {
-            buf.putInt(0);
-        } else {
-            byte[] bytes = s.getBytes(StandardCharsets.UTF_8);
-            buf.putInt(bytes.length);
-            buf.put(bytes);
-        }
+    private static void putString(java.io.ByteArrayOutputStream buf, String s) {
+        byte[] bytes = s == null ? new byte[0] : s.getBytes(StandardCharsets.UTF_8);
+        buf.write(bytes.length >>> 24);
+        buf.write(bytes.length >>> 16);
+        buf.write(bytes.length >>> 8);
+        buf.write(bytes.length);
+        buf.write(bytes, 0, bytes.length);
     }
 
     // Getters

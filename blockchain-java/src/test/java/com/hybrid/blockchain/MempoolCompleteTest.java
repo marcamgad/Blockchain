@@ -174,12 +174,12 @@ public class MempoolCompleteTest {
     }
 
     @Test
-    @DisplayName("M1.11 — getReadyTransactions(): MINT always ready")
-    void testMintAlwaysReady() {
+    @DisplayName("M1.11 — MINT is never accepted into the mempool (HC-016)")
+    void testMintRejectedByMempool() {
         Transaction mint = new Transaction.Builder().type(Transaction.Type.MINT).to("m").amount(50).nonce(1).build();
-        mempool.add(mint);
-        List<Transaction> ready = mempool.getReadyTransactions(10, new AccountState());
-        assertThat(ready).contains(mint);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> mempool.add(mint))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(mempool.getReadyTransactions(10, new AccountState())).doesNotContain(mint);
     }
 
     @Test

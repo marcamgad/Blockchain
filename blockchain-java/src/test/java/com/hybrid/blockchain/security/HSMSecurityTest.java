@@ -26,7 +26,7 @@ public class HSMSecurityTest {
         assertThat(sig.length).isEqualTo(64);
         
         // Verify with Crypto.verify to ensure HSM used the right key internally
-        boolean verified = com.hybrid.blockchain.Crypto.verify(data, sig, hsm.getPublicKey());
+        boolean verified = com.hybrid.blockchain.Crypto.verify(HardwareSecurityModule.signingDigest(data), sig, hsm.getPublicKey());
         assertThat(verified).isTrue();
     }
 

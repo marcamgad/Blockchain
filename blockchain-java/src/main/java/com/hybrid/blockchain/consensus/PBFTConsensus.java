@@ -652,7 +652,7 @@ public class PBFTConsensus implements Consensus {
                 byHash.merge(m.blockHash, 1, Integer::sum);
             }
         }
-        int needed = 2 * f + 1;
+        int needed = quorumSize();   // [HC-002]
         for (Map.Entry<String, Integer> e : byHash.entrySet()) {
             if (e.getValue() >= needed) return e.getKey();
         }
@@ -694,7 +694,7 @@ public class PBFTConsensus implements Consensus {
                      .put(validatorId, msg);
         log.info("[PBFT] VIEW_CHANGE for view {} from {}", newView, validatorId);
 
-        if (viewChangeLog.get(newView).size() >= (2 * f + 1))
+        if (viewChangeLog.get(newView).size() >= quorumSize())   // [HC-002]
             processViewChange(newView);
     }
 
@@ -734,7 +734,7 @@ public class PBFTConsensus implements Consensus {
                      .put(localValidatorId, vcMsg);
 
         // Quorum can already be satisfied if remote VIEW_CHANGE votes arrived first.
-        if (viewChangeLog.get(nextView).size() >= (2 * f + 1)) {
+        if (viewChangeLog.get(nextView).size() >= quorumSize()) {   // [HC-002]
             processViewChange(nextView);
         }
     }
@@ -743,7 +743,26 @@ public class PBFTConsensus implements Consensus {
 
     public String getCurrentLeader()   { return selectLeader(viewNumber); }
     public int    getValidatorCount()  { return validators.size(); }
-    public int    getMaxFaultyNodes()  { return f; }
+    public int    getMaxFaultyNodes()  { return maxFaulty(validators.size()); }
+
+    /** Largest f with n >= 3f + 1. */
+    public static int maxFaulty(int n) { return (n - 1) / 3; }
+
+    /**
+     * [HC-002] Quorum size for n validators: ceil((n + f + 1) / 2), f = floor((n - 1) / 3).
+     *
+     * <p>Two quorums of size q overlap in at least 2q - n validators; safety needs that overlap to
+     * contain an honest one, i.e. 2q - n >= f + 1. The previous fixed 2f + 1 equals this bound only
+     * when n = 3f + 1: for n = 5 (f = 1) it gave 3, and two 3-sets overlap in a single (possibly
+     * faulty) node, so two honest replicas could commit different blocks. Computed from the CURRENT
+     * validator set, because add/removeValidator change n (f used to be fixed at construction).
+     */
+    public static int quorumSize(int n) {
+        int f = maxFaulty(n);
+        return (n + f + 2) / 2;   // integer ceil((n + f + 1) / 2)
+    }
+
+    public int quorumSize() { return quorumSize(validators.size()); }
     public long   getViewNumber()      { return viewNumber; }
     public PBFTMessenger getMessenger(){ return messenger; }
 
@@ -762,7 +781,8 @@ public class PBFTConsensus implements Consensus {
     public Map<String, Object> getStats() {
         Map<String, Object> stats = new HashMap<>();
         stats.put("validators",       validators.size());
-        stats.put("maxFaultyNodes",   f);
+        stats.put("maxFaultyNodes",   getMaxFaultyNodes());
+        stats.put("quorumSize",       quorumSize());
         stats.put("viewNumber",       viewNumber);
         stats.put("currentLeader",    getCurrentLeader());
         stats.put("committedBlocks",  committedBlocks.size());

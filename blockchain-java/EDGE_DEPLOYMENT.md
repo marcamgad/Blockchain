@@ -1,5 +1,18 @@
 # Running HybridChain on a Raspberry Pi — Complete Beginner's Guide
 
+> ## ⛔ Read this first — current status (2026-10-09)
+> A security audit (`docs/audit/HYBRIDCHAIN_AUDIT.md`) ran the real jar and found bugs that
+> stop it working as a **network**:
+> - **Nodes cannot connect to each other** (HC-005) — so a multi-Pi network will not form.
+> - **IoT sensor readings are always rejected** (HC-004).
+> - A 4-node network can't send messages without a workaround flag (HC-001), and 5- or 6-node
+>   networks are unsafe (HC-002).
+>
+> **What works today:** a single Pi starts, creates its genesis block, opens its ports, and
+> answers API calls (Tests 1–6 below). Treat this guide as "get one node running and learn
+> the setup". **Don't buy more Pis for a network until HC-001, HC-002, HC-004 and HC-005 are
+> fixed** — each has a ready patch and a test in the audit report.
+
 **This guide assumes you know nothing.** Every command is copy-paste. After each step it
 tells you what you should see, and what to do if you see something else.
 
@@ -224,58 +237,115 @@ ls -lh /home/pi/*.jar
 
 ## 7. Step 5 — Configure the node
 
-The node needs two secrets. **Never share these; never commit them anywhere.**
+> **⚠️ Correction (2026-10-09).** An earlier version of this section was wrong in five ways
+> that would have stopped your node from working. I found them by actually starting the jar,
+> which I should have done before writing the guide:
+> 1. It omitted `VALIDATOR_PUBKEYS`, without which the node **crashes on startup**
+>    (`PBFT requires at least 4 validators`).
+> 2. It said the API is on port 8000. It is on **8080** — `API_PORT` is never read by the web
+>    server. Use `SERVER_PORT` to change it.
+> 3. It told you to generate a fresh `STORAGE_AES_KEY` on each node. Nodes with different
+>    values **cannot connect to each other** (the TLS certificate authority is derived from
+>    this key). Every node in one network currently must use the **same** value.
+> 4. A network of exactly 4 validators **cannot produce blocks** without an extra flag
+>    (`-DMIN_PEERS=3`, see §8). This is a bug, tracked as HC-001.
+> 5. It linked `REQUIRE_QUANTUM_SIG` to zero-knowledge proofs. It controls post-quantum
+>    (Dilithium) signatures, and **must be identical on every node**.
 
-Generate them on the Pi:
+### 7.1 Understand the network first
+
+This is a *Byzantine-fault-tolerant* blockchain: it needs **at least 4 validator nodes** that
+all know each other's public keys before any of them start. A single Pi on its own **will
+start and answer API requests, but will never create a block** — there's nobody to vote
+with. That's expected, not a fault.
+
+So you decide your validator set up front, on **one** computer, and give every node the same
+list.
+
+### 7.2 Generate the keys — once, on your normal computer
+
+Run this in the project folder (it uses the jar you built):
 
 ```bash
-# a 32-character (16-byte) key that encrypts the local database
-openssl rand -hex 16
-
-# a 64-character private key that is this node's identity
-openssl rand -hex 32
+java -cp target/blockchain-java-1.0-SNAPSHOT-jar-with-dependencies.jar \
+     com.hybrid.blockchain.tools.KeygenTool 4 "$(openssl rand -hex 32)"
 ```
 
-Each prints one long line. Copy them somewhere safe, then create the settings file:
+**The random value at the end is essential.** `KeygenTool` derives keys from that seed. If
+you leave it out, it uses the built-in default `hybridchain-key-seed` — and then **anyone in
+the world can recompute your validators' private keys**. Always pass a random seed.
+
+It prints something like:
+
+```text
+NODE_1_PRIVATE_KEY=2321…      <- secret, goes ONLY on node 1
+NODE_1_PUBLIC_KEY=031c…
+NODE_2_PRIVATE_KEY=…          <- secret, goes ONLY on node 2
+…
+VALIDATOR_PUBKEYS=031c…,02ab…,03ef…,02cd…   <- public, goes on EVERY node
+```
+
+Now generate the shared network secrets, also once:
+
+```bash
+openssl rand -hex 32    # NETWORK_CA_SEED  - SAME value on every node (network TLS authority)
+openssl rand -hex 32    # JWT_SECRET       - can be different per node
+```
+
+Then, **on each Pi separately**, generate that node's own disk-encryption key:
+
+```bash
+openssl rand -hex 16    # STORAGE_AES_KEY  - DIFFERENT on every node
+```
+
+> **What changed (audit fixes HC-003/HC-005).** The network's TLS certificate authority is now
+> derived from `NETWORK_CA_SEED`, no longer from `STORAGE_AES_KEY`. So:
+> - `NETWORK_CA_SEED` is the network's master secret: identical on every node, keep it private.
+>   Anyone holding it can issue node certificates.
+> - `STORAGE_AES_KEY` is now a true per-node secret: use a different value on each Pi. A stolen
+>   SD card no longer gives access to the other nodes or to the network authority.
+> - The node refuses to start if `NETWORK_CA_SEED` is missing, shorter than 32 bytes, or equal to
+>   `STORAGE_AES_KEY`.
+
+### 7.3 Write the settings file on each Pi
 
 ```bash
 nano /home/pi/hybridchain.env
 ```
 
-Paste this in, replacing the two `PASTE_...` placeholders with the values you just
-generated:
+Paste this, filling in the values. `NODE_PRIVATE_KEY` and `STORAGE_AES_KEY` differ between Pis:
 
 ```bash
-# --- identity & storage secrets (KEEP PRIVATE) ---
-STORAGE_AES_KEY=PASTE_THE_16_BYTE_HEX_HERE
-NODE_PRIVATE_KEY=PASTE_THE_32_BYTE_HEX_HERE
-JWT_SECRET=PASTE_ANY_LONG_RANDOM_STRING_HERE
+# --- secrets (KEEP PRIVATE) ---
+NODE_PRIVATE_KEY=PASTE_THIS_NODES_OWN_NODE_n_PRIVATE_KEY
+STORAGE_AES_KEY=PASTE_THIS_NODES_OWN_16_BYTE_HEX    # different on every node
+NETWORK_CA_SEED=PASTE_THE_SHARED_32_BYTE_HEX        # identical on every node
+JWT_SECRET=PASTE_A_LONG_RANDOM_STRING
+
+# --- the validator set (public, identical on every node) ---
+VALIDATOR_PUBKEYS=PASTE_THE_WHOLE_COMMA_SEPARATED_LINE
 
 # --- what kind of node this is ---
-# GATEWAY  = collects sensor data (recommended for a Pi 3)
-# OBSERVER = follows the chain, doesn't vote (lightest)
-# VALIDATOR= votes on blocks (needs a Pi 4 or better)
-NODE_ROLE=GATEWAY
-NODE_NAME=my-first-pi-node
+NODE_ROLE=VALIDATOR       # VALIDATOR / GATEWAY / OBSERVER
+NODE_NAME=pi-node-1
 
-# --- where data is stored ---
+# --- storage & ports ---
 STORAGE_PATH=/home/pi/chain-data
+SERVER_PORT=8080          # the web API (NOT "API_PORT" - that setting is ignored)
+P2P_PORT=6001             # node-to-node traffic
+COAP_PORT=5683            # sensor traffic (GATEWAY nodes)
 
-# --- network ports ---
-API_PORT=8000
-P2P_PORT=6001
-COAP_PORT=5683
-
-# --- leave these OFF on a Raspberry Pi 3 (see section 1) ---
-# Zero-knowledge proofs take ~5s each on a desktop, ~1 minute on a Pi 3.
+# --- consensus rule: MUST be the same on every node ---
 REQUIRE_QUANTUM_SIG=false
 ```
 
-Save and exit nano: press `Ctrl+O`, then `Enter`, then `Ctrl+X`.
+On the **other** Pis, also add the first Pi's address so they can find the network:
 
-> **What these are:** `STORAGE_AES_KEY` encrypts the database on the SD card, so someone who
-> steals the card can't read it. `NODE_PRIVATE_KEY` is this node's identity — it proves
-> messages really came from your node. `JWT_SECRET` protects the web API.
+```bash
+SEED_PEER=192.168.1.42:6001
+```
+
+Save and exit nano: `Ctrl+O`, `Enter`, `Ctrl+X`.
 
 ---
 
@@ -286,14 +356,48 @@ Save and exit nano: press `Ctrl+O`, then `Enter`, then `Ctrl+X`.
 ```bash
 cd /home/pi
 set -a && source hybridchain.env && set +a
-java -Xmx384m -jar blockchain-java-1.0-SNAPSHOT-jar-with-dependencies.jar
+java -Xmx384m -DMIN_PEERS=3 -jar blockchain-java-1.0-SNAPSHOT-jar-with-dependencies.jar
 ```
 
-> `-Xmx384m` tells Java "never use more than 384 MB of memory". This is the value I verified
-> the system runs in. On a Pi 4 with 4 GB you can raise it to `-Xmx1g`.
+> `-Xmx384m` tells Java "never use more than 384 MB of memory" — the value I verified the
+> core runs in. On a Pi 4 with 4 GB you can raise it to `-Xmx1g`.
+>
+> `-DMIN_PEERS=3` works around bug HC-001: by default a node refuses to send *any* network
+> message until it has 4 peers, but in a 4-validator network each node only ever has 3.
+> Without this flag a 4-node network never produces a block. It must be written as `-D…` before `-jar`; putting `MIN_PEERS` in
+> the env file has **no effect**.
+>
+> **Use exactly 4 or 7 validators — never 5 or 6.** The code computes its voting quorum as
+> `2f+1`, which is only safe when the validator count is `3f+1` (4, 7, 10…). With 5 or 6
+> validators a single dishonest node can make two honest nodes finalise *different* blocks at
+> the same height (audit finding HC-002, proven by a test).
 
-**You should see** log lines scrolling, including something like
-`[INIT] Creating genesis block` and a line about the API starting.
+**You should see**, in this order:
+
+```text
+Node ID: hb…
+Validators initialized: 4
+[mTLS] CA initialized …
+[PBFT] Initialized as hb… with 4 validators (f=1)
+[INIT] Creating genesis block
+Secure P2P Node (mTLS) started on port 6001
+Tomcat started on port(s): 8080      <- the web API is up
+```
+
+> **What I verified vs. what I didn't.** I ran the real jar: the first six lines above are
+> copied from my actual log. The **last line I could not observe** — the web server failed to
+> start in my test environment because of a sandbox restriction on Windows (I confirmed with
+> a 10-line Java program containing none of this project's code that fails identically). It
+> is the standard Spring Boot message and is not expected to fail on a Raspberry Pi (Linux
+> uses a different mechanism), but **I have not seen the REST API run live.** Test 1 below is
+> your proof that it does.
+
+If `Validators initialized:` shows `0`, your `VALIDATOR_PUBKEYS` line didn't load — the node
+will then stop with `PBFT requires at least 4 validators`.
+
+> **Known trap:** if the web API fails to start (for example port 8080 is taken), the node
+> keeps running *without* an API instead of exiting. Always confirm with Test 1 below; don't
+> trust "it's still running".
 
 **Press `Ctrl+C` to stop it.**
 
@@ -303,7 +407,7 @@ java -Xmx384m -jar blockchain-java-1.0-SNAPSHOT-jar-with-dependencies.jar
 |---|---|---|
 | `STORAGE_AES_KEY must be set` | The settings file wasn't loaded | Re-run the `set -a && source ...` line |
 | `OutOfMemoryError` | Not enough memory | Lower to `-Xmx256m`; ensure `gpu_mem=16` (§5) |
-| `Address already in use` | Something else uses that port | Change `API_PORT` in the env file |
+| `Port 8080 was already in use` | Something else uses that port | Set `SERVER_PORT=8081` (not `API_PORT`, which is ignored) — and note the node keeps running without its API |
 | `UnsupportedClassVersionError` | Wrong Java version | Re-check `java -version` shows 17 |
 | Very slow / freezes | SD card too slow, or swapping | Use an A2-rated card; check `free -h` |
 
@@ -328,7 +432,7 @@ It writes `docs/benchmarks/edge_probe_Linux_aarch64.txt`. Compare it to
 Open a **second** terminal, SSH into the Pi again, and run:
 
 ```bash
-curl http://localhost:8000/api/v1/health
+curl http://localhost:8080/api/v1/health
 ```
 
 **You should see** something like `{"status":"ok","height":0,"peers":0}`.
@@ -339,13 +443,13 @@ curl http://localhost:8000/api/v1/health
 On your normal computer (same network), replacing the IP with your Pi's:
 
 ```bash
-curl http://192.168.1.42:8000/api/v1/health
+curl http://192.168.1.42:8080/api/v1/health
 ```
 
 If this fails but Test 1 worked, a firewall is blocking it. Allow the ports on the Pi:
 
 ```bash
-sudo ufw allow 8000/tcp && sudo ufw allow 6001/tcp && sudo ufw allow 5683/udp
+sudo ufw allow 8080/tcp && sudo ufw allow 6001/tcp && sudo ufw allow 5683/udp
 ```
 
 ### Test 3: Create an account (proves the write path and cryptography work)
@@ -353,7 +457,7 @@ sudo ufw allow 8000/tcp && sudo ufw allow 6001/tcp && sudo ufw allow 5683/udp
 This is the simplest thing that actually *does* something. It needs no login:
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/account/create
+curl -X POST http://localhost:8080/api/v1/account/create
 ```
 
 **You should see** JSON containing an `address` (starting `hb...`) and a `token`. That
@@ -363,7 +467,7 @@ so the crypto stack works on your ARM chip.
 ### Test 4: Check the chain height
 
 ```bash
-curl http://localhost:8000/api/v1/chain/height
+curl http://localhost:8080/api/v1/chain/height
 ```
 
 **You should see** a number. On a brand-new single node this may stay at `0` until blocks
@@ -402,8 +506,12 @@ On the second node, add this line to its env file, pointing at the first Pi:
 SEED_PEER=192.168.1.42:6001
 ```
 
-Start it, then on **either** node run `curl http://localhost:8000/api/v1/health`.
-**`peers` should become 1 or more.** That is a real two-node network.
+Start it, then on **either** node run `curl http://localhost:8080/api/v1/health`.
+**Expected today: this test FAILS — `peers` stays 0.** The nodes cannot complete their
+encrypted (TLS) connection because of a bug in how the software creates its certificate
+authority (audit finding HC-005, proven by a test that shows `PKIX path validation failed`).
+Until that is fixed, **only single-node testing (Tests 1–6) works.** Do not buy extra Pis for a
+multi-node network yet.
 
 ---
 
@@ -428,7 +536,7 @@ Type=simple
 User=pi
 WorkingDirectory=/home/pi
 EnvironmentFile=/home/pi/hybridchain.env
-ExecStart=/usr/bin/java -Xmx384m -jar /home/pi/blockchain-java-1.0-SNAPSHOT-jar-with-dependencies.jar
+ExecStart=/usr/bin/java -Xmx384m -DMIN_PEERS=3 -jar /home/pi/blockchain-java-1.0-SNAPSHOT-jar-with-dependencies.jar
 Restart=always
 RestartSec=10
 
@@ -492,5 +600,5 @@ sudo systemctl start hybridchain      # start
 sudo systemctl stop hybridchain       # stop
 sudo systemctl restart hybridchain    # restart
 sudo journalctl -u hybridchain -f     # live logs
-curl http://localhost:8000/api/v1/health   # is it alive?
+curl http://localhost:8080/api/v1/health   # is it alive?
 ```

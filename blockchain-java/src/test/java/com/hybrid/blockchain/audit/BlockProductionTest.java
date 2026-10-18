@@ -1,0 +1,114 @@
+package com.hybrid.blockchain.audit;
+
+import com.hybrid.blockchain.Block;
+import com.hybrid.blockchain.Crypto;
+import com.hybrid.blockchain.TestKeyPair;
+import com.hybrid.blockchain.Transaction;
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * [HC-025] End-to-end through the PRODUCTION path: addTransaction -> createBlock -> applyBlock.
+ * Existing block tests use BlockApplier, which bypasses createBlock; this is why HC-025 (no
+ * transfer was ever included by the producer) went unnoticed.
+ */
+class BlockProductionTest {
+
+    @Test
+    void producerIncludesChainedTransfersAndBalancesAreCorrect() throws Exception {
+        try (LedgerPoCFixture f = new LedgerPoCFixture()) {
+            TestKeyPair alice = new TestKeyPair(9301);
+            String bob = new TestKeyPair(9302).getAddress();
+            long funded = f.fund(alice.getAddress());
+            long fee = Math.max(1, f.chain.getCurrentBaseFee());
+
+            Transaction t1 = LedgerPoCFixture.transfer(alice, bob, 5, fee, 1);
+            Transaction t2 = LedgerPoCFixture.transfer(alice, bob, 7, fee, 2);
+            f.chain.addTransaction(t1);
+            f.chain.addTransaction(t2);                // admitted: nonce follows the pending t1
+
+            TestKeyPair producer = LedgerPoCFixture.VALIDATORS[0];
+            Block b = f.chain.createBlock(producer.getAddress(), 100);
+            b.setSignature(Crypto.sign(Crypto.hash(b.serializeCanonical()), producer.getPrivateKey()));
+            assertThat(b.getTransactions()).extracting(Transaction::getId).contains(t1.getId(), t2.getId());
+
+            f.commitAndApply(b);
+            assertThat(f.chain.getState().getBalance(bob)).isEqualTo(12);
+            assertThat(f.chain.getState().getBalance(alice.getAddress())).isEqualTo(funded - 12 - 2 * fee);
+            assertThat(f.chain.getNonce(alice.getAddress())).isEqualTo(2);
+            assertThat(f.chain.getMempool().size()).isZero();
+        }
+    }
+
+    /** [HC-021] signed competitor that fails full validation must leave the original tip in place. */
+    @Test
+    void invalidForkCandidateRestoresTip() throws Exception {
+        try (LedgerPoCFixture f = new LedgerPoCFixture()) {
+            String v0 = LedgerPoCFixture.VALIDATORS[0].getAddress();
+            f.commitAndApply(f.build(java.util.List.of(LedgerPoCFixture.mint(v0, f.scheduledReward())), 0));
+            Block good = f.build(java.util.List.of(), 0);
+            f.commitAndApply(good);
+            String rootBefore = f.chain.getState().calculateStateRoot();
+            // same parent, valid signature, WRONG state root, and a hash that sorts above the tip
+            Block bad = null;
+            for (long ts = good.getTimestamp() + 1; bad == null; ts++) {
+                Block c = new Block(good.getIndex(), ts, new java.util.ArrayList<>(), good.getPrevHash(),
+                        good.getDifficulty(), "ab".repeat(32));
+                if (c.getHash().compareTo(good.getHash()) > 0) bad = c;
+            }
+            bad.setValidatorId(v0);
+            bad.setSignature(Crypto.sign(Crypto.hash(bad.serializeCanonical()), LedgerPoCFixture.VALIDATORS[0].getPrivateKey()));
+            f.consensus.markCommitted(bad.getHash(), bad.getIndex(), v0);
+            Block badFinal = bad;
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> f.chain.applyBlock(badFinal))
+                    .hasMessageContaining("Invalid state root");
+            assertThat(f.chain.getLatestBlock().getHash()).isEqualTo(good.getHash());
+            assertThat(f.chain.getState().calculateStateRoot()).isEqualTo(rootBefore);
+        }
+    }
+
+    /** [HC-034] REST-style iteration of getChain() while blocks are applied. */
+    @Test
+    void chainIterationIsSafeDuringBlockApplication() throws Exception {
+        try (LedgerPoCFixture f = new LedgerPoCFixture()) {
+            String v0 = LedgerPoCFixture.VALIDATORS[0].getAddress();
+            java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
+            java.util.concurrent.atomic.AtomicBoolean done = new java.util.concurrent.atomic.AtomicBoolean();
+            Thread reader = new Thread(() -> {
+                while (!done.get()) {
+                    try {
+                        long sum = 0;
+                        for (Block b : f.chain.getChain()) sum += b.getIndex();   // as IoTRestAPI does
+                        if (sum < 0) throw new IllegalStateException();
+                    } catch (Throwable t) { failure.compareAndSet(null, t); return; }
+                }
+            });
+            reader.start();
+            for (int i = 0; i < 40; i++) f.commitAndApply(f.build(java.util.List.of(LedgerPoCFixture.mint(v0, f.scheduledReward())), 0));
+            done.set(true);
+            reader.join();
+            assertThat(failure.get()).as("reader saw a torn chain").isNull();
+            assertThat(f.chain.getHeight()).isEqualTo(40);
+        }
+    }
+
+    @Test
+    void producerSkipsTransferThatOverspendsCumulatively() throws Exception {
+        try (LedgerPoCFixture f = new LedgerPoCFixture()) {
+            TestKeyPair alice = new TestKeyPair(9303);
+            long funded = f.fund(alice.getAddress());
+            long fee = Math.max(1, f.chain.getCurrentBaseFee());
+            long half = (funded - 2 * fee) / 2 + 1;              // two of these exceed the balance
+            f.chain.addTransaction(LedgerPoCFixture.transfer(alice, "x", half, fee, 1));
+            try { f.chain.addTransaction(LedgerPoCFixture.transfer(alice, "x", half, fee, 2)); }
+            catch (Exception rejectedAtAdmission) { /* fine: pending-spend check */ }
+
+            TestKeyPair producer = LedgerPoCFixture.VALIDATORS[0];
+            Block b = f.chain.createBlock(producer.getAddress(), 100);
+            b.setSignature(Crypto.sign(Crypto.hash(b.serializeCanonical()), producer.getPrivateKey()));
+            f.commitAndApply(b);                               // must apply: no inapplicable tx included
+            assertThat(f.chain.getState().getBalance("x")).isEqualTo(half);
+        }
+    }
+}
