@@ -28,7 +28,7 @@ The equivocation scenario does **not** reproduce live double-voting on the wire.
 
 ## Prerequisites
 
-Docker Desktop (Linux containers) running; the images `eclipse-temurin:17-jre-jammy`, `gaiaadm/pumba` and `gaiadocker/iproute2` (pulled on first run); Python 3; Maven with a populated local repository; Git Bash on Windows.
+Docker Desktop (Linux containers) running; the images `eclipse-temurin:17-jre-jammy`, `gaiaadm/pumba` and its default helper image (`ghcr.io/alexei-led/pumba-alpine-nettools`) (pulled on first run); Python 3; Maven with a populated local repository; Git Bash on Windows.
 
 ## Run
 

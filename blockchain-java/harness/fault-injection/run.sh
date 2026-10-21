@@ -54,15 +54,19 @@ for sc in "${SCENARIOS[@]}"; do
       tA=(); for i in "${B[@]}"; do tA+=(--target "$(ip "$i")"); done
       tB=(); for i in "${A[@]}"; do tB+=(--target "$(ip "$i")"); done
       D=$((BLOCK_S * 4))
-      "${PUMBA[@]}" netem --duration "${D}s" --tc-image gaiadocker/iproute2 loss --percent 100 "${tA[@]}" $(for i in "${A[@]}"; do echo "hc-v$i"; done) &
-      "${PUMBA[@]}" netem --duration "${D}s" --tc-image gaiadocker/iproute2 loss --percent 100 "${tB[@]}" $(for i in "${B[@]}"; do echo "hc-v$i"; done) &
+      # --target is a flag of "netem" itself (not of the "loss" sub-command)
+      "${PUMBA[@]}" netem --duration "${D}s" "${tA[@]}" loss --percent 100 $(for i in "${A[@]}"; do echo "hc-v$i"; done) &
+      "${PUMBA[@]}" netem --duration "${D}s" "${tB[@]}" loss --percent 100 $(for i in "${B[@]}"; do echo "hc-v$i"; done) &
       sleep $((D / 2)); check --phase partition/during || true   # safety must hold; progress is not expected
       wait; check --phase partition/healed --expect-progress 2 --timeout $((BLOCK_S * 8)) ;;
     delay-loss)
-      D=$((BLOCK_S * 5))
-      "${PUMBA[@]}" netem --duration "${D}s" --tc-image gaiadocker/iproute2 delay --time 300 --jitter 100 $(for i in $(seq 1 "$N"); do echo "hc-v$i"; done) &
-      "${PUMBA[@]}" netem --duration "${D}s" --tc-image gaiadocker/iproute2 loss --percent 10 $(for i in $(seq 1 "$N"); do echo "hc-v$i"; done) &
-      check --phase delay-loss/during --expect-progress 1 --timeout "$D" || true
+      # one netem qdisc per interface at a time: delay first, then loss (running both at once fails)
+      D=$((BLOCK_S * 4)); NODES=$(for i in $(seq 1 "$N"); do echo "hc-v$i"; done)
+      "${PUMBA[@]}" netem --duration "${D}s" delay --time 300 --jitter 100 $NODES &
+      check --phase delay/during --expect-progress 1 --timeout "$D"
+      wait
+      "${PUMBA[@]}" netem --duration "${D}s" loss --percent 10 $NODES &
+      check --phase loss/during --expect-progress 1 --timeout "$D"
       wait; check --phase delay-loss/after --expect-progress 1 --timeout $((BLOCK_S * 5)) ;;
     restart-resync)
       docker stop "hc-v$N" >/dev/null; sleep $((BLOCK_S * 3)); docker start "hc-v$N" >/dev/null; wait_up
