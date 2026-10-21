@@ -10,7 +10,11 @@ SCENARIOS=("$@"); [[ ${#SCENARIOS[@]} -gt 0 ]] || SCENARIOS=(baseline leader-cra
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; ROOT="$(cd "$HERE/../.." && pwd)"
 ENV="$HERE/.env.$N"; COMPOSE="$HERE/docker-compose.$N.yml"; ADDR="$HERE/.addresses.$N"
 BLOCK_S=60            # Config.TARGET_BLOCK_TIME_MS (protocol constant, not configurable)
-PY="$(command -v python3 || command -v python || command -v py)"
+# first interpreter that actually runs (on Windows, "python3" can be the Microsoft Store stub)
+PY=""; for c in py python3 python; do
+  if command -v "$c" >/dev/null 2>&1 && "$c" -c "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)" >/dev/null 2>&1; then PY="$c"; break; fi
+done
+[[ -n "$PY" ]] || { echo "Python 3.8+ is required (py, python3 or python)" >&2; exit 1; }
 mkdir -p "$HERE/results"; OUT="$HERE/results/$(date -u +%Y%m%dT%H%M%SZ)-N$N.jsonl"
 DC=(docker compose --env-file "$ENV" -f "$COMPOSE")
 PUMBA=(docker run --rm -v //var/run/docker.sock:/var/run/docker.sock gaiaadm/pumba)
