@@ -46,8 +46,8 @@ Located in `src/main/java/com/hybrid/blockchain/security/SSLUtils.java`
 ### Step 1: Ensure NETWORK_CA_SEED is Set
 
 ```bash
-export NETWORK_CA_SEED=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff
-export NODE_PRIVATE_KEY=a24327eaed4fe735576f1ec2a4c433094d2e88a515ddaf22e2c98a592f0b81d8
+export NETWORK_CA_SEED=<from scripts/generate_keys.sh>
+export NODE_PRIVATE_KEY=<from scripts/generate_keys.sh>
 export VALIDATOR_PUBKEYS=0398e0f5fccf41f104eb724ba1f59c6f68043dad84786ddadc38614d635f25282b
 ```
 

@@ -632,7 +632,7 @@ Every setting can be given as an environment variable or a Java system property 
 
 Fixed protocol constants (in `Config.java`): block target time 60 s, max 2,000 transactions and 2 MB per block, mempool limit 10,000, timestamp drift 15 s, maximum code size 32 KB, genesis timestamp 1 January 2026 00:00 UTC.
 
-Generate keys for a network with `scripts/generate_keys.sh`. Keep them in `.env`, which must never be committed. The keys that were once in `.env.example` came from a published seed and are compromised (HC-075).
+Generate keys for a network with `scripts/generate_keys.sh` (random by default, file mode 600, never overwrites). Keep them out of git. Outside DEBUG, a node refuses any key or secret that was ever published in this repository (`security/CompromisedKeys`, O-3). Rotation steps: `docs/KEY_ROTATION.md`.
 
 ---
 
@@ -679,7 +679,7 @@ The most important fixes, in plain words:
 |---|---|---|
 | HC-079 | **Fixed for new `hq` accounts.** Classical `hb` accounts (including validator reward accounts) remain ECDSA-only by construction. | Medium (until funds move to `hq`) |
 | O-2 | No test yet on several real machines with real network faults. | High |
-| O-3 | Rotate every key that was ever derived from a published seed. | High |
+| O-3 | Rotate every key that was ever derived from a published seed. The node now refuses known ones; rotating real deployments is a human step (`docs/KEY_ROTATION.md`). | High |
 | O-8 | LevelDB data, `node_modules` and scratch files are committed to git. | Low |
 
 ---

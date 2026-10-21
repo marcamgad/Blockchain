@@ -138,7 +138,11 @@ public final class Config {
             keyEnv = System.getenv("STORAGE_AES_KEY");
         }
         if (keyEnv != null && !keyEnv.isEmpty()) {
-            STORAGE_AES_KEY = HexUtils.decode(keyEnv.trim());
+            byte[] k = HexUtils.decode(keyEnv.trim());
+            // [O-3] a key that was ever published (git history, docs, scripts) is refused
+            if (!getBooleanEnv("DEBUG", false) && com.hybrid.blockchain.security.CompromisedKeys.isCompromisedSecret(k))
+                throw new RuntimeException("STORAGE_AES_KEY is a publicly known key; generate a new one (docs/KEY_ROTATION.md)");
+            STORAGE_AES_KEY = k;
         } else {
             // Check debug mode dynamically for initialization
             if (getBooleanEnv("DEBUG", false)) {
@@ -171,6 +175,8 @@ public final class Config {
             throw new IllegalStateException("NETWORK_CA_SEED must be at least 32 bytes (64 hex chars)");
         if (STORAGE_AES_KEY != null && java.util.Arrays.equals(seed, STORAGE_AES_KEY))
             throw new IllegalStateException("NETWORK_CA_SEED must not equal STORAGE_AES_KEY");
+        if (!getBooleanEnv("DEBUG", false) && com.hybrid.blockchain.security.CompromisedKeys.isCompromisedSecret(seed))
+            throw new IllegalStateException("NETWORK_CA_SEED is publicly known; generate a new one (docs/KEY_ROTATION.md)");   // [O-3]
         return seed;
     }
 
@@ -222,7 +228,12 @@ public final class Config {
             if (isDebug()) return new java.math.BigInteger("1"); // Fallback for testing
             throw new RuntimeException("NODE_PRIVATE_KEY environment variable MUST be set for secure P2P.");
         }
-        return new java.math.BigInteger(keyHex, 16);
+        java.math.BigInteger key = new java.math.BigInteger(keyHex.trim(), 16);
+        // [O-3] refuse keys derived from published seeds or found in the repository's history
+        if (!isDebug() && com.hybrid.blockchain.security.CompromisedKeys.isCompromisedNodeKey(key))
+            throw new RuntimeException("NODE_PRIVATE_KEY is a publicly known key; generate a new one with "
+                    + "scripts/generate_keys.sh (docs/KEY_ROTATION.md)");
+        return key;
     }
 
     /**
