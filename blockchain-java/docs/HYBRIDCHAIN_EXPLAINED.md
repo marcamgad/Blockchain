@@ -738,7 +738,7 @@ All paths are under `src/main/java/com/hybrid/`.
 | `blockchain/lifecycle/` | Device lifecycle and device-signed readings. |
 | `blockchain/privacy/` | Zero-knowledge proofs and private data collections. |
 | `blockchain/ai/` | Federated learning, differential privacy, anomaly detection, threat scoring, contract auditor, proof of inference. |
-| `blockchain/reputation/` | Device reputation and the (disabled) ZK eligibility gate. |
+| `blockchain/reputation/` | Device reputation (the ZK eligibility gate was removed, O-7). |
 | `blockchain/governance/` | Council voting (not wired in). |
 | `blockchain/anchoring/` | External-chain anchoring (simulated). |
 | `blockchain/monitoring/` | Metrics and the Prometheus bridge. |
