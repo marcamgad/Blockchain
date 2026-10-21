@@ -39,6 +39,15 @@ public final class Config {
     /** Require hybrid ECDSA+Dilithium signatures on every transaction. Default false for backward compat. */
     public static final boolean REQUIRE_QUANTUM_SIG = getBooleanEnv("REQUIRE_QUANTUM_SIG", true);
 
+    /**
+     * [HC-079] First block height at which transactions FROM hybrid ("hq") addresses are valid.
+     * Consensus rule: every validator must run code that knows hq addresses before this height.
+     * 0 = active from genesis (new networks); a running network must set an agreed future height.
+     * NOTE: for classical "hb" accounts the ML-DSA signature required by REQUIRE_QUANTUM_SIG is NOT
+     * bound to the account and gives no post-quantum protection; only hq accounts are bound.
+     */
+    public static final long HYBRID_ADDRESS_ACTIVATION_HEIGHT = 0L;
+
     // ─── Fee Market (EIP-1559 style) ─────────────────────────────────────────
     /** Starting base fee in smallest token units. */
     public static final long BASE_FEE_INITIAL = 0L;

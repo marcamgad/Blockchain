@@ -387,7 +387,7 @@ A rejected block leaves no stored side effects (HC-024). Writes are staged and c
 |---|---|---|
 | Account and validator signatures | ECDSA on secp256k1, SHA-256 | Low-S enforced. The full 32-byte digest is signed; an old bug signed only part of the message (HC-040). |
 | Post-quantum signatures | ML-DSA (FIPS 204) via BouncyCastle | Required on every transaction by default (`REQUIRE_QUANTUM_SIG=true`). See the open finding HC-079 below. |
-| Addresses | `"hb"` + first 20 bytes of the hash of the public key, in hex | No checksum yet. |
+| Addresses | `"hb"` + 20 bytes of hash(ECDSA key), or `"hq"` + 20 bytes of hash(domain, ECDSA key, ML-DSA key) | `hq` accounts are bound to both keys (HC-079). No checksum yet. |
 | Hashing | SHA-256, with `Crypto.hashWithDomain` for domain separation | Every signed structure has its own domain tag. |
 | Merkle trees | `MerkleTree.java` (transactions), `MerklePatriciaTrie.java` (accounts, contract storage) | The odd-leaf duplication bug is fixed (HC-030). |
 | Storage encryption | AES-GCM with AAD | |
@@ -397,7 +397,7 @@ A rejected block leaves no stored side effects (HC-024). Writes are staged and c
 
 **Domain tags in use:** `TX\0`, `BLOCK\0`, `HYBRIDCHAIN-PBFT-v2`, `HYBRIDCHAIN-CHECKPOINT-v2`, `HYBRIDCHAIN-ZK-TELEMETRY-v1`, `HYBRIDCHAIN-ZK-PRIVATE-TRANSFER-v1`, `HYBRIDCHAIN-FIRMWARE-v1`, plus the handshake and credential domains.
 
-> **Open finding HC-079: the post-quantum signature is not tied to the account.** The address is derived only from the ECDSA key. The ML-DSA public key is whatever the transaction carries, and it is not stored per account. So someone able to forge the ECDSA signature (the future quantum attacker that ML-DSA is meant to stop) could attach a fresh ML-DSA key and pass the check. To fix it, register each account's ML-DSA key on first use (or derive the address from both keys), and require the same key afterwards.
+> **HC-079: two kinds of account.** A classical **`hb`** address is derived from the ECDSA key only. The ML-DSA signature that `REQUIRE_QUANTUM_SIG=true` requires on it is not tied to the account, so it gives **no** post-quantum protection. A hybrid **`hq`** address is `"hq" + hash(domain, ecPub, mldsaPub)[0..20]`. It commits to both keys, so spending needs both private keys, whatever `REQUIRE_QUANTUM_SIG` says. Holders who want protection against a future quantum attacker must move funds to an `hq` address (`Transaction.Builder.signHybridBound`). Transactions from `hq` addresses are valid from `Config.HYBRID_ADDRESS_ACTIVATION_HEIGHT` (0 for new networks). Validator identities and block rewards are still `hb`. Reasoning: `docs/decisions/HC-079-hybrid-address-binding.md`.
 
 ---
 
@@ -656,7 +656,7 @@ Test suite: 695 tests (unit, integration, Byzantine fault injection, pentests, a
 
 ## 21. Security status
 
-Two audit rounds recorded **79 findings** (HC-001 to HC-079). Every one of the critical findings is fixed, and each fix has a test that fails on the old code. Full detail is in the audit report, *HybridChain Security Audit II*.
+Two audit rounds recorded **79 findings** (HC-001 to HC-079). Every critical finding is fixed, and each fix has a test that fails on the old code. Full detail is in the audit report, *HybridChain Security Audit II*.
 
 The most important fixes, in plain words:
 
@@ -673,7 +673,7 @@ The most important fixes, in plain words:
 
 | ID | Item | Risk |
 |---|---|---|
-| HC-079 | The ML-DSA key is not tied to the account, so the post-quantum signature does not yet protect accounts. | High (for the post-quantum claim) |
+| HC-079 | **Fixed for new `hq` accounts.** Classical `hb` accounts (including validator reward accounts) remain ECDSA-only by construction. | Medium (until funds move to `hq`) |
 | O-2 | No test yet on several real machines with real network faults. | High |
 | O-3 | Rotate every key that was ever derived from a published seed. | High |
 | HC-058 | Contracts read sensors from each node's local hardware. | Medium (only once real sensors are attached) |

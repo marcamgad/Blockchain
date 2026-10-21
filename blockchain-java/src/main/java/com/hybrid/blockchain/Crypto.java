@@ -156,6 +156,25 @@ public final class Crypto {
         return "hb" + Hex.toHexString(Arrays.copyOfRange(h, 0, 20));
     }
 
+    /** [HC-079] Prefix of addresses bound to an ECDSA key AND an ML-DSA key ("q": quantum). */
+    public static final String HYBRID_ADDRESS_PREFIX = "hq";
+
+    /**
+     * [HC-079] Address committing to both keys, so neither key alone can spend from it.
+     * Hex never contains 'q', so "hq" and "hb" addresses can never be confused.
+     * See docs/decisions/HC-079-hybrid-address-binding.md.
+     */
+    public static String deriveHybridAddress(byte[] ecPubKey, byte[] mldsaPubKey) {
+        if (ecPubKey == null || mldsaPubKey == null) throw new IllegalArgumentException("both public keys are required");
+        byte[] h = hashWithDomain("HYBRIDCHAIN-ADDR-HYBRID-v1", ecPubKey, mldsaPubKey);
+        return HYBRID_ADDRESS_PREFIX + Hex.toHexString(Arrays.copyOfRange(h, 0, 20));
+    }
+
+    /** [HC-079] */
+    public static boolean isHybridAddress(String address) {
+        return address != null && address.startsWith(HYBRID_ADDRESS_PREFIX);
+    }
+
     private static void copyToLength(byte[] src, byte[] dest, int destOffset, int length) {
         int srcLen = Math.min(src.length, length);
         int srcOffset = Math.max(0, src.length - length);

@@ -268,6 +268,8 @@ public class Blockchain {
     public void validateTransaction(Transaction tx, boolean skipNonce) throws Exception {
         if (tx.getType() == Transaction.Type.MINT && tx.getFrom() != null)
             throw new Exception("MINT must be system-initiated");
+        if (Crypto.isHybridAddress(tx.getFrom()) && getHeight() + 1 < Config.HYBRID_ADDRESS_ACTIVATION_HEIGHT)
+            throw new Exception("Hybrid (hq) addresses are not active before height " + Config.HYBRID_ADDRESS_ACTIVATION_HEIGHT);
         if (tx.getFrom() != null && !tx.verify())
             throw new Exception("Invalid signature");
         if (tx.getNetworkId() != Config.NETWORK_ID)
