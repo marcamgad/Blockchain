@@ -39,6 +39,22 @@ public final class Config {
     /** Require hybrid ECDSA+Dilithium signatures on every transaction. Default false for backward compat. */
     public static final boolean REQUIRE_QUANTUM_SIG = getBooleanEnv("REQUIRE_QUANTUM_SIG", true);
 
+    /**
+     * [HC-079] First block height at which transactions FROM hybrid ("hq") addresses are valid.
+     * Consensus rule: every validator must run code that knows hq addresses before this height.
+     * 0 = active from genesis (new networks); a running network must set an agreed future height.
+     * NOTE: for classical "hb" accounts the ML-DSA signature required by REQUIRE_QUANTUM_SIG is NOT
+     * bound to the account and gives no post-quantum protection; only hq accounts are bound.
+     */
+    public static final long HYBRID_ADDRESS_ACTIVATION_HEIGHT = 0L;
+
+    /**
+     * [O-6] Protocol constant (not an environment flag: a per-node setting would change validity).
+     * PRIVATE_TRANSFER moves no value, so it is rejected. Consensus rule: a chain that already
+     * contains PRIVATE_TRANSFER transactions cannot be replayed by nodes with this rule.
+     */
+    public static final boolean PRIVATE_TRANSFER_DISABLED = true;
+
     // ─── Fee Market (EIP-1559 style) ─────────────────────────────────────────
     /** Starting base fee in smallest token units. */
     public static final long BASE_FEE_INITIAL = 0L;
@@ -122,7 +138,11 @@ public final class Config {
             keyEnv = System.getenv("STORAGE_AES_KEY");
         }
         if (keyEnv != null && !keyEnv.isEmpty()) {
-            STORAGE_AES_KEY = HexUtils.decode(keyEnv.trim());
+            byte[] k = HexUtils.decode(keyEnv.trim());
+            // [O-3] a key that was ever published (git history, docs, scripts) is refused
+            if (!getBooleanEnv("DEBUG", false) && com.hybrid.blockchain.security.CompromisedKeys.isCompromisedSecret(k))
+                throw new RuntimeException("STORAGE_AES_KEY is a publicly known key; generate a new one (docs/KEY_ROTATION.md)");
+            STORAGE_AES_KEY = k;
         } else {
             // Check debug mode dynamically for initialization
             if (getBooleanEnv("DEBUG", false)) {
@@ -155,6 +175,8 @@ public final class Config {
             throw new IllegalStateException("NETWORK_CA_SEED must be at least 32 bytes (64 hex chars)");
         if (STORAGE_AES_KEY != null && java.util.Arrays.equals(seed, STORAGE_AES_KEY))
             throw new IllegalStateException("NETWORK_CA_SEED must not equal STORAGE_AES_KEY");
+        if (!getBooleanEnv("DEBUG", false) && com.hybrid.blockchain.security.CompromisedKeys.isCompromisedSecret(seed))
+            throw new IllegalStateException("NETWORK_CA_SEED is publicly known; generate a new one (docs/KEY_ROTATION.md)");   // [O-3]
         return seed;
     }
 
@@ -206,7 +228,12 @@ public final class Config {
             if (isDebug()) return new java.math.BigInteger("1"); // Fallback for testing
             throw new RuntimeException("NODE_PRIVATE_KEY environment variable MUST be set for secure P2P.");
         }
-        return new java.math.BigInteger(keyHex, 16);
+        java.math.BigInteger key = new java.math.BigInteger(keyHex.trim(), 16);
+        // [O-3] refuse keys derived from published seeds or found in the repository's history
+        if (!isDebug() && com.hybrid.blockchain.security.CompromisedKeys.isCompromisedNodeKey(key))
+            throw new RuntimeException("NODE_PRIVATE_KEY is a publicly known key; generate a new one with "
+                    + "scripts/generate_keys.sh (docs/KEY_ROTATION.md)");
+        return key;
     }
 
     /**

@@ -1,7 +1,6 @@
 package com.hybrid.blockchain;
 
 import com.hybrid.blockchain.privacy.ZKProofSystem;
-import com.hybrid.blockchain.reputation.ZkEligibilityGate;
 import com.hybrid.blockchain.security.QuantumResistantCrypto;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -72,11 +71,14 @@ public class EdgeReadinessProbe {
             catch (Exception e) { throw new RuntimeException(e); }
         });
 
-        // Zero-knowledge: the heaviest operation in the system by far.
-        long zkProve = timeOp("ZK threshold proof (create)", 3,
-                () -> ZkEligibilityGate.prove(0.90, 0.50));
-        ZKProofSystem.ThresholdProof p = ZkEligibilityGate.prove(0.90, 0.50);
-        long zkVerify = timeOp("ZK threshold proof (verify)", 3, p::verify);
+        // Zero-knowledge: the ownership (Schnorr) proof used for PUF telemetry. [O-7] the
+        // threshold proof measured here before was removed as unsound.
+        byte[] zkPriv = priv.toByteArray();
+        byte[] zkPub = pub;
+        long zkProve = timeOp("ZK ownership proof (create)", 3,
+                () -> ZKProofSystem.OwnershipProof.create(zkPriv, zkPub));
+        ZKProofSystem.OwnershipProof p = ZKProofSystem.OwnershipProof.create(zkPriv, zkPub);
+        long zkVerify = timeOp("ZK ownership proof (verify)", 3, () -> p.verify(zkPub));
 
         out.append(String.format("%-34s %10.3f ms%n", "ECDSA sign",        ecdsaSign / 1e6));
         out.append(String.format("%-34s %10.3f ms%n", "ECDSA verify",      ecdsaVerify / 1e6));

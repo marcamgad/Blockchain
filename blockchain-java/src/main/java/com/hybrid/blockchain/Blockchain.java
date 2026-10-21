@@ -268,6 +268,8 @@ public class Blockchain {
     public void validateTransaction(Transaction tx, boolean skipNonce) throws Exception {
         if (tx.getType() == Transaction.Type.MINT && tx.getFrom() != null)
             throw new Exception("MINT must be system-initiated");
+        if (Crypto.isHybridAddress(tx.getFrom()) && getHeight() + 1 < Config.HYBRID_ADDRESS_ACTIVATION_HEIGHT)
+            throw new Exception("Hybrid (hq) addresses are not active before height " + Config.HYBRID_ADDRESS_ACTIVATION_HEIGHT);
         if (tx.getFrom() != null && !tx.verify())
             throw new Exception("Invalid signature");
         if (tx.getNetworkId() != Config.NETWORK_ID)
@@ -286,6 +288,7 @@ public class Blockchain {
             tx.getType() != Transaction.Type.UTXO &&
             tx.getType() != Transaction.Type.PRIVATE_TRANSFER &&
             tx.getType() != Transaction.Type.TELEMETRY_BATCH &&
+            tx.getType() != Transaction.Type.EQUIVOCATION_EVIDENCE &&
             tx.getType() != Transaction.Type.MINT) {
             throw new Exception("Missing destination");
         }
@@ -443,6 +446,10 @@ public class Blockchain {
                 break;
 
             case PRIVATE_TRANSFER:
+                // [O-6] disabled: the type accepted a proof and a fee but moved no value, so users
+                // could believe a payment happened. Rejected until a real shielded design exists.
+                if (Config.PRIVATE_TRANSFER_DISABLED)
+                    throw new Exception("PRIVATE_TRANSFER is disabled: it does not transfer any value (O-6)");
                 // [PHASE-0] FIX-6: ZKP Private Transfer validation
                 if (tx.getFrom() == null) throw new Exception("PRIVATE_TRANSFER must have a from address");
                 try {
@@ -681,6 +688,26 @@ public class Blockchain {
                     }
                 }
                 break;
+
+            case EQUIVOCATION_EVIDENCE: {
+                // [O-5] anyone may report; the evidence itself is the proof
+                if (tx.getFrom() == null) throw new Exception("EQUIVOCATION_EVIDENCE must have a reporter");
+                if (!(consensus instanceof com.hybrid.blockchain.consensus.PBFTConsensus))
+                    throw new Exception("Equivocation evidence requires PBFT");
+                com.hybrid.blockchain.consensus.PBFTConsensus.EquivocationEvidence ev = MAPPER.readValue(tx.getData(),
+                        com.hybrid.blockchain.consensus.PBFTConsensus.EquivocationEvidence.class);
+                if (!((com.hybrid.blockchain.consensus.PBFTConsensus) consensus).verifyEvidence(ev))
+                    throw new Exception("Invalid equivocation evidence");
+                if (state.isJailed(ev.validatorId))
+                    throw new Exception("Validator already jailed: " + ev.validatorId);
+                if (!skipNonce) {
+                    long expected = state.getNonce(tx.getFrom()) + 1;
+                    if (tx.getNonce() != expected) throw new IllegalArgumentException("Invalid nonce: expected " + expected + " got " + tx.getNonce());
+                }
+                if (state.getBalance(tx.getFrom()) < tx.getFee())
+                    throw new Exception("Insufficient fee for EQUIVOCATION_EVIDENCE");
+                break;
+            }
 
             default:
                 throw new Exception("Unknown transaction type: " + tx.getType());
@@ -1430,33 +1457,6 @@ public class Blockchain {
                     // signal (see runAdvisoryAnomalyDetection), and never changes state.
                     final boolean isAnomaly = false;
 
-                    // P1-D: ZK-Firmware Integrity check
-                    try {
-                        com.hybrid.blockchain.lifecycle.DeviceLifecycleManager.DeviceRecord device = targetState.getLifecycleManager().getDeviceRecord(tx.getFrom());
-                        if (device != null && device.getFirmwareHistory() != null && !device.getFirmwareHistory().isEmpty()) {
-                            com.hybrid.blockchain.lifecycle.DeviceLifecycleManager.FirmwareUpdate latest = device.getFirmwareHistory().get(device.getFirmwareHistory().size() - 1);
-                            if (latest.getCommitment() != null) {
-                                // Attempt to find FirmwareProof in tx data (e.g. if it's a JSON with both Ownership and Firmware proofs)
-                                com.hybrid.blockchain.privacy.ZKProofSystem.FirmwareProof fwProof = null;
-                                try {
-                                    Map<String, Object> txData = MAPPER.readValue(tx.getData(), Map.class);
-                                    if (txData.containsKey("firmwareProof")) {
-                                        fwProof = MAPPER.convertValue(txData.get("firmwareProof"), com.hybrid.blockchain.privacy.ZKProofSystem.FirmwareProof.class);
-                                    }
-                                } catch (Exception ignored) {}
-
-                                if (fwProof == null || !java.util.Arrays.equals(fwProof.getCommitment(), latest.getCommitment())) {
-                                    log.warn("[P1-D] Device {} failed firmware integrity check. Applying penalty.", tx.getFrom());
-                                    // Validators that see TELEMETRY without FirmwareProof after firmware update reduce device reputation by 0.05
-                                    targetState.getLifecycleManager().recordDeviceActivity(tx.getFrom(), false);
-                                    // Additionally, we can force a small penalty
-                                    targetState.debit(tx.getFrom(), 5000); // 0.05 equivalent in base units if fee=100k
-                                }
-                            }
-                        }
-                    } catch (Exception ignored) {}
-
-
                     // Store telemetry data; hash large payloads (>= 1024 bytes)
                     byte[] toStore = telemetryPayload.length >= 1024 ? Crypto.hash(telemetryPayload) : telemetryPayload;
                     try {
@@ -1465,6 +1465,15 @@ public class Blockchain {
                             targetDeviceId = tx.getFrom(); // Simplified/Legacy fallback
                         }
 
+                        // [HC-058] make the reading available to contracts, deterministically:
+                        // only when the DEVICE authenticated it (checked here against the block
+                        // timestamp, never the wall clock) and the payload is a number
+                        if (isDeviceAuthenticated(targetState, targetDeviceId, tx, rawData, timestamp)) {
+                            Long milli = com.hybrid.blockchain.lifecycle.SensorReadings.parseMilli(telemetryPayload);
+                            if (milli != null) {
+                                targetState.recordReading(com.hybrid.blockchain.lifecycle.SensorReadings.sensorId(targetDeviceId), milli);
+                            }
+                        }
                         if (targetState == this.state) {
                             final String telemDevice = targetDeviceId;   // [HC-024] deferred write
                             pendingWrites.add(() -> storage.saveTelemetry(telemDevice, (int) blockIndex, tx.getId(), toStore));
@@ -1626,6 +1635,26 @@ public class Blockchain {
                 }
                 return new ExecutionResult(0, null, null, transactionEvents);
 
+            case EQUIVOCATION_EVIDENCE: {
+                // [O-5] jail the validator in the state (state root), then in consensus after acceptance
+                com.hybrid.blockchain.consensus.PBFTConsensus.EquivocationEvidence ev = MAPPER.readValue(tx.getData(),
+                        com.hybrid.blockchain.consensus.PBFTConsensus.EquivocationEvidence.class);
+                if (!(consensus instanceof com.hybrid.blockchain.consensus.PBFTConsensus)
+                        || !((com.hybrid.blockchain.consensus.PBFTConsensus) consensus).verifyEvidence(ev))
+                    throw new Exception("Invalid equivocation evidence");
+                if (targetState.isJailed(ev.validatorId))
+                    throw new Exception("Validator already jailed: " + ev.validatorId);
+                targetState.debit(tx.getFrom(), tx.getFee());
+                targetState.incrementNonce(tx.getFrom());
+                targetState.jail(ev.validatorId);
+                if (targetState == this.state) {
+                    pendingWrites.add(this::syncJailedValidators);
+                }
+                log.warn("[SLASH] Validator {} jailed by on-chain equivocation evidence (reported by {})",
+                        ev.validatorId, tx.getFrom());
+                return new ExecutionResult(0, null, null, transactionEvents);
+            }
+
             case TELEMETRY_BATCH:
                 // PAPER-IMPL: P1-B — Maftei et al. Sensors 2025, DOI:10.3390/s25092886
                 // Decode JSON array of {deviceId, value, timestamp} tuples and run anomaly detection on each
@@ -1694,6 +1723,39 @@ public class Blockchain {
         String action = (String) data.get("action");
         DeviceLifecycleManager lifecycle = targetState.getLifecycleManager();
         handleIoTAction(lifecycle, action, data, tx.getFrom(), timestamp);
+    }
+
+    /**
+     * [HC-058] True iff the device itself authenticated this reading: a DeviceReading signed with
+     * the device's registered key (window checked against the BLOCK timestamp), a PUF ownership
+     * proof bound to this transaction, or a transaction sent by the device's own key. A reading
+     * merely submitted by the owner or a gateway is not device-authenticated.
+     */
+    private boolean isDeviceAuthenticated(AccountState st, String deviceId, Transaction tx, byte[] rawData, long blockTimestamp) {
+        if (deviceId == null) return false;
+        byte[] deviceKey = com.hybrid.blockchain.lifecycle.DeviceReading.registeredKey(st, deviceId);
+        if (deviceKey == null) return false;
+        com.hybrid.blockchain.lifecycle.DeviceReading reading = com.hybrid.blockchain.lifecycle.DeviceReading.parse(rawData);
+        if (reading != null) return reading.verify(st, deviceId, blockTimestamp);
+        try {
+            com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof proof =
+                    MAPPER.readValue(rawData, com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof.class);
+            if (proof != null && proof.getPayload() != null && proof.getProof() != null) {
+                return com.hybrid.blockchain.privacy.ZKProofSystem.verifyOwnership(deviceKey, proof)
+                        && java.util.Arrays.equals(proof.getChallenge(), com.hybrid.blockchain.privacy.ZKProofSystem
+                                .telemetryChallenge(deviceId, tx.getFrom(), tx.getNonce(), proof.getPayload()));
+            }
+        } catch (Exception ignored) {
+            // not a proof envelope
+        }
+        return Crypto.deriveAddress(deviceKey).equals(tx.getFrom());
+    }
+
+    /** [O-5] Mirrors the on-chain jail set into the consensus engine. */
+    public void syncJailedValidators() {
+        if (consensus instanceof com.hybrid.blockchain.consensus.PBFTConsensus) {
+            ((com.hybrid.blockchain.consensus.PBFTConsensus) consensus).setJailedValidators(state.getJailedValidators());
+        }
     }
 
     private void handleIoTAction(DeviceLifecycleManager lifecycle, String action, Map<String, Object> data, String from, long timestamp) throws Exception {

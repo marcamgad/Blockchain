@@ -28,6 +28,10 @@ public class AccountState {
     private PrivateDataManager privateDataManager;
     private MerklePatriciaTrie mpt;
     private final Set<String> spentNullifiers;
+    /** [O-5] Validators jailed by on-chain equivocation evidence (part of the state root once non-empty). */
+    private final Set<String> jailedValidators = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** [HC-058] sensorId -> latest device-authenticated reading (milli-units); sorted for hashing. */
+    private final java.util.concurrent.ConcurrentSkipListMap<Long, Long> sensorReadings = new java.util.concurrent.ConcurrentSkipListMap<>();
 
     public String calculateRoot() {
         return HexUtils.encode(mpt.getRootHash());
@@ -150,6 +154,14 @@ public class AccountState {
             List<String> nl = (List<String>) raw.get("nullifiers");
             accountState.spentNullifiers.addAll(nl);
         }
+        if (raw.containsKey("sensorReadings")) {
+            for (Map.Entry<String, Object> e : ((Map<String, Object>) raw.get("sensorReadings")).entrySet()) {
+                accountState.sensorReadings.put(Long.parseLong(e.getKey()), ((Number) e.getValue()).longValue());
+            }
+        }
+        if (raw.containsKey("jailedValidators")) {
+            accountState.jailedValidators.addAll((List<String>) raw.get("jailedValidators"));
+        }
 
         return accountState;
     }
@@ -201,6 +213,10 @@ public class AccountState {
         json.put("lifecycle", lifecycleManager.toJSON());
         json.put("privateData", privateDataManager.toJSON());
         json.put("nullifiers", new ArrayList<>(spentNullifiers));
+        json.put("jailedValidators", new ArrayList<>(new TreeSet<>(jailedValidators)));
+        Map<String, Long> readings = new java.util.LinkedHashMap<>();
+        for (Map.Entry<Long, Long> e : sensorReadings.entrySet()) readings.put(Long.toString(e.getKey()), e.getValue());
+        json.put("sensorReadings", readings);
 
         return json;
     }
@@ -449,6 +465,32 @@ public class AccountState {
         return spentNullifiers.contains(nullifier);
     }
 
+    /** [HC-058] Latest recorded reading for a sensor, or {@code SensorReadings.NO_READING}. */
+    public long getLatestReading(long sensorId) {
+        Long v = sensorReadings.get(sensorId);
+        return v == null ? com.hybrid.blockchain.lifecycle.SensorReadings.NO_READING : v;
+    }
+
+    /** [HC-058] Records a device-authenticated reading (called only by the TELEMETRY transition). */
+    public void recordReading(long sensorId, long milliValue) {
+        sensorReadings.put(sensorId, milliValue);
+    }
+
+    /** [O-5] */
+    public boolean isJailed(String validatorId) {
+        return jailedValidators.contains(validatorId);
+    }
+
+    /** [O-5] */
+    public void jail(String validatorId) {
+        jailedValidators.add(validatorId);
+    }
+
+    /** [O-5] */
+    public Set<String> getJailedValidators() {
+        return Collections.unmodifiableSet(jailedValidators);
+    }
+
     public void recordNullifier(String nullifier) {
         spentNullifiers.add(nullifier);
     }
@@ -462,7 +504,7 @@ public class AccountState {
         try {
             ObjectMapper objectMapper = new ObjectMapper();
             objectMapper.configure(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
-            
+
             byte[] accountRoot = mpt.getRootHash();
             byte[] ssiBytes    = objectMapper.writeValueAsBytes(ssiManager.toJSON());
             byte[] ssiHash     = Crypto.hash(ssiBytes);
@@ -470,11 +512,26 @@ public class AccountState {
             byte[] lcHash      = Crypto.hash(lcBytes);
             byte[] nulHash     = Crypto.hash(new ObjectMapper().writeValueAsBytes(new ArrayList<>(new TreeSet<>(spentNullifiers))));
 
-            byte[] combined = new byte[128];
+            // [O-5] the jailed set, and [HC-058] the sensor readings, join the root only once
+            // non-empty, so existing roots are unchanged
+            List<byte[]> extra = new ArrayList<>();
+            if (!jailedValidators.isEmpty()) {
+                extra.add(Crypto.hash(new ObjectMapper().writeValueAsBytes(new ArrayList<>(new TreeSet<>(jailedValidators)))));
+            }
+            if (!sensorReadings.isEmpty()) {
+                java.io.ByteArrayOutputStream rb = new java.io.ByteArrayOutputStream();
+                java.io.DataOutputStream rd = new java.io.DataOutputStream(rb);
+                rd.write("HYBRIDCHAIN-SENSOR-READINGS-v1\0".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                for (Map.Entry<Long, Long> e : sensorReadings.entrySet()) { rd.writeLong(e.getKey()); rd.writeLong(e.getValue()); }
+                rd.flush();
+                extra.add(Crypto.hash(rb.toByteArray()));
+            }
+            byte[] combined = new byte[128 + 32 * extra.size()];
             System.arraycopy(accountRoot, 0, combined,  0, 32);
             System.arraycopy(ssiHash,     0, combined, 32, 32);
             System.arraycopy(lcHash,      0, combined, 64, 32);
             System.arraycopy(nulHash,     0, combined, 96, 32);
+            for (int i = 0; i < extra.size(); i++) System.arraycopy(extra.get(i), 0, combined, 128 + 32 * i, 32);
 
             return Crypto.bytesToHex(Crypto.hash(combined));
         } catch (Exception e) {
@@ -530,16 +587,16 @@ public class AccountState {
 
             if (this.state.containsKey(addr)) {
                 Account thisAccount = this.state.get(addr);
-                
+
                 // OVERWRITE balances from the sim state (sim state started as a clone)
                 Map<String, Long> newsBals = otherAccount.getTokenBalances();
                 for (Map.Entry<String, Long> tokenEntry : newsBals.entrySet()) {
                     thisAccount.setTokenBalance(tokenEntry.getKey(), tokenEntry.getValue());
                 }
-                
+
                 // Sync nonces
                 thisAccount.setNonce(otherAccount.getNonce());
-                
+
                 // Sync code if new
                 if (thisAccount.getCode() == null && otherAccount.getCode() != null) {
                     thisAccount.setCode(otherAccount.getCode());
@@ -682,8 +739,8 @@ public class AccountState {
         }
 
         public synchronized double getReputation() { return reputation; }
-        public synchronized void setReputation(double r) { 
-            this.reputation = r; 
+        public synchronized void setReputation(double r) {
+            this.reputation = r;
         }
 
         public synchronized byte[] getCommitment() { return commitment; }

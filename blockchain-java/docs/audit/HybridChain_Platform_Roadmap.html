@@ -1,0 +1,467 @@
+<title>HybridChain Platform Roadmap</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: same reading system as the audit report (sticky contents + 70ch column); gap tables scroll inside their own containers. */
+:root {
+  --bg: #f6f8f9; --surface: #ffffff; --fg: #16212b; --muted: #5a6b78; --rule: #d7dfe5;
+  --accent: #0b6b74; --accent-soft: #e2f1f2; --code-bg: #eef2f4;
+  --have: #1d7a46; --have-bg: #e0f3e8;
+  --part: #8a6d00; --part-bg: #fbf3cf;
+  --miss: #b4232f; --miss-bg: #fbe6e8;
+  --info: #3d6a8a; --info-bg: #e4eef5;
+  --display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f161c; --surface: #16202a; --fg: #e3eaef; --muted: #96a6b3; --rule: #2a3946;
+    --accent: #4cc2cb; --accent-soft: #143238; --code-bg: #1c2833;
+    --have: #6fd69c; --have-bg: #12301f; --part: #e8c94e; --part-bg: #332c12;
+    --miss: #ff7b86; --miss-bg: #3a1a1f; --info: #8cc0e3; --info-bg: #16293a;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f161c; --surface: #16202a; --fg: #e3eaef; --muted: #96a6b3; --rule: #2a3946;
+  --accent: #4cc2cb; --accent-soft: #143238; --code-bg: #1c2833;
+  --have: #6fd69c; --have-bg: #12301f; --part: #e8c94e; --part-bg: #332c12;
+  --miss: #ff7b86; --miss-bg: #3a1a1f; --info: #8cc0e3; --info-bg: #16293a;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 17px; line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.wrap { max-width: 1180px; margin: 0 auto; padding-block: 40px 80px; display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 48px; }
+nav.toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 24px); align-self: start; font-size: 14px; }
+nav.toc h2 { font-family: var(--display); font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+nav.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+nav.toc a { color: var(--fg); text-decoration: none; border-left: 2px solid var(--rule); padding-left: 10px; display: block; }
+nav.toc a:hover, nav.toc a:focus-visible { border-color: var(--accent); color: var(--accent); outline: none; }
+main { min-width: 0; }
+.prose { max-width: 70ch; }
+header.cover { border-bottom: 1px solid var(--rule); padding-bottom: 28px; margin-bottom: 36px; }
+.eyebrow { font-family: var(--mono); font-size: 12.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
+h1 { font-family: var(--display); font-weight: 700; font-size: clamp(34px, 5vw, 50px); line-height: 1.08; margin: 10px 0 14px; text-wrap: balance; letter-spacing: -0.01em; }
+h2 { font-family: var(--display); font-weight: 700; font-size: 28px; line-height: 1.2; margin: 56px 0 14px; text-wrap: balance; scroll-margin-top: 24px; }
+h3 { font-family: var(--display); font-weight: 500; font-size: 21px; margin: 32px 0 8px; text-wrap: balance; scroll-margin-top: 24px; }
+h4 { font-family: var(--body); font-weight: 700; font-size: 14px; margin: 16px 0 4px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+p { margin: 0 0 14px; }
+.lede { font-size: 20px; color: var(--muted); max-width: 62ch; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 24px; font-size: 14.5px; color: var(--muted); margin-top: 18px; }
+.meta b { color: var(--fg); font-weight: 600; }
+code { font-family: var(--mono); font-size: .86em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+a { color: var(--accent); }
+.verdict { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 22px 24px; display: grid; gap: 12px; }
+.verdict .line { font-family: var(--display); font-size: 23px; font-weight: 700; line-height: 1.25; text-wrap: balance; }
+.tbl { overflow-x: auto; margin: 14px 0 22px; border: 1px solid var(--rule); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 15px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-weight: 700; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); background: var(--bg); }
+tr:last-child td { border-bottom: 0; }
+td.k { font-weight: 600; white-space: nowrap; }
+.tag { display: inline-block; font-family: var(--mono); font-size: 11.5px; font-weight: 600; letter-spacing: .04em; padding: 2px 7px; border-radius: 999px; white-space: nowrap; }
+.t-have { color: var(--have); background: var(--have-bg); }
+.t-part { color: var(--part); background: var(--part-bg); }
+.t-miss { color: var(--miss); background: var(--miss-bg); }
+.t-info { color: var(--info); background: var(--info-bg); }
+.area { border-top: 1px solid var(--rule); padding-top: 6px; margin-top: 30px; }
+.area .head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; }
+.area .head h3 { margin: 18px 0 4px; }
+.cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin: 10px 0 6px; }
+.cols > div { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 14px; min-width: 0; }
+.cols .k { font-family: var(--mono); font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+.cols p, .cols li { font-size: 15.5px; margin: 0; }
+.cols ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.note { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; }
+.options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin: 14px 0; }
+.opt { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 16px; min-width: 0; display: grid; gap: 8px; align-content: start; }
+.opt.pick { border: 2px solid var(--accent); }
+.opt h4 { margin: 0; color: var(--fg); font-size: 15px; }
+.opt p { margin: 0; font-size: 15.5px; }
+ol.phases { list-style: none; padding: 0; margin: 10px 0; display: grid; gap: 14px; }
+ol.phases > li { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 18px; }
+ol.phases .ph { font-family: var(--mono); font-size: 12px; color: var(--accent); letter-spacing: .06em; text-transform: uppercase; }
+ol.phases h4 { margin: 4px 0 8px; color: var(--fg); font-size: 17px; text-transform: none; letter-spacing: 0; font-family: var(--display); font-weight: 500; }
+ol.phases ul { margin: 0; padding-left: 20px; display: grid; gap: 4px; font-size: 15.5px; }
+.src { font-size: 14.5px; }
+.src li { margin: 4px 0; overflow-wrap: anywhere; }
+footer { margin-top: 64px; padding-top: 18px; border-top: 1px solid var(--rule); color: var(--muted); font-size: 14px; }
+@media (max-width: 900px) {
+  .wrap { grid-template-columns: minmax(0, 1fr); gap: 0; padding-block: 24px 60px; }
+  nav.toc { position: static; margin-bottom: 28px; }
+  nav.toc ol { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+  .cols, .options { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 620px) { body { font-size: 16px; } h2 { font-size: 24px; } }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+</style>
+
+<div class="wrap">
+<nav class="toc" aria-label="Contents">
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#summary">1. Summary</a></li>
+    <li><a href="#today">2. Where HybridChain stands</a></li>
+    <li><a href="#gaps">3. Gaps against the state of the art</a></li>
+    <li><a href="#options">4. Three ways to get there</a></li>
+    <li><a href="#phases">5. Phased plan</a></li>
+    <li><a href="#rules">6. Rules for the build</a></li>
+    <li><a href="#sources">7. Sources</a></li>
+  </ol>
+</nav>
+
+<main>
+<header class="cover">
+  <div class="eyebrow">Research · from IoT chain to public cryptocurrency and general platform</div>
+  <h1>HybridChain Platform Roadmap</h1>
+  <p class="lede">What HybridChain would need to work as a public cryptocurrency and as a general-purpose smart-contract platform, measured against the 2025 to 2026 state of the art and mapped to this codebase.</p>
+  <div class="meta">
+    <span><b>Date</b> 21 Oct 2026</span>
+    <span><b>Baseline</b> HybridChain after audit round 2 (695 tests passing, 78 findings fixed or tracked)</span>
+    <span><b>Companion</b> <a href="https://claude.ai/artifact/91jSZdKqpTABB8PCvvmAfj">HybridChain Security Audit II</a></span>
+  </div>
+</header>
+
+<section id="summary">
+<h2>1. Summary</h2>
+<div class="verdict">
+  <div class="line">HybridChain is a solid permissioned IoT chain. A public coin needs four foundations it does not have yet: divisible money, proof-of-stake, Ethereum-compatible execution and light clients.</div>
+  <div class="prose" style="margin:0">
+    <p>The audit fixed the safety problems, so the core now behaves like a correct permissioned BFT chain. A public cryptocurrency is a different trust model. Anyone can join, value is at stake, and wallets, exchanges and bridges must be able to integrate. Four changes alter the protocol itself and should be made before any coin is launched, because changing them afterwards means a hard fork with real money on it:</p>
+    <ul>
+      <li><b>Money units.</b> The supply is 21,000,000 indivisible units and the reward is 50 units. The coin needs decimals.</li>
+      <li><b>Who may validate.</b> The validator list is fixed today. An open network needs stake-weighted validators, with unbonding and slashing.</li>
+      <li><b>Addresses and signatures.</b> Addresses need checksums, and signatures need a versioned post-quantum path.</li>
+      <li><b>Verifiable headers.</b> The commit certificate added in round 2 is the basis for light clients, but it needs compact aggregate signatures and validator-set change proofs.</li>
+    </ul>
+    <p style="margin:0"><b>Recommendation:</b> keep HybridChain's IoT identity layer as the reason the chain exists, and become Ethereum-compatible by embedding a proven EVM. Build the rest by reusing audited libraries instead of writing new cryptography. Section 4 compares this with the two alternatives.</p>
+  </div>
+</div>
+<div class="note">This is engineering research, not legal or investment advice. Issuing or offering a token to the public is regulated in many places (section 3.13). Have a lawyer check the plan before any public sale or listing.</div>
+</section>
+
+<section id="today">
+<h2>2. Where HybridChain stands</h2>
+<p class="prose">This is what exists in the code today, rated for a public cryptocurrency rather than for the permissioned IoT pilot it was built for.</p>
+<div class="tbl"><table>
+<thead><tr><th>Capability</th><th>Status</th><th>What is in the code</th></tr></thead>
+<tbody>
+<tr><td class="k">BFT finality</td><td><span class="tag t-have">HAVE</span></td><td>PBFT with correct quorum math, 2f+1 commit certificates, NEW_VIEW recovery and on-chain equivocation evidence.</td></tr>
+<tr><td class="k">Fee market</td><td><span class="tag t-have">HAVE</span></td><td>EIP-1559-style base fee with burn (<code>FeeMarket</code>).</td></tr>
+<tr><td class="k">Post-quantum signatures</td><td><span class="tag t-have">HAVE</span></td><td>ML-DSA (FIPS 204) already integrated next to secp256k1. Few chains have this today.</td></tr>
+<tr><td class="k">Device identity</td><td><span class="tag t-have">HAVE</span></td><td>DIDs, verifiable credentials, PUF nullifiers, device-signed telemetry, manufacturer attestation and firmware signatures.</td></tr>
+<tr><td class="k">Contracts</td><td><span class="tag t-part">PARTIAL</span></td><td>A custom bytecode VM and Chicory WASM with deterministic gas. No standard toolchain, so developers cannot use Solidity, Hardhat or Foundry.</td></tr>
+<tr><td class="k">Money units</td><td><span class="tag t-miss">MISSING</span></td><td><code>Tokenomics.MAX_SUPPLY = 21_000_000</code> and <code>INITIAL_REWARD = 50</code> are in the smallest unit, so there are no decimals. The Bitcoin-style halving fits proof-of-work, not a staking chain.</td></tr>
+<tr><td class="k">Validator entry</td><td><span class="tag t-miss">MISSING</span></td><td>Fixed <code>VALIDATOR_PUBKEYS</code> list, no staking or delegation, and validators can only be jailed, not slashed.</td></tr>
+<tr><td class="k">Addresses and wallets</td><td><span class="tag t-miss">MISSING</span></td><td><code>"hb" + 40 hex</code> with no checksum. No BIP-39 seed phrases or BIP-32/44 key derivation.</td></tr>
+<tr><td class="k">Light clients and state sync</td><td><span class="tag t-part">PARTIAL</span></td><td>Account Merkle proofs and commit certificates exist. Missing: header-only sync, validator-set change proofs, snapshot download from peers.</td></tr>
+<tr><td class="k">Bridges and anchoring</td><td><span class="tag t-miss">MISSING</span></td><td><code>StateAnchoringManager</code> is simulated. It builds a fake transaction hash and logs "ANCHORED … to external chain", but sends nothing.</td></tr>
+<tr><td class="k">Parallel execution</td><td><span class="tag t-miss">MISSING</span></td><td>Transactions execute one after another.</td></tr>
+<tr><td class="k">Protocol upgrades</td><td><span class="tag t-miss">MISSING</span></td><td>No activation heights or protocol versions per block, so every rule change needs all nodes to restart at once. <code>GovernanceManager</code> is unused.</td></tr>
+<tr><td class="k">Private payments</td><td><span class="tag t-miss">MISSING</span></td><td><code>PRIVATE_TRANSFER</code> moves no value. It is a placeholder.</td></tr>
+<tr><td class="k">Formal methods</td><td><span class="tag t-part">PARTIAL</span></td><td>A TLA+ model of leader selection (<code>docs/formal</code>). Commit safety, NEW_VIEW and staking are not modelled.</td></tr>
+</tbody></table></div>
+</section>
+
+<section id="gaps">
+<h2>3. Gaps against the state of the art</h2>
+<p class="prose">Each area lists what HybridChain has, what current systems do, and what to build here. Throughput and latency figures from papers and vendor blogs are self-reported benchmarks and are cited as such.</p>
+
+<div class="area" id="money">
+  <div class="head"><h3>3.1 Money: units, supply and issuance</h3><span class="tag t-miss">FOUNDATION</span></div>
+  <div class="cols">
+    <div><div class="k">HybridChain today</div><p>21M indivisible units, a 50-unit reward halving every 210,000 blocks, and a minimum reward of 1. Amounts are Java <code>long</code>.</p></div>
+    <div><div class="k">State of the art</div><p>Bitcoin divides a coin into 10⁸ units and Ethereum into 10¹⁸. Proof-of-stake chains pay validators through issuance plus fees, often with a burn (Ethereum since EIP-1559) to offset inflation.</p></div>
+    <div><div class="k">Build here</div><ul>
+      <li>Define 1 coin = 10⁸ base units. 21M × 10⁸ = 2.1 × 10¹⁵, which fits in a <code>long</code> (max about 9.2 × 10¹⁸). Keep <code>Math.*Exact</code> everywhere.</li>
+      <li>Replace halving with a staking-rate-based issuance curve once proof-of-stake exists. Keep the base-fee burn.</li>
+      <li>Fix the genesis allocation and vesting in the genesis file, never in code.</li>
+    </ul></div>
+  </div>
+</div>
+
+<div class="area" id="pos">
+  <div class="head"><h3>3.2 Who may validate: proof-of-stake</h3><span class="tag t-miss">FOUNDATION</span></div>
+  <div class="cols">
+    <div><div class="k">HybridChain today</div><p>A fixed validator list and one vote per validator. Equivocation evidence jails a validator on-chain, but there is no stake to slash.</p></div>
+    <div><div class="k">State of the art</div><p>Bonded stake gives voting power, and misbehaviour burns part of it. The unbonding period is kept longer than the window in which evidence can be submitted, so a validator cannot leave before being punished. New or long-offline nodes start from a trusted recent checkpoint (weak subjectivity) to stop long-range rewrites by validators who have already left.</p></div>
+    <div><div class="k">Build here</div><ul>
+      <li>Transactions to bond, unbond, delegate and withdraw. Stake held in the state root.</li>
+      <li>Validator set changes only at epoch boundaries, decided by state.</li>
+      <li>Quorum by stake (more than 2/3 of voting power) instead of by head count, in <code>PBFTConsensus.quorumSize</code> and certificate checks.</li>
+      <li>Evidence burns a share of stake, and part of it goes to the reporter. Reuse <code>EQUIVOCATION_EVIDENCE</code>.</li>
+      <li>An unbonding period longer than the evidence window, plus weak-subjectivity checkpoints for new nodes (the checkpoint code exists).</li>
+    </ul></div>
+  </div>
+</div>
+
+<div class="area" id="consensus">
+  <div class="head"><h3>3.3 Consensus performance</h3><span class="tag t-part">IMPROVE</span></div>
+  <div class="cols">
+    <div><div class="k">HybridChain today</div><p>Classic PBFT with all-to-all votes, O(n²) messages per block. One ECDSA or ML-DSA signature per vote in each certificate.</p></div>
+    <div><div class="k">State of the art</div><p>Linear or pipelined BFT (the HotStuff family) and DAG-based protocols. Mysticeti reports about 0.5 s WAN commit latency, but a follow-up paper measured large slowdowns under Byzantine faults. Raptr (Aptos, 2025) reports 260,000 TPS with sub-second latency on 100 replicas. These are the authors' own benchmarks.</p></div>
+    <div><div class="k">Build here</div><ul>
+      <li>Keep PBFT while the network has fewer than about 50 validators. It is simple and now correct.</li>
+      <li>First win: BLS aggregate signatures in certificates. One constant-size signature plus a signer bitmap makes certificates small enough for light clients and bridges. Use the IETF BLS draft with proof-of-possession against rogue keys.</li>
+      <li>Then separate data dissemination from ordering (Narwhal-style batches) before considering a DAG protocol.</li>
+      <li>Extend the TLA+ model to commit safety and NEW_VIEW before each change.</li>
+    </ul></div>
+  </div>
+</div>
+
+<div class="area" id="exec">
+  <div class="head"><h3>3.4 Execution: smart contracts for general use</h3><span class="tag t-part">IMPROVE</span></div>
+  <div class="cols">
+    <div><div class="k">HybridChain today</div><p>A custom stack VM plus WASM (Chicory), executed one transaction at a time. Gas is now deterministic.</p></div>
+    <div><div class="k">State of the art</div><p>EVM compatibility gives access to wallets, Solidity and audit tools. Parallel execution comes in two forms: Block-STM runs transactions speculatively and rechecks them in a fixed order, so results stay deterministic (the paper reports up to 170k tps in benchmarks, and much less under contention). Sui instead uses an object model in which owned-object transactions skip full consensus.</p></div>
+    <div><div class="k">Build here</div><ul>
+      <li>Embed a proven Java EVM instead of writing one. Hyperledger Besu is Java and publishes its EVM as a library. Keep WASM for IoT-specific contracts.</li>
+      <li>Add an Ethereum JSON-RPC endpoint (<code>eth_*</code>) so MetaMask, ethers.js and indexers work unchanged.</li>
+      <li>Add Block-STM-style parallel execution only after the EVM, behind a test that compares its results with sequential execution.</li>
+      <li>Fix HC-058 first: contracts must read committed telemetry, not each node's local hardware.</li>
+    </ul></div>
+  </div>
+</div>
+
+<div class="area" id="state">
+  <div class="head"><h3>3.5 State storage, sync and light clients</h3><span class="tag t-part">IMPROVE</span></div>
+  <div class="cols">
+    <div><div class="k">HybridChain today</div><p>A Merkle-Patricia trie for accounts, with the other state hashed in beside it. Fast-sync only from local storage. Account proofs exist.</p></div>
+    <div><div class="k">State of the art</div><p>Storage built for Merkle proofs: QMDB (2025) reports millions of state updates per second, as the authors' own benchmark. Ethereum's EIP-7864 drafts a unified binary trie, which its researchers describe as years away. Light clients follow block headers plus aggregate signatures. Zero-knowledge VMs can now prove whole blocks: Succinct reports proving 99.7% of Ethereum blocks in under 12 s on 16 GPUs (a vendor claim).</p></div>
+    <div><div class="k">Build here</div><ul>
+      <li>Snapshot plus chunked state download from peers, each chunk verified against the certified state root.</li>
+      <li>A light-client protocol: headers, BLS certificates and validator-set change proofs. This is also the base for bridges.</li>
+      <li>Fold all state (devices, DIDs, nullifiers, the jailed set, later stake) into one authenticated tree, instead of extra hashes next to the trie.</li>
+      <li>Consider ZK proofs of state transitions later, for very light IoT clients.</li>
+    </ul></div>
+  </div>
+</div>
+
+<div class="area" id="wallets">
+  <div class="head"><h3>3.6 Accounts, addresses and wallets</h3><span class="tag t-miss">FOUNDATION</span></div>
+  <div class="cols">
+    <div><div class="k">HybridChain today</div><p>Addresses are a 20-byte hash in lowercase hex, with no checksum. Keys are raw. A transaction carries a network ID (replay protection exists).</p></div>
+    <div><div class="k">State of the art</div><p>Checksummed addresses: Bech32m (BIP-350), or EIP-55 if EVM-style. Seed phrases and key derivation: BIP-39 and BIP-32/44. Account abstraction: Ethereum's EIP-7702 (live since Pectra, 7 May 2025) lets an ordinary account run smart-account code, which enables batching, sponsored fees and key rotation.</p></div>
+    <div><div class="k">Build here</div><ul>
+      <li>Bech32m addresses with the human-readable prefix <code>hb</code> (or EIP-55 if fully EVM-native).</li>
+      <li>Register a SLIP-44 coin type and support BIP-39/32/44 using an existing library (web3j or bitcoinj), so hardware wallets can be added.</li>
+      <li>Native multisig and key rotation at account level. The multisig manager exists but is not part of the account model.</li>
+    </ul></div>
+  </div>
+</div>
+
+<div class="area" id="pq">
+  <div class="head"><h3>3.7 Cryptography and the post-quantum path</h3><span class="tag t-have">AHEAD</span></div>
+  <div class="cols">
+    <div><div class="k">HybridChain today</div><p>secp256k1 ECDSA (low-S, full digest) and ML-DSA, domain-separated hashing and AES-GCM with AAD.</p></div>
+    <div><div class="k">State of the art</div><p>ML-DSA is the common default. FN-DSA (Falcon) is smaller (about 666 bytes against about 2.4 KB) but harder to implement safely. SLH-DSA is conservative but large (about 7.9 KB). Bitcoin is discussing BIP-360. Ethereum is moving consensus toward hash-based signatures and leaving accounts signature-agnostic through account abstraction. Statuses are still changing.</p></div>
+    <div><div class="k">Build here</div><ul>
+      <li>A versioned signature-scheme ID on every key and signature (crypto agility), so a scheme can be added or retired by a planned upgrade.</li>
+      <li>A hybrid mode (ECDSA and ML-DSA together) for high-value accounts and validators.</li>
+      <li>Price signature bytes in fees. ML-DSA signatures are about 30 times larger than ECDSA ones.</li>
+      <li>Keep BLS for vote aggregation (not post-quantum). Plan a later post-quantum aggregation scheme.</li>
+    </ul></div>
+  </div>
+</div>
+
+<div class="area" id="mev">
+  <div class="head"><h3>3.8 Fair ordering and MEV</h3><span class="tag t-info">LATER</span></div>
+  <div class="cols">
+    <div><div class="k">HybridChain today</div><p>The leader orders transactions by fee. That is harmless for telemetry, but it lets the leader front-run trades once DeFi exists.</p></div>
+    <div><div class="k">State of the art</div><p>Threshold-encrypted mempools hide transactions until their order is fixed. Shutter runs on Gnosis Chain. A 2026 survey and a 2025 security analysis both show the designs are still maturing, with known front-running gaps in some integrations.</p></div>
+    <div><div class="k">Build here</div><ul>
+      <li>Not needed for launch. Revisit when DEX or lending contracts appear.</li>
+      <li>A cheap first step: deterministic ordering rules inside a block that every validator checks.</li>
+    </ul></div>
+  </div>
+</div>
+
+<div class="area" id="interop">
+  <div class="head"><h3>3.9 Bridges and interoperability</h3><span class="tag t-miss">MISSING</span></div>
+  <div class="cols">
+    <div><div class="k">HybridChain today</div><p>Anchoring is simulated, and no bridge exists.</p></div>
+    <div><div class="k">State of the art</div><p>Bridges verified by light clients (IBC-style), or by ZK proofs of the other chain's consensus. Bridges secured by a multisig of trusted operators have been the most-attacked part of the ecosystem.</p></div>
+    <div><div class="k">Build here</div><ul>
+      <li>Remove or clearly mark the simulated anchoring until it really sends.</li>
+      <li>After light clients exist: a light-client bridge to Ethereum. Don't launch a multisig bridge.</li>
+    </ul></div>
+  </div>
+</div>
+
+<div class="area" id="privacy">
+  <div class="head"><h3>3.10 Privacy</h3><span class="tag t-info">DECIDE</span></div>
+  <div class="cols">
+    <div><div class="k">HybridChain today</div><p><code>PRIVATE_TRANSFER</code> moves no value. The ZK leader-eligibility gate is unsound and must stay disabled.</p></div>
+    <div><div class="k">State of the art</div><p>Shielded pools with note commitments, nullifiers and SNARK proofs (Zcash Orchard style), or proofs generated in a general-purpose ZK VM. Privacy coins face listing and compliance pressure in several markets.</p></div>
+    <div><div class="k">Build here</div><ul>
+      <li>Disable <code>PRIVATE_TRANSFER</code> at the protocol level until a real shielded design exists.</li>
+      <li>Keep privacy for IoT data (encrypted telemetry with selective disclosure), where it is most useful and least controversial.</li>
+    </ul></div>
+  </div>
+</div>
+
+<div class="area" id="depin">
+  <div class="head"><h3>3.11 IoT and DePIN: the differentiator</h3><span class="tag t-have">STRENGTH</span></div>
+  <div class="cols">
+    <div><div class="k">HybridChain today</div><p>Device DIDs, manufacturer attestation, PUF identity, device-signed readings bound to their transaction, and federated learning with integrity checks.</p></div>
+    <div><div class="k">State of the art</div><p>DePIN networks such as Helium, IoTeX and peaq pay devices for physical work. IoTeX's ioID registers and binds device identities to verify their data. Helium reports about 962,000 hotspots. Market-size figures vary widely between sources.</p></div>
+    <div><div class="k">Build here</div><ul>
+      <li>Hardware roots of trust (TPM or secure element attestation) next to PUF.</li>
+      <li>A sensor oracle: committed, device-signed telemetry that contracts can read. This also fixes HC-058.</li>
+      <li>Proof-of-physical-work rewards that only count authenticated readings. Never count unsigned batches (see HC-077).</li>
+    </ul></div>
+  </div>
+</div>
+
+<div class="area" id="upgrades">
+  <div class="head"><h3>3.12 Protocol upgrades and governance</h3><span class="tag t-miss">FOUNDATION</span></div>
+  <div class="cols">
+    <div><div class="k">HybridChain today</div><p>Rule changes (vote encoding v2, certificates, evidence) need every node to switch at once from empty storage.</p></div>
+    <div><div class="k">State of the art</div><p>Named forks with activation heights (Ethereum's Pectra on 7 May 2025, then Fusaka with PeerDAS on 3 Dec 2025), a protocol version in each block, and on-chain parameter governance.</p></div>
+    <div><div class="k">Build here</div><ul>
+      <li>A fork schedule: <code>ruleset(height)</code> chooses the validation rules, so old blocks keep validating under old rules.</li>
+      <li>A protocol version in the block header.</li>
+      <li>On-chain governance of parameters by stake, after proof-of-stake exists. Delete or wire up <code>GovernanceManager</code>.</li>
+    </ul></div>
+  </div>
+</div>
+
+<div class="area" id="compliance">
+  <div class="head"><h3>3.13 Regulation (EU example)</h3><span class="tag t-info">LEGAL</span></div>
+  <div class="cols">
+    <div><div class="k">Why it matters</div><p>A coin offered to the public, and the exchanges and custodians that handle it, fall under financial rules in many countries. The EU's MiCA is the most complete example.</p></div>
+    <div><div class="k">What applies (secondary sources, verify)</div><p>MiCA's stablecoin rules applied from 30 June 2024 and its service-provider (CASP) rules from 30 December 2024, with national transition periods ending by 1 July 2026. Public offers need a crypto-asset white paper. The Transfer of Funds Regulation (the travel rule) makes service providers pass sender and receiver information.</p></div>
+    <div><div class="k">Do</div><ul>
+      <li>Get legal advice before any token sale, listing or stablecoin.</li>
+      <li>Design so protocol and service provider stay separate. Nodes should not custody user funds.</li>
+      <li>Plan the white-paper content (rights, technology, risks) from this roadmap and the audit.</li>
+    </ul></div>
+  </div>
+</div>
+
+<div class="area" id="secprog">
+  <div class="head"><h3>3.14 Security programme for real value</h3><span class="tag t-part">EXTEND</span></div>
+  <div class="cols">
+    <div><div class="k">HybridChain today</div><p>Two internal audit rounds, 695 tests, 30 proof tests, CodeQL scanning and a TLA+ model of leader selection.</p></div>
+    <div><div class="k">Expected for a public coin</div><p>Independent audits of consensus, cryptography and the EVM integration. Formal models of safety-critical protocols. Continuous fuzzing, an incentivised testnet, a bug bounty, reproducible builds, validator key management (HSM or remote signer) and an incident plan.</p></div>
+    <div><div class="k">Build here</div><ul>
+      <li>A remote signer for validator keys with protection against double signing.</li>
+      <li>Fuzzers for block, transaction and P2P decoding. A differential test of the EVM against Besu's reference test suite.</li>
+      <li>A multi-machine testnet with fault injection (audit item O-2).</li>
+    </ul></div>
+  </div>
+</div>
+</section>
+
+<section id="options">
+<h2>4. Three ways to get there</h2>
+<div class="options">
+  <div class="opt pick">
+    <h4>A. Evolve HybridChain (recommended)</h4>
+    <p>Keep the Java node and the IoT identity layer. Add proof-of-stake, BLS certificates, an embedded EVM, light clients and wallet standards from audited libraries.</p>
+    <p><b>For:</b> keeps the differentiator and the audited core, and the codebase stays one language.</p>
+    <p><b>Against:</b> the most engineering. Every consensus change needs proofs, models and audits.</p>
+  </div>
+  <div class="opt">
+    <h4>B. Rebuild on an app-chain framework</h4>
+    <p>Run the IoT modules on a mature framework such as Cosmos SDK with CometBFT, which brings staking, slashing, IBC and light clients.</p>
+    <p><b>For:</b> the battle-tested parts arrive ready.</p>
+    <p><b>Against:</b> a rewrite in Go, so the Java code and much of its audit evidence are lost.</p>
+  </div>
+  <div class="opt">
+    <h4>C. Become a rollup or a token on Ethereum</h4>
+    <p>Issue the token on Ethereum or an L2, and keep HybridChain as a permissioned IoT data chain that anchors to it.</p>
+    <p><b>For:</b> the fastest and safest route to a liquid token. Security is inherited.</p>
+    <p><b>Against:</b> HybridChain stops being the currency's chain, and fees and governance follow the host.</p>
+  </div>
+</div>
+<p class="prose">Option A fits the stated goal of one chain for currency, IoT and other uses, and builds on the work already done. Option C is the low-risk fallback if the team is small. A middle path also works: launch the token through option C while option A matures, then migrate.</p>
+</section>
+
+<section id="phases">
+<h2>5. Phased plan</h2>
+<p class="prose">The phases are ordered so each one depends only on earlier ones. Phase 1 changes the protocol, so it must be finished before any coin exists.</p>
+<ol class="phases">
+  <li><div class="ph">Phase 0 · Finish the pilot</div><h4>Close the audit's open items</h4><ul>
+    <li>A multi-machine testnet with fault injection (O-2), and rotation of every leaked key (O-3).</li>
+    <li>Sensor oracle (HC-058 / O-4), disabling <code>PRIVATE_TRANSFER</code> (O-6), and removing or marking the simulated anchoring.</li>
+  </ul></li>
+  <li><div class="ph">Phase 1 · Currency foundations (protocol-changing)</div><h4>Make it money</h4><ul>
+    <li>Base units with 10⁸ decimals, plus a genesis file for allocations.</li>
+    <li>Bech32m addresses, BIP-39/32/44 wallets and a SLIP-44 coin type.</li>
+    <li>Proof-of-stake: bonding, delegation, epochs, stake-weighted quorum, stake slashing through the existing evidence transaction, an unbonding period and weak-subjectivity checkpoints.</li>
+    <li>BLS aggregate commit certificates with proof-of-possession.</li>
+    <li>A fork schedule and a block protocol version.</li>
+    <li>TLA+ models for commit safety, NEW_VIEW and stake changes.</li>
+  </ul></li>
+  <li><div class="ph">Phase 2 · General-purpose platform</div><h4>Make it programmable</h4><ul>
+    <li>Embedded EVM, Ethereum JSON-RPC and EIP-55 compatibility. Keep WASM for IoT contracts.</li>
+    <li>Light-client protocol, peer state snapshots and a unified authenticated state tree.</li>
+    <li>Native multisig and account abstraction, and versioned signature schemes with hybrid post-quantum accounts.</li>
+  </ul></li>
+  <li><div class="ph">Phase 3 · Scale and connect</div><h4>Make it fast and connected</h4><ul>
+    <li>Block-STM-style parallel execution, checked against sequential results.</li>
+    <li>Data dissemination separated from ordering. Evaluate HotStuff or DAG protocols with the formal model.</li>
+    <li>A light-client bridge to Ethereum, and DePIN rewards for authenticated physical work.</li>
+  </ul></li>
+  <li><div class="ph">Phase 4 · Launch readiness</div><h4>Make it trustworthy</h4><ul>
+    <li>Independent audits, fuzzing, an incentivised testnet, a bug bounty, a remote signer for validators and an incident plan.</li>
+    <li>A legal review of the token, white paper and service-provider boundaries before any public offer.</li>
+  </ul></li>
+</ol>
+</section>
+
+<section id="rules">
+<h2>6. Rules for the build</h2>
+<div class="prose">
+<ul>
+  <li><b>Reuse audited libraries for cryptography.</b> Use BouncyCastle (already used), a maintained BLS library, and BIP-39/32 from web3j or bitcoinj. Never hand-write pairing or lattice code.</li>
+  <li><b>Every consensus rule depends only on chain data.</b> The audit's recurring bug class was node-local state leaking into validity: AI detectors, local slashes, wall-clock timeouts and local sensors.</li>
+  <li><b>Every encoding that gets signed is versioned and domain-separated.</b> Round 2 had to fix four ambiguous encodings: votes, checkpoints, credentials and proof challenges.</li>
+  <li><b>Every change starts with a failing test,</b> as in both audit rounds, and every protocol change also starts with a model.</li>
+  <li><b>Protocol changes go through the fork schedule</b> once it exists, never through a coordinated restart.</li>
+</ul>
+</div>
+</section>
+
+<section id="sources">
+<h2>7. Sources</h2>
+<p class="prose">Searched on 21 Oct 2026. Vendor blogs and secondary summaries are marked. Figures from them are the publishers' own claims.</p>
+<ol class="src">
+  <li><a href="https://arxiv.org/pdf/2504.18649">Raptr: Prefix Consensus for Robust High-Performance BFT</a> (arXiv 2025)</li>
+  <li><a href="https://arxiv.org/pdf/2310.14821">Mysticeti: Reaching the Limits of Latency with Uncertified DAGs</a> (arXiv)</li>
+  <li><a href="https://arxiv.org/pdf/2511.15517">Beluga: Block Synchronization for BFT Consensus Protocols</a> (arXiv 2025)</li>
+  <li><a href="https://eprint.iacr.org/2025/567.pdf">Making Uncertified DAG BFT Provably Live with Linear Payload</a> (IACR ePrint 2025)</li>
+  <li><a href="https://arxiv.org/pdf/2408.04728">HotStuff-1: Linear Consensus with One-Phase Speculation</a> (arXiv)</li>
+  <li><a href="https://ppopp23.sigplan.org/details/PPoPP-2023-papers/18/Block-STM-Scaling-Blockchain-Execution-by-Turning-Ordering-Curse-to-a-Performance-Bl">Block-STM</a> (PPoPP 2023)</li>
+  <li><a href="https://arxiv.org/html/2501.05262v3">QMDB: Quick Merkle Database</a> (arXiv 2025)</li>
+  <li><a href="https://eips.ethereum.org/EIPS/eip-7864">EIP-7864: Unified binary tree</a> (draft)</li>
+  <li><a href="https://reads.ethereum.foundation/workstreams/ubt">Ethereum Foundation: Verifiable Unified Binary Trie workstream</a></li>
+  <li><a href="https://blog.succinct.xyz/sp1-hypercube-is-now-live-on-mainnet/">SP1 Hypercube is live on mainnet</a> (vendor blog)</li>
+  <li><a href="https://wavect.io/blog/zero-knowledge-proofs-production-2026/">Zero-knowledge proofs in production, 2026</a> (secondary overview)</li>
+  <li><a href="https://arxiv.org/pdf/2510.09271">Assessing the Impact of Post-Quantum Digital Signature Algorithms on Blockchains</a> (arXiv 2025)</li>
+  <li><a href="https://arxiv.org/pdf/2512.13333">Quantum Disruption: an SoK of post-quantum attackers on blockchains</a> (arXiv 2025)</li>
+  <li><a href="https://postquantum.com/quantum-threat-crypto/fixing-bitcoin-pqc-migration/">Fixing Bitcoin: the post-quantum migration roadmap</a> (commercial blog)</li>
+  <li><a href="https://hedera.com/blog/post-quantum-cryptography-and-blockchain/">Hedera: Post-quantum cryptography and blockchain</a> (vendor blog)</li>
+  <li><a href="https://datatracker.ietf.org/doc/draft-irtf-cfrg-bls-signature/07/">IETF CFRG: BLS Signatures, draft 07</a></li>
+  <li><a href="https://arxiv.org/pdf/2505.10316">One For All: Formally Verifying Protocols which use Aggregate Signatures</a> (arXiv 2025)</li>
+  <li><a href="https://eprint.iacr.org/2026/1643">Encrypted Mempools Through the MEV Lens (SoK)</a> (IACR ePrint 2026)</li>
+  <li><a href="https://dspace.isical.ac.in/items/2f109623-9f36-4327-b8f4-61f2bebd7ca8">Security Analysis of Encrypted Mempool</a> (thesis 2025)</li>
+  <li><a href="https://cointelegraph.com/magazine/applied-mev-protection-via-shutter-s-threshold-encryption">Applied MEV protection via Shutter's threshold encryption</a> (news)</li>
+  <li><a href="https://arxiv.org/pdf/2406.05124">Optimizing Exit Queues for Proof-of-Stake Blockchains</a> (arXiv)</li>
+  <li><a href="https://www.spark.money/glossary/weak-subjectivity">Weak subjectivity</a> and <a href="https://www.spark.money/glossary/long-range-attack">long-range attack</a> (glossary, secondary)</li>
+  <li><a href="https://galaxy.com/insights/research/ethereum-all-core-developers-execution-call-208">Ethereum ACDE call #208 write-up</a> and <a href="https://cantina.xyz/blog/cantina-2025-ethereum-security-pectra-fusaka">Cantina: Ethereum security in 2025, Pectra and Fusaka</a></li>
+  <li><a href="https://iotex.io/blog/ioid-on-chain-device-identity-for-verifiable-depins/">IoTeX ioID: on-chain device identity</a> (vendor blog)</li>
+  <li><a href="https://ryder.id/blogs/post/depin-in-2026-decentralized-physical-infrastructure-explained">DePIN in 2026</a> (secondary)</li>
+  <li><a href="https://www.squirepattonboggs.com/media/yvspymyt/mica-legal-framework-how-to-comply-with-the-eus-crypto-asset-rules.pdf">Squire Patton Boggs: How to comply with MiCA</a> (law firm guide) and <a href="https://www.innreg.com/blog/mica-regulation-guide">MiCA regulation guide 2026</a> (secondary)</li>
+</ol>
+</section>
+
+<footer>HybridChain Platform Roadmap · 21 October 2026 · Companion to HybridChain Security Audit II. Engineering research only; not legal, financial or investment advice.</footer>
+</main>
+</div>

@@ -112,10 +112,10 @@ class DeviceActivationTest {
         lcm.updateFirmwareSigned(id, "4.0", fw, OWNER.getAddress(), good);   // signature was for 2.0
         assertThat(lcm.getDeviceRecord(id).getReputationScore()).isLessThan(afterForged);
 
-        // a self-made FirmwareProof is no longer accepted as verification
-        double beforeProof = lcm.getDeviceRecord(id).getReputationScore();
-        lcm.updateFirmware(id, "5.0", fw, OWNER.getAddress(),
-                com.hybrid.blockchain.privacy.ZKProofSystem.FirmwareProof.create(fw, new byte[32]));
-        assertThat(lcm.getDeviceRecord(id).getReputationScore()).isLessThan(beforeProof);
+        // [O-7] the FirmwareProof API was removed; an update without a manufacturer signature is
+        // applied unverified and penalised
+        double beforeUnsigned = lcm.getDeviceRecord(id).getReputationScore();
+        lcm.updateFirmware(id, "5.0", fw, OWNER.getAddress());
+        assertThat(lcm.getDeviceRecord(id).getReputationScore()).isLessThan(beforeUnsigned);
     }
 }

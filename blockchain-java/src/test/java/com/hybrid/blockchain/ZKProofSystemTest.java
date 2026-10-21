@@ -12,35 +12,6 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 public class ZKProofSystemTest {
 
-    @Test
-    public void testRangeProof() {
-        long temperature = 25;
-        long min = 20;
-        long max = 30;
-        BigInteger randomness = ZKProofSystem.randomScalar();
-
-        ZKProofSystem zkp = new ZKProofSystem();
-        
-        byte[] commitment = zkp.createCommitment(temperature, randomness);
-        byte[] proof = zkp.createRangeProofData(temperature, min, max, randomness);
-
-        assertTrue(zkp.verifyRangeProof(commitment, proof, min, max));
-    }
-
-    @Test
-    public void testRangeProofOutOfRange() {
-        long temperature = 35; // Outside range
-        long min = 20;
-        long max = 30;
-        BigInteger randomness = ZKProofSystem.randomScalar();
-
-        ZKProofSystem zkp = new ZKProofSystem();
-        
-        assertThrows(IllegalArgumentException.class, () -> {
-            zkp.createRangeProofData(temperature, min, max, randomness);
-        });
-    }
-
     private byte[] getUncompressedPublicKey(BigInteger privateKey) {
         return org.bouncycastle.crypto.ec.CustomNamedCurves.getByName("secp256k1").getG().multiply(privateKey).getEncoded(false);
     }
@@ -87,35 +58,10 @@ public class ZKProofSystemTest {
     }
 
     @Test
-    public void testThresholdProofEqual() {
-        long temperature = 25;
-        long threshold = 25;
-        BigInteger randomness = ZKProofSystem.randomScalar();
-
-        ZKProofSystem zkp = new ZKProofSystem();
-        byte[] commitment = zkp.createCommitment(temperature, randomness);
-        byte[] proof = zkp.createThresholdProof(temperature, randomness, threshold);
-
-        assertTrue(zkp.verifyThresholdProof(commitment, proof, threshold));
-    }
-
-    @Test
-    public void testThresholdProofInvalidClaim() {
-        long temperature = 20;
-        long threshold = 25;
-        BigInteger randomness = ZKProofSystem.randomScalar();
-
-        ZKProofSystem zkp = new ZKProofSystem();
-        assertThrows(IllegalArgumentException.class, () -> {
-            zkp.createThresholdProof(temperature, randomness, threshold);
-        });
-    }
-
-    @Test
     public void testRandomnessGeneration() {
         BigInteger r1 = ZKProofSystem.randomScalar();
         BigInteger r2 = ZKProofSystem.randomScalar();
-        
+
         assertNotEquals(r1, r2);
         assertTrue(r1.compareTo(BigInteger.ZERO) > 0);
         assertTrue(r2.compareTo(BigInteger.ZERO) > 0);

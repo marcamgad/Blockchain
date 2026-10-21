@@ -9,9 +9,9 @@ source scripts/keys.env
 
 mkdir -p envs
 
-# One shared AES key for encrypted LevelDB storage — never changes per cluster
+# One shared AES key for encrypted LevelDB storage, generated fresh for each cluster
 # In production this would be in a secrets manager. For testing, deterministic is fine.
-SHARED_AES_KEY="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+SHARED_AES_KEY="$(openssl rand -hex 16)"   # [O-3] fresh per cluster; the old fixed value is public
 
 # Network ID — all nodes must share this or they reject each other's transactions
 NETWORK_ID="1337"

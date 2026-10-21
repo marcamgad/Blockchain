@@ -18,11 +18,18 @@ public final class Transaction {
         FEDERATED_UPDATE,
         /** Aggregated model committed on-chain by the PBFT leader. */
         FEDERATED_COMMIT,
-        /** Zero-knowledge ownership transfer. */
+        /**
+         * Zero-knowledge ownership transfer. [O-6] DISABLED: it never moved any value (only the fee
+         * and a nullifier), so every PRIVATE_TRANSFER is rejected. Kept only to preserve the ordinals
+         * of the types after it, which are part of every transaction's signed encoding.
+         */
+        @Deprecated
         PRIVATE_TRANSFER,
         /** PAPER-IMPL: P1-B — Maftei et al. Sensors 2025, DOI:10.3390/s25092886
          *  Gateway aggregates N device TELEMETRY packets into 1 tx (MessagePack-encoded). */
-        TELEMETRY_BATCH
+        TELEMETRY_BATCH,
+        /** [O-5] Two conflicting signed votes of one validator; jails it on every node. Appended last: ordinals are hashed. */
+        EQUIVOCATION_EVIDENCE
     }
 
     private static final byte[] DOMAIN_PREFIX = "TX\0".getBytes(StandardCharsets.UTF_8);
@@ -207,6 +214,17 @@ public final class Transaction {
             return this.build();
         }
 
+        /**
+         * [HC-079] Signs from the hq address bound to both keys (sets {@code from} to it).
+         * Use this for accounts that need protection when ECDSA is broken.
+         */
+        public Transaction signHybridBound(BigInteger ecPrivKey, byte[] ecPubKey,
+                java.security.PrivateKey dilithiumPrivKey, java.security.PublicKey dilithiumPubKey) {
+            this.from = Crypto.deriveHybridAddress(ecPubKey, dilithiumPubKey.getEncoded());
+            this.dilithiumPublicKey = dilithiumPubKey.getEncoded();
+            return signHybrid(ecPrivKey, ecPubKey, dilithiumPrivKey, dilithiumPubKey);
+        }
+
         public Transaction signHybrid(BigInteger ecPrivKey, byte[] ecPubKey, java.security.PrivateKey dilithiumPrivKey, java.security.PublicKey dilithiumPubKey) {
             this.pubKey = ecPubKey;
             if (this.dilithiumPublicKey == null) {
@@ -319,9 +337,11 @@ public final class Transaction {
     public boolean verify() {
         if (signature == null || pubKey == null)
             return false;
+        if (Crypto.isHybridAddress(from))
+            return verifyHybridBound();
         if (!Crypto.deriveAddress(pubKey).equals(from))
             return false;
-        
+
         byte[] payload = signingPayload();
         boolean ecValid = Crypto.verify(payload, signature, pubKey);
         if (!ecValid) return false;
@@ -330,7 +350,7 @@ public final class Transaction {
         if (Config.REQUIRE_QUANTUM_SIG) {
             if (dilithiumSignature == null || dilithiumPublicKey == null) return false;
             try {
-                // To avoid storing raw byte-arrays where Keys are needed, we assume 
+                // To avoid storing raw byte-arrays where Keys are needed, we assume
                 // QuantumResistantCrypto provides a way, or we reconstruct the key:
                 java.security.KeyFactory kf = java.security.KeyFactory.getInstance(com.hybrid.blockchain.security.QuantumResistantCrypto.ALGORITHM, com.hybrid.blockchain.security.QuantumResistantCrypto.PROVIDER);
                 java.security.PublicKey dPubKey = kf.generatePublic(new java.security.spec.X509EncodedKeySpec(dilithiumPublicKey));
@@ -340,6 +360,27 @@ public final class Transaction {
             }
         }
         return true;
+    }
+
+    /**
+     * [HC-079] Sender is an "hq" address: it must equal the hash of BOTH public keys carried by
+     * the transaction, and BOTH signatures must verify, regardless of REQUIRE_QUANTUM_SIG. An
+     * attacker holding only one of the two private keys cannot produce a matching address.
+     */
+    private boolean verifyHybridBound() {
+        if (dilithiumPublicKey == null || dilithiumSignature == null) return false;
+        if (!Crypto.deriveHybridAddress(pubKey, dilithiumPublicKey).equals(from)) return false;
+        byte[] payload = signingPayload();
+        if (!Crypto.verify(payload, signature, pubKey)) return false;
+        try {
+            java.security.KeyFactory kf = java.security.KeyFactory.getInstance(
+                    com.hybrid.blockchain.security.QuantumResistantCrypto.ALGORITHM,
+                    com.hybrid.blockchain.security.QuantumResistantCrypto.PROVIDER);
+            java.security.PublicKey dPubKey = kf.generatePublic(new java.security.spec.X509EncodedKeySpec(dilithiumPublicKey));
+            return com.hybrid.blockchain.security.QuantumResistantCrypto.verifyDilithium(payload, dilithiumSignature, dPubKey);
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     public String getTxid() {

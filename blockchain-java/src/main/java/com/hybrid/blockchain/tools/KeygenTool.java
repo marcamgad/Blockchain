@@ -18,6 +18,16 @@ import java.util.List;
  */
 public class KeygenTool {
 
+    /**
+     * The i-th private key derived from {@code seed}. Public so that keys from published seeds can
+     * be recognised and refused ({@link com.hybrid.blockchain.security.CompromisedKeys}).
+     */
+    public static BigInteger derivePrivateKey(String seed, int i) {
+        BigInteger n = CustomNamedCurves.getByName(Config.EC_CURVE).getN();
+        byte[] seedHash = Crypto.hash((seed + ":" + i).getBytes(StandardCharsets.UTF_8));
+        return new BigInteger(1, seedHash).mod(n.subtract(BigInteger.ONE)).add(BigInteger.ONE);
+    }
+
     public static void main(String[] args) {
         if (args.length < 1) {
             System.err.println("Usage: KeygenTool <number_of_keys> [seed]");
@@ -46,10 +56,7 @@ public class KeygenTool {
         List<String> pubKeys = new ArrayList<>();
 
         for (int i = 1; i <= n; i++) {
-            byte[] seedHash = Crypto.hash((seed + ":" + i).getBytes(StandardCharsets.UTF_8));
-            BigInteger privD = new BigInteger(1, seedHash)
-                    .mod(domainParams.getN().subtract(BigInteger.ONE))
-                    .add(BigInteger.ONE);
+            BigInteger privD = derivePrivateKey(seed, i);
             byte[] pubBytes = Crypto.derivePublicKey(privD);
             String address = Crypto.deriveAddress(pubBytes);
             String pubHex = HexUtils.encode(pubBytes);

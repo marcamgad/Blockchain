@@ -122,11 +122,8 @@ public class WasmContractEngine {
                     (Instance instance, long... params) -> {
                         deductGas(150);
                         long sensorId = params[0];
-                        try {
-                            return new long[]{context.hardware.readSensor(sensorId)};
-                        } catch (Exception e) {
-                            throw new RuntimeException("Hardware read failed: " + e.getMessage());
-                        }
+                        // [HC-058] latest device-authenticated reading in chain state
+                        return new long[]{context.state.getLatestReading(sensorId)};
                     }
                 ));
 
