@@ -1,3 +1,5 @@
+> **Superseded (HC-082, 2026-10-22):** this document analyses the reputation-weighted leader election. Its Theorem 1 was confirmed live: in the first Docker fault-injection run, node-local reputation diverged after a leader crash and the survivors elected different leaders for the same view, stalling the chain. `PBFTConsensus.selectLeader` is now round-robin over the sorted, non-jailed validators, and reputation is tracked for monitoring only.
+
 # Formal Model: Leader Agreement in Reputation-/ML-Weighted PBFT
 
 **Phase 1, steps 1–3.** Deliverables: the model (§1–§5), **[PROOF] Theorem 1** (§6,

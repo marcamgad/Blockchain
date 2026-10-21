@@ -299,7 +299,9 @@ The engine is **Practical Byzantine Fault Tolerance** (`consensus/PBFTConsensus.
 
 ### Leader selection
 
-Validators are sorted by address. Each has a weight equal to its reputation, stored as a scaled integer so every node computes it identically. A number derived only from the view number picks a point in the total weight, and the validator at that point leads. Jailed validators have weight zero. Reputation goes up for committed proposals and down for abandoned views. These changes happen only at consensus-ordered events, never on a local timer (a formal TLA+ model in `docs/formal/` documents why).
+Round-robin: the leader of view `v` is `eligible[v mod n]`, where `eligible` is the validator list sorted by address, without jailed validators (HC-082). It depends only on the view, the configured validators and the on-chain jail list, so all nodes at the same height agree.
+
+Earlier versions weighted the choice by reputation. Reputation is node-local: nodes that changed views along different paths, synced blocks instead of committing them, or saw a double vote that others didn't ended up with different scores. In the first live Docker test, the three survivors of a leader crash all reached view 3 but picked different leaders, and the chain stopped. Reputation is still tracked, for monitoring only. `docs/formal/` documents the old weighted scheme and why it fails.
 
 ### Normal case
 

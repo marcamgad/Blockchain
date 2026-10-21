@@ -38,7 +38,9 @@ public class PBFTViewChangeTest {
         pbft.addViewChangeVote(1, 0, "V3", sign(1, 0, "V3", BigInteger.valueOf(300)));
         
         // Now quorum (2f+1 = 3) is reached
-        assertEquals("V4", pbft.getCurrentLeader(), "Leader should change to V4 after view change quorum");
+        // [HC-082] round-robin over the sorted validators [V1..V4]: view 1 -> V2 (the old weighted
+        // election, after penalising V1, picked V4)
+        assertEquals("V2", pbft.getCurrentLeader(), "Leader should change to V2 after view change quorum");
     }
 
     @Test

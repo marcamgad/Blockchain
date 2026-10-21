@@ -62,7 +62,7 @@ public class LeaderAgreementCounterexampleTest {
     }
 
     @Test
-    @DisplayName("Theorem 1: a purely local timeout penalty makes two correct validators elect different leaders")
+    @DisplayName("HC-082: a purely local penalty no longer splits the leader choice (Theorem 1 described the old weighted scheme)")
     void localTimeoutBreaksLeaderAgreement() {
         // Sanity: with identical state the two validators agree everywhere.
         for (long v = 0; v < 2000; v++) {
@@ -94,16 +94,13 @@ public class LeaderAgreementCounterexampleTest {
                 divergent, views, rate, firstDivergentView);
         System.out.printf("[THEOREM-1] N=4 Corollary 6.1 (corrected) prediction: %.4f%%%n", predicted);
 
-        // The theorem's claim: divergence is possible at all.
+        // [HC-082] Theorem 1 proved that the reputation-WEIGHTED election let a local penalty split
+        // the leader choice (Corollary 6.1 predicted ~4.3% of views for N=4), and the first live
+        // fault-injection run hit exactly that: a permanent stall after a leader crash. The
+        // election is now round-robin and ignores reputation, so the split rate must be zero.
         assertThat(divergent)
-                .as("Theorem 1: a locally-observed penalty must be able to split the leader choice")
-                .isGreaterThan(0);
-
-        // Corollary 6.1 (corrected): Pr = δ(N-1) / (2(N-δ)). Tolerance covers LCG
-        // discrepancy only — a mismatch beyond this falsifies the analysis.
-        assertThat(rate)
-                .as("measured rate must match the closed-form prediction %.4f%%", predicted)
-                .isCloseTo(predicted, org.assertj.core.data.Offset.offset(0.05));
+                .as("round-robin election: a locally-observed penalty must not split the leader choice")
+                .isZero();
     }
 
     /** Corollary 6.1 (corrected): Pr[divergence] = δ(N−1) / (2(N−δ)), as a percentage. */
@@ -112,7 +109,7 @@ public class LeaderAgreementCounterexampleTest {
     }
 
     @Test
-    @DisplayName("Corollary 6.1 closed form holds for N=7 as well as N=4")
+    @DisplayName("HC-082: no split for N=7 either (Corollary 6.1 applied to the old weighted scheme)")
     void divergenceRateClosedFormGeneralises() {
         com.hybrid.blockchain.ai.PredictiveThreatScorer.getInstance().reset();
         Map<String, byte[]> validators = new HashMap<>();
@@ -139,9 +136,10 @@ public class LeaderAgreementCounterexampleTest {
             double predicted = predictedDivergencePct(7, -PBFTConsensus.REP_MISSED_SLOT);
             System.out.printf("[THEOREM-1] N=7 measured %.4f%%  predicted %.4f%%%n", rate, predicted);
 
-            assertThat(rate)
-                    .as("closed form must generalise to N=7 (predicted %.4f%%)", predicted)
-                    .isCloseTo(predicted, org.assertj.core.data.Offset.offset(0.05));
+            assertThat(divergent)
+                    .as("round-robin election, N=7: a local penalty must not split the leader choice "
+                            + "(the old weighted scheme split %.4f%% of views)", predicted)
+                    .isZero();
         } finally {
             q1.shutdown();
             q2.shutdown();

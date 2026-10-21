@@ -65,9 +65,9 @@ public class ConsensusTest {
             }
         }
 
-        // v1 has 10.0 weight, others have 1.0 each. Total = 13.0.
-        // v1 probability = 10/13 ~= 77%. Expected count > 50.
-        assertThat(v1Count).isGreaterThan(50);
+        // [HC-082] reputation no longer weights the election (node-local reputation split the
+        // leader choice and stalled the live network): round-robin, so exactly 1 in 4 views
+        assertThat(v1Count).isEqualTo(25);
     }
 
     @Test

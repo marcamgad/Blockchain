@@ -478,62 +478,28 @@ public class PBFTConsensus implements Consensus {
         log.info("[CONSENSUS] Removed validator: {}", id);
     }
 
-    // ── FEATURE 2: Reputation-weighted leader selection ──────────────────────
+    // ── Leader selection ─────────────────────────────────────────────────────
 
     /**
-     * Selects the leader for the given view using a reputation-weighted
-     * deterministic selection. The view number is hashed with an LCG to produce
-     * a stable, uniform target value, then mapped to the cumulative weight
-     * distribution. All honest nodes with identical reputation maps will compute
-     * the same leader.
+     * [HC-082] Round-robin over the sorted, non-jailed validators: {@code eligible[view mod n]}.
+     *
+     * <p>Leader election used to be weighted by {@code validatorReputation}, which is node-local:
+     * nodes that took different view-change paths applied different missed-slot penalties, the
+     * proposer bonus was credited only on a node's own commit path (not for synced blocks), and
+     * double-vote penalties only where the double vote was observed. In the first live
+     * fault-injection run the three survivors of a leader crash all reached view 3 but elected
+     * different leaders, and the chain stalled permanently. The schedule now depends only on the
+     * view, the configured validator set and the on-chain jail set, which all nodes at the same
+     * height agree on. Reputation is still tracked, for monitoring only.</p>
      */
     public String selectLeader(long view) {
-        List<String> sorted = new ArrayList<>(validators.keySet());
-        Collections.sort(sorted); // deterministic ordering
-
-        if (sorted.isEmpty()) return null;
-        if (sorted.size() == 1) return sorted.get(0);
-
-        // [E3] Weights are EXACT scaled integers, and the running sum is integer
-        // addition — which is associative. Accumulating `double` weights was not:
-        // two correct nodes applying the same event multiset in different orders could
-        // differ in the last ulp and tip the `cumulative >= target` comparison, electing
-        // different leaders (docs/formal/pbft_leader_model.md Remark 7.1 / defect E3).
-        long total = 0;
-        long[] weights = new long[sorted.size()];
-        for (int i = 0; i < sorted.size(); i++) {
-            String valId = sorted.get(i);
-            // [E2] PredictiveThreatScorer is deliberately NOT consulted here. Its score is
-            // derived from node-local wall-clock observations (E_ℓ); letting it zero a
-            // weight reintroduces the divergence of Theorem 1 through a second channel
-            // (Remark 6.3). The scorer remains available for monitoring/alerting.
-            // Re-admitting it into selection requires the commit-then-use construction.
-            if (jailedValidators.contains(valId)) {
-                weights[i] = 0L;   // [O-5] jailed on-chain: never leader
-            } else {
-                weights[i] = Math.max(REP_MIN_SCALED, validatorReputation.getOrDefault(valId, REP_SCALE));
-            }
-            total += weights[i];
+        List<String> eligible = new ArrayList<>();
+        for (String id : validators.keySet()) {
+            if (!jailedValidators.contains(id)) eligible.add(id);
         }
-
-        if (total <= 0L) {
-            return null;
-        }
-
-        // LCG hash of view for deterministic, uniform-ish target in [0, total).
-        // phi depends ONLY on the view, so it is identical at every correct node; the one
-        // remaining floating-point operation is a single deterministic multiply (a single
-        // IEEE-754 op is order-independent, so it does not reintroduce the E3 defect).
-        long h = view * 6364136223846793005L + 1442695040888963407L;
-        double phi = (h & Long.MAX_VALUE) / (double) Long.MAX_VALUE;
-        double target = phi * (double) total;
-
-        long cumulative = 0;
-        for (int i = 0; i < sorted.size(); i++) {
-            cumulative += weights[i];
-            if ((double) cumulative >= target) return sorted.get(i);
-        }
-        return sorted.get((int)(Math.abs(view) % sorted.size()));
+        if (eligible.isEmpty()) return null;
+        Collections.sort(eligible);
+        return eligible.get((int) Math.floorMod(view, (long) eligible.size()));
     }
 
     // ── FEATURE 2: Reputation management ────────────────────────────────────
