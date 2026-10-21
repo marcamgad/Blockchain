@@ -85,3 +85,18 @@ docs/formal/states/
 
 # LevelDB data written by tests / local runs
 test-batch-data/
+
+# [O-8] local chain data and scratch files (never commit)
+chain-data/
+test-batch-data/
+/Patcher.java
+/Patcher.class
+/patch.py
+/tmp-failures.txt
+/test_output*.txt
+/test_errors.txt
+/*_test.txt
+/*_test2.txt
+/*_tests.txt
+/refresh.txt
+/smart_contract_debug.txt

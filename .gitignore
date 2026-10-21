@@ -83,3 +83,6 @@ test-data-*/
 vm-setup/
 # Claude
 .claude/
+# [O-8] local chain data and logs of the old Node.js prototype (never commit)
+data/
+*.log
