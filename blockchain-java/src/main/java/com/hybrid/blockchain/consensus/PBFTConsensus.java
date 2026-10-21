@@ -185,7 +185,18 @@ public class PBFTConsensus implements Consensus {
 
     private final ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor();
     private ScheduledFuture<?>             currentTimerTask;
-    private long                       timeoutMs = 15_000;
+    private long                       timeoutMs = defaultTimeoutMs();
+    /** [HC-083] timeouts in a row without a commit; drives the back-off, reset on commit */
+    private volatile int               consecutiveTimeouts = 0;
+
+    /**
+     * [HC-083] Base view-change timeout: longer than the block interval (2 x block time + 15 s), so
+     * a healthy network that proposes once per block interval never times out between proposals.
+     * It was 15 s against 60 s blocks.
+     */
+    public static long defaultTimeoutMs() {
+        return Math.max(15_000L, 2 * com.hybrid.blockchain.Config.TARGET_BLOCK_TIME_MS + 15_000L);
+    }
 
     // ── constructor ──────────────────────────────────────────────────────────
 
@@ -309,12 +320,25 @@ public class PBFTConsensus implements Consensus {
 
     // ── timer ────────────────────────────────────────────────────────────────
 
+    /**
+     * [HC-083] (Re)arms the view-change timer. It used to be armed only on a commit: after one view
+     * change whose new leader could not commit, no node ever timed out again and the network
+     * stalled for good (live partition scenario). Now every timeout re-arms the timer, with the
+     * delay doubling per consecutive timeout (capped at 8x), and a commit resets the back-off.
+     */
     private void resetTimer() {
         if (currentTimerTask != null) currentTimerTask.cancel(false);
+        long delay = timeoutMs << Math.min(consecutiveTimeouts, 3);
         currentTimerTask = timer.schedule(() -> {
-            log.warn("[PBFT] Consensus timeout — triggering view change");
-            triggerViewChange();
-        }, timeoutMs, TimeUnit.MILLISECONDS);
+            consecutiveTimeouts++;
+            log.warn("[PBFT] Consensus timeout #{} — triggering view change", consecutiveTimeouts);
+            try {
+                triggerViewChange();
+            } catch (Throwable t) {
+                log.warn("[PBFT] View change failed: {}", t.getMessage());
+            }
+            resetTimer();
+        }, delay, TimeUnit.MILLISECONDS);
     }
 
     // ── Consensus interface implementation ───────────────────────────────────
@@ -680,6 +704,7 @@ public class PBFTConsensus implements Consensus {
         committedBlocks.add(blockHash);
         lastCommittedSeq = Math.max(lastCommittedSeq, seq);
         justifiedHashes.remove(seq);
+        consecutiveTimeouts = 0;   // [HC-083]
         updateReputation(proposerId, REP_BLOCK_PROPOSED);
         log.info("[PBFT] Block {} committed at seq {} (proposer={})", blockHash, seq, proposerId);
         resetTimer();
@@ -718,6 +743,7 @@ public class PBFTConsensus implements Consensus {
         String nextLeader = selectLeader(newView);
         log.info("[PBFT] View {} quorum reached. Next leader: {}", newView, nextLeader);
         this.viewNumber = newView;
+        resetTimer();   // [HC-083] the new leader gets a full (backed-off) period
         // [O-1] the new leader tells everyone which block (if any) must be re-proposed
         if (localValidatorId != null && localValidatorId.equals(nextLeader) && localPrivateKey != null) {
             NewViewProof nv = buildNewView(newView);
