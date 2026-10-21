@@ -454,7 +454,7 @@ A stack machine with 64-bit integers, a stack limit of 1,024 (HC-057), memory an
 | MLOAD / MSTORE | 0x32 / 0x33 | 3 | Read and write memory |
 | BALANCE / SELFBALANCE | 0x40 / 0x45 | 20 / 5 | Balances |
 | CALLER / VALUE / TIMESTAMP / NUMBER | 0x41–0x44 | 2 | Context |
-| SYSCALL | 0x50 | 100 | 1 = read sensor, 2 = queue actuator (needs a capability) |
+| SYSCALL | 0x50 | 100 | 1 = read sensor from chain state, 2 = queue actuator (needs a capability) |
 | LOG | 0xa0 | 375 | Emit an event |
 | CALL / DELEGATECALL | 0xf1 / 0xf4 | 700 | Call another contract |
 | RETURN / REVERT | 0xf3 / 0xfd | 0 | End with data / undo |
@@ -464,7 +464,7 @@ A stack machine with 64-bit integers, a stack limit of 1,024 (HC-057), memory an
 Contracts compiled to WebAssembly run on Chicory, a pure-Java WASM interpreter. The entry function is `main`.
 
 - **Gas** is charged for every instruction (1 gas each), for every 64 KiB memory page grown (1,000 gas), and for bulk memory copies. It is capped at 10,000,000 per call. Every node therefore stops at exactly the same point. The old engine relied on a 5-second wall-clock timeout, which splits consensus between fast and slow machines (HC-059). A 30-second timeout remains only as a safety net.
-- **Host functions:** `hb_state_read`, `hb_state_write` (contract storage), `hb_read_sensor`, `hb_get_gas`.
+- **Host functions:** `hb_state_read`, `hb_state_write` (contract storage), `hb_read_sensor` (chain state, see below), `hb_get_gas`.
 - Parsed modules are cached in a 64-entry LRU (HC-061).
 
 ### Capabilities and actuators
@@ -473,7 +473,11 @@ Contracts can only touch hardware if their account holds a `Capability` (`READ_S
 
 ### What contracts cannot do yet
 
-Contracts cannot send coins or tokens out of their own account, compute hashes or check signatures. WASM contracts cannot see the caller or the value sent. This blocks escrow-style applications (crowdfunding, marketplaces, DeFi). Sensor reads use each node's local hardware (HC-058, open).
+Contracts cannot send coins or tokens out of their own account, compute hashes or check signatures. WASM contracts cannot see the caller or the value sent. This blocks escrow-style applications (crowdfunding, marketplaces, DeFi).
+
+### Sensor reads (HC-058)
+
+Contracts read sensors from **chain state**, never from the node's hardware, so every node gets the same value. A device's sensor ID is the first 8 bytes of `hashWithDomain("HYBRIDCHAIN-SENSOR-ID-v1", deviceId)` (`lifecycle/SensorReadings.sensorId`). The value is the latest device-authenticated `TELEMETRY` reading in milli-units: `21.5` or `{"value":21.5}` becomes `21500`, parsed as a decimal. Device-authenticated means one of these: signed by the device's registered key and checked against the block timestamp; a bound PUF proof; or sent by the device's own key. A number the owner or a gateway typed in is stored as telemetry but never fed to contracts. With no reading, contracts get `SensorReadings.NO_READING` (`Long.MIN_VALUE`). The readings are part of the state root once there is at least one.
 
 ---
 
@@ -522,7 +526,7 @@ Note: older copies of the MQTT and CoAP adapters also exist in the `iot` package
 
 ### Hardware abstraction (`HardwareManager.java`)
 
-A simulated hardware layer: sensor 1 (temperature, 25), sensor 2 (humidity, 60), relay 100. Real drivers would replace it. Contract reads of these values are where HC-058 applies.
+Actuators only (simulated relay 100). Real drivers would replace it. Sensor values for contracts come from chain state (HC-058).
 
 ### Hardware security
 
@@ -676,7 +680,6 @@ The most important fixes, in plain words:
 | HC-079 | **Fixed for new `hq` accounts.** Classical `hb` accounts (including validator reward accounts) remain ECDSA-only by construction. | Medium (until funds move to `hq`) |
 | O-2 | No test yet on several real machines with real network faults. | High |
 | O-3 | Rotate every key that was ever derived from a published seed. | High |
-| HC-058 | Contracts read sensors from each node's local hardware. | Medium (only once real sensors are attached) |
 | O-6 | `PRIVATE_TRANSFER` moves no value. | Medium |
 | O-7 | The ZK eligibility gate is unsound and must stay disabled. | Medium |
 | O-8 | LevelDB data, `node_modules` and scratch files are committed to git. | Low |

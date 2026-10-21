@@ -1488,6 +1488,15 @@ public class Blockchain {
                             targetDeviceId = tx.getFrom(); // Simplified/Legacy fallback
                         }
 
+                        // [HC-058] make the reading available to contracts, deterministically:
+                        // only when the DEVICE authenticated it (checked here against the block
+                        // timestamp, never the wall clock) and the payload is a number
+                        if (isDeviceAuthenticated(targetState, targetDeviceId, tx, rawData, timestamp)) {
+                            Long milli = com.hybrid.blockchain.lifecycle.SensorReadings.parseMilli(telemetryPayload);
+                            if (milli != null) {
+                                targetState.recordReading(com.hybrid.blockchain.lifecycle.SensorReadings.sensorId(targetDeviceId), milli);
+                            }
+                        }
                         if (targetState == this.state) {
                             final String telemDevice = targetDeviceId;   // [HC-024] deferred write
                             pendingWrites.add(() -> storage.saveTelemetry(telemDevice, (int) blockIndex, tx.getId(), toStore));
@@ -1737,6 +1746,32 @@ public class Blockchain {
         String action = (String) data.get("action");
         DeviceLifecycleManager lifecycle = targetState.getLifecycleManager();
         handleIoTAction(lifecycle, action, data, tx.getFrom(), timestamp);
+    }
+
+    /**
+     * [HC-058] True iff the device itself authenticated this reading: a DeviceReading signed with
+     * the device's registered key (window checked against the BLOCK timestamp), a PUF ownership
+     * proof bound to this transaction, or a transaction sent by the device's own key. A reading
+     * merely submitted by the owner or a gateway is not device-authenticated.
+     */
+    private boolean isDeviceAuthenticated(AccountState st, String deviceId, Transaction tx, byte[] rawData, long blockTimestamp) {
+        if (deviceId == null) return false;
+        byte[] deviceKey = com.hybrid.blockchain.lifecycle.DeviceReading.registeredKey(st, deviceId);
+        if (deviceKey == null) return false;
+        com.hybrid.blockchain.lifecycle.DeviceReading reading = com.hybrid.blockchain.lifecycle.DeviceReading.parse(rawData);
+        if (reading != null) return reading.verify(st, deviceId, blockTimestamp);
+        try {
+            com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof proof =
+                    MAPPER.readValue(rawData, com.hybrid.blockchain.privacy.ZKProofSystem.OwnershipProof.class);
+            if (proof != null && proof.getPayload() != null && proof.getProof() != null) {
+                return com.hybrid.blockchain.privacy.ZKProofSystem.verifyOwnership(deviceKey, proof)
+                        && java.util.Arrays.equals(proof.getChallenge(), com.hybrid.blockchain.privacy.ZKProofSystem
+                                .telemetryChallenge(deviceId, tx.getFrom(), tx.getNonce(), proof.getPayload()));
+            }
+        } catch (Exception ignored) {
+            // not a proof envelope
+        }
+        return Crypto.deriveAddress(deviceKey).equals(tx.getFrom());
     }
 
     /** [O-5] Mirrors the on-chain jail set into the consensus engine. */

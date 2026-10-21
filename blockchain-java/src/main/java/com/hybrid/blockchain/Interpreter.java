@@ -31,13 +31,13 @@ public class Interpreter {
 
     /**
      * Executes the bytecode instruction by instruction.
-     * 
+     *
      * Stack Convention (EVM standard): For multi-argument opcodes, arguments are pushed left-to-right.
      * The rightmost argument becomes the stack top and is popped first.
-     * Example for JUMPI(address, condition): push(address) then push(condition), 
+     * Example for JUMPI(address, condition): push(address) then push(condition),
      * JUMPI pops condition first (top), then address (below), and jumps if condition != 0.
-     * 
-     * Self-test verification: 
+     *
+     * Self-test verification:
      *   Code: PUSH 100, PUSH 1, JUMPI
      *   Expected: Jump to PC=100 because condition (1) != 0
      */
@@ -99,19 +99,19 @@ public class Interpreter {
                     long inLen = stack.pop();
                     long outOffset = stack.pop();
                     long outLen = stack.pop();
-                    
+
                     // Resolve target address from registry
                     // [HC-057] the registry already maps EVERY account (Blockchain fills it before
                     // execution); the former fallback re-hashed all accounts on every miss, an
                     // O(accounts) scan per CALL for a fixed gas cost
                     String targetAddr = context.addressRegistry.getOrDefault(toAddr, null);
-                    
+
                     if (targetAddr == null) {
                         // Target address not found; execution fails
                         stack.push(0L); // 0 = failure
                         break;
                     }
-                    
+
                     // Check target has code
                     AccountState.Account targetAccount = context.state.getAccount(targetAddr);
                     if (targetAccount == null || targetAccount.getCode() == null) {
@@ -136,27 +136,27 @@ public class Interpreter {
                         break;
                     }
                     context.callStack.add(targetAddr);
-                    
+
                     // Prepare input data
                     byte[] callInput = new byte[(int)Math.min(inLen, memory.length - inOffset)];
                     if (inLen > 0 && inOffset + inLen <= memory.length) {
                         System.arraycopy(memory, (int)inOffset, callInput, 0, (int)inLen);
                     }
-                    
+
                     // Deduct gas
                     long childGasLimit = Math.min(callGas, gasRemaining);
                     deductGas((int)childGasLimit);
-                    
+
                     try {
                         // Transfer value
                         if (callValue > 0) {
                             context.state.debit(context.contractAddress, callValue);
                             context.state.credit(targetAddr, callValue);
                         }
-                        
+
                         // Clone state for child execution
                         AccountState childState = context.state.cloneState();
-                        
+
                         // Create child context
                         Interpreter.BlockchainContext childContext = new Interpreter.BlockchainContext(
                                 context.timestamp,
@@ -168,27 +168,27 @@ public class Interpreter {
                                 context.hardware,
                                 context.currentBlockHash);
                         childContext.events = new java.util.ArrayList<>();
-                        
+
                         // Copy address registry
                         childContext.addressRegistry.putAll(context.addressRegistry);
-                        
+
                         // [FIX-B4] Propagate call stack for reentrancy prevention
                         childContext.callStack.addAll(context.callStack);
-                        
+
                         // Execute child interpreter
                         Interpreter childInterp = new Interpreter(targetAccount.getCode(), childGasLimit, childContext);
                         childInterp.execute();
-                        
+
                         // Merge child state changes (contract succeeded)
                         context.state.merge(childState);
-                        
+
                         // Copy return data
                         byte[] returnData = childInterp.getReturnData();
                         if (returnData != null && outLen > 0) {
                             int copyLen = (int)Math.min(outLen, Math.min(returnData.length, memory.length - outOffset));
                             System.arraycopy(returnData, 0, memory, (int)outOffset, copyLen);
                         }
-                        
+
                         stack.push(1L); // 1 = success
                     } catch (Exception e) {
                         // Execution failed; revert state is handled by exception propagation
@@ -390,7 +390,8 @@ public class Interpreter {
             if (!hasCapability(caps, Capability.Type.READ_SENSOR, sensorId)) {
                 throw new Exception("Unauthorized: Contract lacks READ_SENSOR capability for ID " + sensorId);
             }
-            stack.push(context.hardware.readSensor(sensorId));
+            // [HC-058] chain state, not this node's hardware: every node reads the same value
+            stack.push(context.state.getLatestReading(sensorId));
         } else if (callId == 2) { // WRITE_ACTUATOR
             long actionId = stack.pop();
             long value = stack.pop();

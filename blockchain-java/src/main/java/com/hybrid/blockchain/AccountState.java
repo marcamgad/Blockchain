@@ -30,6 +30,8 @@ public class AccountState {
     private final Set<String> spentNullifiers;
     /** [O-5] Validators jailed by on-chain equivocation evidence (part of the state root once non-empty). */
     private final Set<String> jailedValidators = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** [HC-058] sensorId -> latest device-authenticated reading (milli-units); sorted for hashing. */
+    private final java.util.concurrent.ConcurrentSkipListMap<Long, Long> sensorReadings = new java.util.concurrent.ConcurrentSkipListMap<>();
 
     public String calculateRoot() {
         return HexUtils.encode(mpt.getRootHash());
@@ -152,6 +154,11 @@ public class AccountState {
             List<String> nl = (List<String>) raw.get("nullifiers");
             accountState.spentNullifiers.addAll(nl);
         }
+        if (raw.containsKey("sensorReadings")) {
+            for (Map.Entry<String, Object> e : ((Map<String, Object>) raw.get("sensorReadings")).entrySet()) {
+                accountState.sensorReadings.put(Long.parseLong(e.getKey()), ((Number) e.getValue()).longValue());
+            }
+        }
         if (raw.containsKey("jailedValidators")) {
             accountState.jailedValidators.addAll((List<String>) raw.get("jailedValidators"));
         }
@@ -207,6 +214,9 @@ public class AccountState {
         json.put("privateData", privateDataManager.toJSON());
         json.put("nullifiers", new ArrayList<>(spentNullifiers));
         json.put("jailedValidators", new ArrayList<>(new TreeSet<>(jailedValidators)));
+        Map<String, Long> readings = new java.util.LinkedHashMap<>();
+        for (Map.Entry<Long, Long> e : sensorReadings.entrySet()) readings.put(Long.toString(e.getKey()), e.getValue());
+        json.put("sensorReadings", readings);
 
         return json;
     }
@@ -455,6 +465,17 @@ public class AccountState {
         return spentNullifiers.contains(nullifier);
     }
 
+    /** [HC-058] Latest recorded reading for a sensor, or {@code SensorReadings.NO_READING}. */
+    public long getLatestReading(long sensorId) {
+        Long v = sensorReadings.get(sensorId);
+        return v == null ? com.hybrid.blockchain.lifecycle.SensorReadings.NO_READING : v;
+    }
+
+    /** [HC-058] Records a device-authenticated reading (called only by the TELEMETRY transition). */
+    public void recordReading(long sensorId, long milliValue) {
+        sensorReadings.put(sensorId, milliValue);
+    }
+
     /** [O-5] */
     public boolean isJailed(String validatorId) {
         return jailedValidators.contains(validatorId);
@@ -491,16 +512,26 @@ public class AccountState {
             byte[] lcHash      = Crypto.hash(lcBytes);
             byte[] nulHash     = Crypto.hash(new ObjectMapper().writeValueAsBytes(new ArrayList<>(new TreeSet<>(spentNullifiers))));
 
-            // [O-5] the jailed set joins the root only once non-empty, so existing roots are unchanged
-            byte[] combined = new byte[jailedValidators.isEmpty() ? 128 : 160];
+            // [O-5] the jailed set, and [HC-058] the sensor readings, join the root only once
+            // non-empty, so existing roots are unchanged
+            List<byte[]> extra = new ArrayList<>();
+            if (!jailedValidators.isEmpty()) {
+                extra.add(Crypto.hash(new ObjectMapper().writeValueAsBytes(new ArrayList<>(new TreeSet<>(jailedValidators)))));
+            }
+            if (!sensorReadings.isEmpty()) {
+                java.io.ByteArrayOutputStream rb = new java.io.ByteArrayOutputStream();
+                java.io.DataOutputStream rd = new java.io.DataOutputStream(rb);
+                rd.write("HYBRIDCHAIN-SENSOR-READINGS-v1\0".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                for (Map.Entry<Long, Long> e : sensorReadings.entrySet()) { rd.writeLong(e.getKey()); rd.writeLong(e.getValue()); }
+                rd.flush();
+                extra.add(Crypto.hash(rb.toByteArray()));
+            }
+            byte[] combined = new byte[128 + 32 * extra.size()];
             System.arraycopy(accountRoot, 0, combined,  0, 32);
             System.arraycopy(ssiHash,     0, combined, 32, 32);
             System.arraycopy(lcHash,      0, combined, 64, 32);
             System.arraycopy(nulHash,     0, combined, 96, 32);
-            if (!jailedValidators.isEmpty()) {
-                byte[] jailHash = Crypto.hash(new ObjectMapper().writeValueAsBytes(new ArrayList<>(new TreeSet<>(jailedValidators))));
-                System.arraycopy(jailHash, 0, combined, 128, 32);
-            }
+            for (int i = 0; i < extra.size(); i++) System.arraycopy(extra.get(i), 0, combined, 128 + 32 * i, 32);
 
             return Crypto.bytesToHex(Crypto.hash(combined));
         } catch (Exception e) {

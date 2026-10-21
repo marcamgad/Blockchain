@@ -87,7 +87,8 @@ public class IoTInterpreterTest {
         state.getAccountCapabilities("contract1").add(new Capability(Capability.Type.READ_SENSOR, 1L));
 
         HardwareManager hw = new HardwareManager();
-        hw.setMockSensorValue(1L, 42L);
+        // [HC-058] contracts read the reading recorded in chain state, not node-local hardware
+        state.recordReading(1L, 42L);
 
         Interpreter.BlockchainContext ctx = new Interpreter.BlockchainContext(
                 System.currentTimeMillis(), 1, "alice", "contract1", 0, state, hw, "hash1");
