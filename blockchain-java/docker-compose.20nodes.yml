@@ -28,6 +28,8 @@ x-node-env: &node-env
   DEBUG: "false"
   STORAGE_PATH: /app/data
   STORAGE_AES_KEY: ${STORAGE_AES_KEY}
+  NETWORK_CA_SEED: ${NETWORK_CA_SEED:?set in the env file from scripts/generate_keys.sh}
+  JWT_SECRET: ${JWT_SECRET:?set in the env file from scripts/generate_keys.sh}
   VALIDATOR_PUBKEYS: ${VALIDATOR_PUBKEYS}
   NODE_ROLE: VALIDATOR
 

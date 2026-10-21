@@ -24,9 +24,14 @@ key_of() { grep "^V$1_KEY=" "$ENV" | cut -d= -f2; }
 wait_up() { for i in $(seq 1 "$N"); do for _ in $(seq 1 60); do curl -sf "$(url "$i")/api/v1/health" >/dev/null && break; sleep 5; done; done; }
 
 [[ -f "$ENV" ]] || "$HERE/gen.sh" "$N"
-( cd "$ROOT" && mvn -q -o -DskipTests package && docker build -q -t hybridchain-node:local -f Dockerfile . \
-  && docker build -q -t hybridchain-harness:local -f harness/fault-injection/Dockerfile.harness harness/fault-injection )
-"${DC[@]}" up -d; wait_up
+echo "[1/4] building the node jar";        ( cd "$ROOT" && mvn -q -o -DskipTests package )
+echo "[2/4] building hybridchain-node";    ( cd "$ROOT" && docker build -t hybridchain-node:local -f Dockerfile . )
+echo "[3/4] building hybridchain-harness"; docker build -t hybridchain-harness:local -f "$HERE/Dockerfile.harness" "$HERE"
+echo "[4/4] starting $N validators";       "${DC[@]}" up -d --force-recreate; wait_up
+for i in $(seq 1 "$N"); do
+  curl -sf "$(url "$i")/api/v1/health" >/dev/null || { echo "node v$i did not start; last log lines:" >&2; docker logs --tail 20 "hc-v$i" >&2; exit 1; }
+done
+echo "all $N validators answer on the REST API"
 echo "{\"environment\": \"single-host Docker network, $N validators, simulated (NOT multi-machine)\"}" >> "$OUT"
 
 for sc in "${SCENARIOS[@]}"; do

@@ -1,8 +1,10 @@
 FROM eclipse-temurin:17-jre-jammy
 WORKDIR /app
 
-# Copy the pre-built Assembly fat JAR from the host
-COPY target/*-jar-with-dependencies.jar app.jar
+# Copy the Spring Boot executable JAR from the host. The *-jar-with-dependencies.jar is NOT runnable:
+# the assembly bundles the Boot-repackaged jar, so com.hybrid.App ends up under BOOT-INF/ and the JVM
+# cannot find it (ClassNotFoundException at start).
+COPY target/blockchain-java-*-SNAPSHOT.jar app.jar
 
 # Create data directory for LevelDB storage and install curl for healthchecks
 RUN apt-get update && apt-get install -y curl && \

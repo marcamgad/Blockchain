@@ -65,6 +65,7 @@ done
 
 STORAGE_AES_KEY="$(rand_hex 16)"
 NETWORK_CA_SEED="$(rand_hex 32)"
+JWT_SECRET="$(rand_hex 32)"   # REST API token key; required outside DEBUG (HC-052)
 VALIDATOR_PUBKEYS="${PUB[2]},${PUB[3]},${PUB[4]},${PUB[5]}"
 
 umask 077
@@ -73,6 +74,7 @@ umask 077
   [[ ${#SEED_ARGS[@]} -gt 0 ]] && echo "# TEST KEYS from a seed: not for any real network."
   echo "STORAGE_AES_KEY=$STORAGE_AES_KEY"
   echo "NETWORK_CA_SEED=$NETWORK_CA_SEED"
+  echo "JWT_SECRET=$JWT_SECRET"
   echo
   echo "NODE_SEED_PRIVATE_KEY=${PRIV[1]}"
   for v in 1 2 3 4; do echo "NODE_VALIDATOR_${v}_PRIVATE_KEY=${PRIV[$((v + 1))]}"; done

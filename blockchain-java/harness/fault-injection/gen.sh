@@ -21,6 +21,7 @@ umask 077
 {
   echo "# throw-away harness network, $N validators. Not for any real deployment."
   echo "NETWORK_CA_SEED=$(rand_hex 32)"
+  echo "JWT_SECRET=$(rand_hex 32)"
   echo "VALIDATOR_PUBKEYS=$(grep '^VALIDATOR_PUBKEYS=' "$RAW" | cut -d= -f2)"
   for i in $(seq 1 "$N"); do
     echo "V${i}_KEY=$(grep "^NODE_${i}_PRIVATE_KEY=" "$RAW" | cut -d= -f2)"
@@ -47,6 +48,7 @@ for i in $(seq 1 "$N"); do echo "hc-v$i $(grep "^NODE_${i}_ADDRESS=" "$RAW" | cu
       STORAGE_AES_KEY: \${V${i}_AES}
       VALIDATOR_PUBKEYS: \${VALIDATOR_PUBKEYS}
       NETWORK_CA_SEED: \${NETWORK_CA_SEED}
+      JWT_SECRET: \${JWT_SECRET}
       NODE_ROLE: VALIDATOR
       NODE_ID: v$i
       IS_SEED: "$seed"
