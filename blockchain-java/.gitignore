@@ -100,3 +100,9 @@ test-batch-data/
 /*_tests.txt
 /refresh.txt
 /smart_contract_debug.txt
+
+# [O-2] harness secrets and results
+harness/fault-injection/.env.*
+harness/fault-injection/.addresses.*
+harness/fault-injection/docker-compose.*.yml
+harness/fault-injection/results/

@@ -1,0 +1,6 @@
+# [O-2] Harness image: the normal node image plus libfaketime (for the clock-skew scenario).
+# Build the node image first:  docker build -t hybridchain-node:local -f Dockerfile .
+FROM hybridchain-node:local
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends faketime && rm -rf /var/lib/apt/lists/*
+USER hybrid

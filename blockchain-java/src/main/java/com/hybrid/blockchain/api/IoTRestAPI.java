@@ -76,7 +76,7 @@ public class IoTRestAPI {
 
         this.blockchain = sharedBlockchain;
         this.mempool = blockchain.getMempool();
-        
+
         // PBFT specific setup
         if (sharedPbft != null) {
             this.poa = null; // We use PBFT now
@@ -421,7 +421,9 @@ public class IoTRestAPI {
                 "currentLeader", sharedPbft.getCurrentLeader(),
                 "validatorCount", sharedPbft.getValidatorCount(),
                 "maxFaultyNodes", sharedPbft.getMaxFaultyNodes(),
-                "committedBlocks", sharedPbft.getStats().get("committedBlocks")
+                "committedBlocks", sharedPbft.getStats().get("committedBlocks"),
+                // [O-2] lets external checkers verify that every node agrees on the jail list
+                "jailedValidators", new java.util.TreeSet<>(sharedPbft.getJailedValidators())
             ));
         }
         return ResponseEntity.ok(Map.of("type", "POA"));
@@ -865,10 +867,10 @@ public ResponseEntity<?> adminPeers(@RequestHeader(value = "Authorization", requ
             if (sharedPeerNode == null) {
                 return ResponseEntity.status(400).body(Map.of("error", "PeerNode not initialized"));
             }
-            
+
             sharedPeerNode.disconnectPeer(peerId);
             log.info("Disconnected peer: {}", peerId);
-            
+
             return ResponseEntity.ok(Map.of(
                     "status", "disconnected",
                     "peerId", peerId));
