@@ -53,7 +53,8 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
     private final Map<String, Integer> ipConnectionCounts = new java.util.concurrent.ConcurrentHashMap<>();
     private static final int MAX_CONN_PER_IP = 3;
     private final Map<Long, AtomicBoolean> appliedSequences = new ConcurrentHashMap<>();
-    private final Map<Long, AtomicBoolean> sentCommits = new ConcurrentHashMap<>();
+    /** [O-1] seq -> "hash@view" of the COMMIT this node sent for that height. */
+    private final Map<Long, String> sentCommits = new ConcurrentHashMap<>();
     private final Map<Integer, Checkpoint> pendingCheckpoints = new ConcurrentHashMap<>();
 
     /** [HC-045] bounded list of discovered (unconnected) peers; never used as gossip targets */
@@ -320,8 +321,9 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                         pbft.addPrepareVote(seq, hash, localAddress, prepMsg.signature);
                         pbft.getMessenger().broadcastPrepare(seq, hash, localAddress, prepMsg.signature);
 
-                        if (pbft.hasQuorum(seq, PBFTConsensus.Phase.PREPARE)) {
-                            sendCommit(pbft, seq, hash, view);
+                        String prepared = pbft.getQuorumHash(seq, PBFTConsensus.Phase.PREPARE);
+                        if (prepared != null) {
+                            sendCommit(pbft, seq, prepared, view);
                         }
                     }
                 } else {
@@ -881,16 +883,22 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                 Map<String, Object> data = mapper.readValue(msg.getPayload(), Map.class);
 
                 String valId = (String) data.get("validatorId");
-                byte[] sig = HexUtils.decode((String) data.get("signature"));
                 String msgSubtype = (String) data.get("subtype");
                 long view = pbft.getViewNumber();
+                if ("NEW_VIEW".equals(msgSubtype)) {
+                    handleNewView(pbft, mapper, data);
+                    return;
+                }
+                byte[] sig = HexUtils.decode((String) data.get("signature"));
 
                 if ("PREPARE".equals(msgSubtype)) {
                     long seq = ((Number) data.get("sequenceNumber")).longValue();
                     String hash = (String) data.get("blockHash");
                     pbft.addPrepareVote(seq, hash, valId, sig);
-                    if (pbft.hasQuorum(seq, PBFTConsensus.Phase.PREPARE)) {
-                        sendCommit(pbft, seq, hash, view);
+                    // commit the hash that reached the quorum, not the hash of this vote
+                    String prepared = pbft.getQuorumHash(seq, PBFTConsensus.Phase.PREPARE);
+                    if (prepared != null) {
+                        sendCommit(pbft, seq, prepared, view);
                     }
                 } else if ("COMMIT".equals(msgSubtype)) {
                     long seq = ((Number) data.get("sequenceNumber")).longValue();
@@ -900,9 +908,15 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                         applyBlockAtSequence(pbft, seq);
                     }
                 } else if ("VIEW_CHANGE".equals(msgSubtype)) {
-                    long newView = ((Number) data.get("newView")).longValue();
-                    long lastSeq = ((Number) data.get("lastSeq")).longValue();
-                    pbft.addViewChangeVote(newView, lastSeq, valId, sig);
+                    if (data.get("viewChangeProof") != null) {
+                        // [O-1] VIEW_CHANGE with the sender's prepared proof
+                        pbft.addViewChange(mapper.convertValue(data.get("viewChangeProof"),
+                                PBFTConsensus.ViewChangeProof.class));
+                    } else {
+                        long newView = ((Number) data.get("newView")).longValue();
+                        long lastSeq = ((Number) data.get("lastSeq")).longValue();
+                        pbft.addViewChangeVote(newView, lastSeq, valId, sig);
+                    }
                 }
             }
         } catch (Exception e) {
@@ -912,7 +926,17 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
 
     private void sendCommit(PBFTConsensus pbft, long seq, String hash, long view) {
         if (!pbft.isValidator(localAddress)) return;
-        if (sentCommits.computeIfAbsent(seq, k -> new AtomicBoolean(false)).compareAndSet(false, true)) {
+        final String mark = hash + "@" + view;
+        final boolean[] send = {false};
+        sentCommits.compute(seq, (k, prev) -> {
+            if (prev == null) { send[0] = true; return mark; }
+            if (prev.equals(mark)) return prev;
+            String prevHash = prev.substring(0, prev.lastIndexOf('@'));
+            // [O-1] the same block again in a later view, or the block a NEW_VIEW re-proposed
+            if (prevHash.equals(hash) || hash.equals(pbft.getJustifiedHash(seq))) { send[0] = true; return mark; }
+            return prev;   // never commit two different blocks at one height otherwise
+        });
+        if (send[0]) {
             PBFTConsensus.PBFTMessage commitMsg = new PBFTConsensus.PBFTMessage(
                     PBFTConsensus.Phase.COMMIT, view, seq, hash, localAddress);
             commitMsg.sign(privateKey);
@@ -998,6 +1022,48 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
         data.put("validatorId", valId);
         data.put("signature", HexUtils.encode(sig));
         broadcastPBFT("VIEW_CHANGE", data);
+    }
+
+    /** [O-1] VIEW_CHANGE with the prepared proof; the flat fields stay for older receivers. */
+    @Override
+    public void broadcastViewChangeProof(PBFTConsensus.ViewChangeProof vc) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("newView", vc.newView);
+        data.put("lastSeq", vc.lastSeq);
+        data.put("validatorId", vc.validatorId);
+        data.put("signature", vc.signature);
+        data.put("viewChangeProof", vc);
+        broadcastPBFT("VIEW_CHANGE", data);
+    }
+
+    /** [O-1] NEW_VIEW from the leader of the new view. */
+    @Override
+    public void broadcastNewViewProof(PBFTConsensus.NewViewProof nv) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("validatorId", nv.leaderId);
+        data.put("newViewProof", nv);
+        broadcastPBFT("NEW_VIEW", data);
+    }
+
+    /**
+     * [O-1] Verifies a NEW_VIEW and, when it re-proposes a prepared block, PREPAREs that block in
+     * the new view. A NEW_VIEW that re-proposes nothing leaves the new leader free to propose.
+     */
+    private void handleNewView(PBFTConsensus pbft, ObjectMapper mapper, Map<String, Object> data) throws Exception {
+        PBFTConsensus.NewViewProof nv = mapper.convertValue(data.get("newViewProof"), PBFTConsensus.NewViewProof.class);
+        Block block = pbft.acceptNewView(nv);
+        if (block == null || !pbft.isValidator(localAddress)) return;
+        long seq = block.getIndex();
+        if (seq != blockchain.getHeight() + 1) return;   // already applied, or we are behind: sync handles it
+        blockchain.validateBlock(block);
+        long view = pbft.getViewNumber();
+        PBFTConsensus.PBFTMessage prep = new PBFTConsensus.PBFTMessage(
+                PBFTConsensus.Phase.PREPARE, view, seq, block.getHash(), localAddress);
+        prep.sign(privateKey);
+        pbft.addPrepareVote(seq, block.getHash(), localAddress, prep.signature);
+        pbft.getMessenger().broadcastPrepare(seq, block.getHash(), localAddress, prep.signature);
+        String prepared = pbft.getQuorumHash(seq, PBFTConsensus.Phase.PREPARE);
+        if (prepared != null) sendCommit(pbft, seq, prepared, view);
     }
 
     @Override

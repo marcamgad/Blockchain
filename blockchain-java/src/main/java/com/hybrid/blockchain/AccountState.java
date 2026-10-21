@@ -28,6 +28,8 @@ public class AccountState {
     private PrivateDataManager privateDataManager;
     private MerklePatriciaTrie mpt;
     private final Set<String> spentNullifiers;
+    /** [O-5] Validators jailed by on-chain equivocation evidence (part of the state root once non-empty). */
+    private final Set<String> jailedValidators = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     public String calculateRoot() {
         return HexUtils.encode(mpt.getRootHash());
@@ -150,6 +152,9 @@ public class AccountState {
             List<String> nl = (List<String>) raw.get("nullifiers");
             accountState.spentNullifiers.addAll(nl);
         }
+        if (raw.containsKey("jailedValidators")) {
+            accountState.jailedValidators.addAll((List<String>) raw.get("jailedValidators"));
+        }
 
         return accountState;
     }
@@ -201,6 +206,7 @@ public class AccountState {
         json.put("lifecycle", lifecycleManager.toJSON());
         json.put("privateData", privateDataManager.toJSON());
         json.put("nullifiers", new ArrayList<>(spentNullifiers));
+        json.put("jailedValidators", new ArrayList<>(new TreeSet<>(jailedValidators)));
 
         return json;
     }
@@ -449,6 +455,21 @@ public class AccountState {
         return spentNullifiers.contains(nullifier);
     }
 
+    /** [O-5] */
+    public boolean isJailed(String validatorId) {
+        return jailedValidators.contains(validatorId);
+    }
+
+    /** [O-5] */
+    public void jail(String validatorId) {
+        jailedValidators.add(validatorId);
+    }
+
+    /** [O-5] */
+    public Set<String> getJailedValidators() {
+        return Collections.unmodifiableSet(jailedValidators);
+    }
+
     public void recordNullifier(String nullifier) {
         spentNullifiers.add(nullifier);
     }
@@ -462,7 +483,7 @@ public class AccountState {
         try {
             ObjectMapper objectMapper = new ObjectMapper();
             objectMapper.configure(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
-            
+
             byte[] accountRoot = mpt.getRootHash();
             byte[] ssiBytes    = objectMapper.writeValueAsBytes(ssiManager.toJSON());
             byte[] ssiHash     = Crypto.hash(ssiBytes);
@@ -470,11 +491,16 @@ public class AccountState {
             byte[] lcHash      = Crypto.hash(lcBytes);
             byte[] nulHash     = Crypto.hash(new ObjectMapper().writeValueAsBytes(new ArrayList<>(new TreeSet<>(spentNullifiers))));
 
-            byte[] combined = new byte[128];
+            // [O-5] the jailed set joins the root only once non-empty, so existing roots are unchanged
+            byte[] combined = new byte[jailedValidators.isEmpty() ? 128 : 160];
             System.arraycopy(accountRoot, 0, combined,  0, 32);
             System.arraycopy(ssiHash,     0, combined, 32, 32);
             System.arraycopy(lcHash,      0, combined, 64, 32);
             System.arraycopy(nulHash,     0, combined, 96, 32);
+            if (!jailedValidators.isEmpty()) {
+                byte[] jailHash = Crypto.hash(new ObjectMapper().writeValueAsBytes(new ArrayList<>(new TreeSet<>(jailedValidators))));
+                System.arraycopy(jailHash, 0, combined, 128, 32);
+            }
 
             return Crypto.bytesToHex(Crypto.hash(combined));
         } catch (Exception e) {
@@ -530,16 +556,16 @@ public class AccountState {
 
             if (this.state.containsKey(addr)) {
                 Account thisAccount = this.state.get(addr);
-                
+
                 // OVERWRITE balances from the sim state (sim state started as a clone)
                 Map<String, Long> newsBals = otherAccount.getTokenBalances();
                 for (Map.Entry<String, Long> tokenEntry : newsBals.entrySet()) {
                     thisAccount.setTokenBalance(tokenEntry.getKey(), tokenEntry.getValue());
                 }
-                
+
                 // Sync nonces
                 thisAccount.setNonce(otherAccount.getNonce());
-                
+
                 // Sync code if new
                 if (thisAccount.getCode() == null && otherAccount.getCode() != null) {
                     thisAccount.setCode(otherAccount.getCode());
@@ -682,8 +708,8 @@ public class AccountState {
         }
 
         public synchronized double getReputation() { return reputation; }
-        public synchronized void setReputation(double r) { 
-            this.reputation = r; 
+        public synchronized void setReputation(double r) {
+            this.reputation = r;
         }
 
         public synchronized byte[] getCommitment() { return commitment; }

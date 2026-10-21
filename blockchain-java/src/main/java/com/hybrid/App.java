@@ -20,7 +20,7 @@ import java.util.concurrent.*;
 /**
  * Main entry point for the HybridChain Node.
  * Initializes storage, blockchain, consensus, and networking.
- * 
+ *
  * This class orchestrates the startup sequence:
  * 1. Reads configuration and cryptographic keys
  * 2. Initializes the Certificate Authority for mTLS
@@ -29,7 +29,7 @@ import java.util.concurrent.*;
  * 5. Begins block proposal and state reconciliation
  */
 public class App {
-    
+
     private static final Logger log = LoggerFactory.getLogger(App.class);
 
     public static void main(String[] args) throws Exception {
@@ -37,7 +37,7 @@ public class App {
 
         // 1. Read NODE_PRIVATE_KEY
         BigInteger privKey = Config.getNodePrivateKey();
-        
+
         // 2. Derive pubKey and nodeId
         byte[] pubKey = Crypto.derivePublicKey(privKey);
         String nodeId = Crypto.deriveAddress(pubKey);
@@ -103,6 +103,26 @@ public class App {
         // 12. Call pbft.setMessenger(peerNode)
         pbft.setMessenger(peerNode);
 
+        // [O-5] consensus follows the on-chain jail set; a double vote this node observes is
+        // reported on-chain so that every node jails the validator, not only this one
+        blockchain.syncJailedValidators();
+        pbft.setEvidenceListener(ev -> {
+            try {
+                Transaction tx = new Transaction.Builder()
+                        .type(Transaction.Type.EQUIVOCATION_EVIDENCE)
+                        .from(nodeId)
+                        .data(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsBytes(ev))
+                        .fee(Math.max(1, blockchain.getCurrentBaseFee()))
+                        .nonce(blockchain.getNonce(nodeId) + 1)
+                        .sign(privKey, Crypto.derivePublicKey(privKey));
+                blockchain.addTransaction(tx);
+                peerNode.broadcastTransaction(tx);
+                log.warn("[SLASH] Submitted equivocation evidence against {} as tx {}", ev.validatorId, tx.getTxid());
+            } catch (Exception e) {
+                log.warn("[SLASH] Could not submit evidence against {}: {}", ev.validatorId, e.getMessage());
+            }
+        });
+
         // 13. Call peerNode.start() and peerNode.startPeerSync()
         peerNode.start();
         peerNode.startPeerSync();
@@ -160,7 +180,7 @@ public class App {
 
     /**
      * Add graceful shutdown hook to cleanly stop all components on system shutdown.
-     * 
+     *
      * @param schedulers array of ScheduledExecutorService instances to shut down
      * @param pbft the PBFT consensus instance
      * @param peerNode the P2P node instance
@@ -170,7 +190,7 @@ public class App {
     private static void addShutdownHook(ScheduledExecutorService[] schedulers, PBFTConsensus pbft, PeerNode peerNode, Blockchain blockchain, Storage storage) {
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             log.info("[SHUTDOWN] Graceful shutdown initiated...");
-            
+
             // Stop block proposer scheduler
             for (ScheduledExecutorService scheduler : schedulers) {
                 if (scheduler != null && !scheduler.isShutdown()) {
@@ -178,7 +198,7 @@ public class App {
                     log.debug("[SHUTDOWN] Block proposer scheduler shut down");
                 }
             }
-            
+
             // Stop PBFT consensus
             if (pbft != null) {
                 try {
@@ -188,7 +208,7 @@ public class App {
                     log.warn("[SHUTDOWN] Error shutting down PBFT: {}", ignored.getMessage());
                 }
             }
-            
+
             // Stop peer node
             if (peerNode != null) {
                 try {
@@ -198,7 +218,7 @@ public class App {
                     log.warn("[SHUTDOWN] Error stopping P2P node: {}", ignored.getMessage());
                 }
             }
-            
+
             // Close blockchain and storage
             if (blockchain != null) {
                 try {
@@ -208,7 +228,7 @@ public class App {
                     log.warn("[SHUTDOWN] Error shutting down blockchain: {}", ignored.getMessage());
                 }
             }
-            
+
             if (storage != null) {
                 try {
                     storage.close();
@@ -217,14 +237,14 @@ public class App {
                     log.warn("[SHUTDOWN] Error closing storage: {}", ignored.getMessage());
                 }
             }
-            
+
             log.info("[SHUTDOWN] Complete.");
         }, "shutdown-hook"));
     }
 
     /**
      * Start the block proposer loop that generates new blocks when this node is the leader.
-     * 
+     *
      * @param blockchain the blockchain instance
      * @param pbft the PBFT consensus instance
      * @param peerNode the P2P node for broadcasting
@@ -239,10 +259,15 @@ public class App {
                 if (blockchain.isPaused()) {
                     return;
                 }
+                // [O-1] after a view change that re-proposed a prepared block, the leader must not
+                // propose a different block at that height
+                if (pbft.getJustifiedHash(blockchain.getHeight() + 1) != null) {
+                    return;
+                }
                 if (nodeId.equals(pbft.getCurrentLeader())) {   // [HC-014] null-safe: no leader eligible -> skip slot
                     // Generate a new block
                     Block block = blockchain.createBlock(nodeId, Config.MAX_TRANSACTIONS_PER_BLOCK);
-                    
+
                     // Sign block header
                     byte[] headerSig = Crypto.sign(Crypto.hash(block.serializeCanonical()), privKey);
                     block.setSignature(headerSig);
@@ -260,13 +285,13 @@ public class App {
                     // Record and broadcast PREPARE
                     pbft.addPrepareVote(seq, hash, nodeId, prepMsg.signature);
                     pbft.getMessenger().broadcastPrepare(seq, hash, nodeId, prepMsg.signature);
-                    
+
                     // Store for commit phase
                     pbft.setPendingBlock(seq, block);
 
                     // Broadcast block to other nodes
                     peerNode.broadcastBlock(block);
-                    
+
                     log.info("[PROPOSER] Proposed block {} hash: {}", seq, hash);
                 }
             } catch (Throwable t) {
@@ -275,7 +300,7 @@ public class App {
                 log.error("[PROPOSER] Error in block production: {}", t.getMessage(), t);
             }
         }, Config.TARGET_BLOCK_TIME_MS, Config.TARGET_BLOCK_TIME_MS, TimeUnit.MILLISECONDS);
-        
+
         return scheduler;
     }
 }

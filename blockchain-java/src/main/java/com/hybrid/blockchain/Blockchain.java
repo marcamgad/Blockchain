@@ -286,6 +286,7 @@ public class Blockchain {
             tx.getType() != Transaction.Type.UTXO &&
             tx.getType() != Transaction.Type.PRIVATE_TRANSFER &&
             tx.getType() != Transaction.Type.TELEMETRY_BATCH &&
+            tx.getType() != Transaction.Type.EQUIVOCATION_EVIDENCE &&
             tx.getType() != Transaction.Type.MINT) {
             throw new Exception("Missing destination");
         }
@@ -681,6 +682,26 @@ public class Blockchain {
                     }
                 }
                 break;
+
+            case EQUIVOCATION_EVIDENCE: {
+                // [O-5] anyone may report; the evidence itself is the proof
+                if (tx.getFrom() == null) throw new Exception("EQUIVOCATION_EVIDENCE must have a reporter");
+                if (!(consensus instanceof com.hybrid.blockchain.consensus.PBFTConsensus))
+                    throw new Exception("Equivocation evidence requires PBFT");
+                com.hybrid.blockchain.consensus.PBFTConsensus.EquivocationEvidence ev = MAPPER.readValue(tx.getData(),
+                        com.hybrid.blockchain.consensus.PBFTConsensus.EquivocationEvidence.class);
+                if (!((com.hybrid.blockchain.consensus.PBFTConsensus) consensus).verifyEvidence(ev))
+                    throw new Exception("Invalid equivocation evidence");
+                if (state.isJailed(ev.validatorId))
+                    throw new Exception("Validator already jailed: " + ev.validatorId);
+                if (!skipNonce) {
+                    long expected = state.getNonce(tx.getFrom()) + 1;
+                    if (tx.getNonce() != expected) throw new IllegalArgumentException("Invalid nonce: expected " + expected + " got " + tx.getNonce());
+                }
+                if (state.getBalance(tx.getFrom()) < tx.getFee())
+                    throw new Exception("Insufficient fee for EQUIVOCATION_EVIDENCE");
+                break;
+            }
 
             default:
                 throw new Exception("Unknown transaction type: " + tx.getType());
@@ -1626,6 +1647,26 @@ public class Blockchain {
                 }
                 return new ExecutionResult(0, null, null, transactionEvents);
 
+            case EQUIVOCATION_EVIDENCE: {
+                // [O-5] jail the validator in the state (state root), then in consensus after acceptance
+                com.hybrid.blockchain.consensus.PBFTConsensus.EquivocationEvidence ev = MAPPER.readValue(tx.getData(),
+                        com.hybrid.blockchain.consensus.PBFTConsensus.EquivocationEvidence.class);
+                if (!(consensus instanceof com.hybrid.blockchain.consensus.PBFTConsensus)
+                        || !((com.hybrid.blockchain.consensus.PBFTConsensus) consensus).verifyEvidence(ev))
+                    throw new Exception("Invalid equivocation evidence");
+                if (targetState.isJailed(ev.validatorId))
+                    throw new Exception("Validator already jailed: " + ev.validatorId);
+                targetState.debit(tx.getFrom(), tx.getFee());
+                targetState.incrementNonce(tx.getFrom());
+                targetState.jail(ev.validatorId);
+                if (targetState == this.state) {
+                    pendingWrites.add(this::syncJailedValidators);
+                }
+                log.warn("[SLASH] Validator {} jailed by on-chain equivocation evidence (reported by {})",
+                        ev.validatorId, tx.getFrom());
+                return new ExecutionResult(0, null, null, transactionEvents);
+            }
+
             case TELEMETRY_BATCH:
                 // PAPER-IMPL: P1-B — Maftei et al. Sensors 2025, DOI:10.3390/s25092886
                 // Decode JSON array of {deviceId, value, timestamp} tuples and run anomaly detection on each
@@ -1694,6 +1735,13 @@ public class Blockchain {
         String action = (String) data.get("action");
         DeviceLifecycleManager lifecycle = targetState.getLifecycleManager();
         handleIoTAction(lifecycle, action, data, tx.getFrom(), timestamp);
+    }
+
+    /** [O-5] Mirrors the on-chain jail set into the consensus engine. */
+    public void syncJailedValidators() {
+        if (consensus instanceof com.hybrid.blockchain.consensus.PBFTConsensus) {
+            ((com.hybrid.blockchain.consensus.PBFTConsensus) consensus).setJailedValidators(state.getJailedValidators());
+        }
     }
 
     private void handleIoTAction(DeviceLifecycleManager lifecycle, String action, Map<String, Object> data, String from, long timestamp) throws Exception {

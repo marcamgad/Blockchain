@@ -3,6 +3,7 @@ package com.hybrid.blockchain.consensus;
 import com.hybrid.blockchain.Block;
 import com.hybrid.blockchain.Consensus;
 import com.hybrid.blockchain.Crypto;
+import com.hybrid.blockchain.HexUtils;
 import com.hybrid.blockchain.Validator;
 import java.util.*;
 import java.util.concurrent.*;
@@ -49,6 +50,15 @@ public class PBFTConsensus implements Consensus {
         void broadcastCommit(long sequenceNumber, String blockHash, String validatorId, byte[] signature);
         void broadcastViewChange(long newView, long lastSeq, String validatorId, byte[] signature);
         void broadcastNewView(long newView, List<PBFTMessage> viewChanges, List<Block> recoveredBlocks, String validatorId);
+
+        /** [O-1] VIEW_CHANGE carrying this node's prepared proof (null-safe default: plain VIEW_CHANGE). */
+        default void broadcastViewChangeProof(ViewChangeProof vc) {
+            broadcastViewChange(vc.newView, vc.lastSeq, vc.validatorId, HexUtils.decode(vc.signature));
+        }
+
+        /** [O-1] NEW_VIEW with the view-change quorum and the re-proposed block (default: not sent). */
+        default void broadcastNewViewProof(NewViewProof nv) {
+        }
     }
 
     private PBFTMessenger messenger;
@@ -162,6 +172,13 @@ public class PBFTConsensus implements Consensus {
 
     private long                       lastCommittedSeq = 0;
     private final Set<String>          slashedValidators = ConcurrentHashMap.newKeySet();
+    /**
+     * [O-5] Validators jailed by on-chain evidence, mirrored from the state after each block. Unlike
+     * {@link #slashedValidators} (what THIS node happened to observe), every node holds the same
+     * set, so it may decide certificate validity, leader election and vote acceptance.
+     */
+    private final Set<String>          jailedValidators = ConcurrentHashMap.newKeySet();
+    private volatile java.util.function.Consumer<EquivocationEvidence> evidenceListener;
 
     private final String               localValidatorId;
     private final BigInteger           localPrivateKey;
@@ -450,7 +467,9 @@ public class PBFTConsensus implements Consensus {
         Set<String> valid = new HashSet<>();
         for (Block.CommitSignature cs : cert) {
             if (cs == null || cs.validatorId == null || cs.signature == null || valid.contains(cs.validatorId)) continue;
-            if (slashedValidators.contains(cs.validatorId)) continue;
+            // [O-5] only the on-chain jail set: a locally observed slash differs between nodes, and
+            // made nodes disagree on whether a certificate is valid (i.e. which blocks are final)
+            if (jailedValidators.contains(cs.validatorId)) continue;
             byte[] key = validators.get(cs.validatorId);
             if (key == null) continue;
             PBFTMessage m = new PBFTMessage(Phase.COMMIT, cs.view, block.getIndex(), block.getHash(), cs.validatorId);
@@ -545,7 +564,9 @@ public class PBFTConsensus implements Consensus {
             // weight reintroduces the divergence of Theorem 1 through a second channel
             // (Remark 6.3). The scorer remains available for monitoring/alerting.
             // Re-admitting it into selection requires the commit-then-use construction.
-            if (zkEligibilityRequired && !isZkEligible(valId)) {
+            if (jailedValidators.contains(valId)) {
+                weights[i] = 0L;   // [O-5] jailed on-chain: never leader
+            } else if (zkEligibilityRequired && !isZkEligible(valId)) {
                 // No verified zero-knowledge eligibility proof → not leader-eligible.
                 // (Eligibility proofs are consensus-visible artifacts, not local state.)
                 weights[i] = 0L;
@@ -639,9 +660,10 @@ public class PBFTConsensus implements Consensus {
         }
 
         phaseVotes.compute(validatorId, (id, current) -> {
-                      if (existing != null && !existing.blockHash.equals(blockHash)) {
+                      if (existing != null && existing.viewNumber == msg.viewNumber && !existing.blockHash.equals(blockHash)) {
                           log.error("[PBFT] SLASH: double-PREPARE from {} ({} vs {})",
                                   id, existing.blockHash, blockHash);
+                          reportEquivocation(existing, msg);
                           slashedValidators.add(id);
                           updateReputation(id, REP_INVALID_BLOCK);
                       }
@@ -674,9 +696,10 @@ public class PBFTConsensus implements Consensus {
         }
 
         phaseVotes.compute(validatorId, (id, current) -> {
-                      if (existing != null && !existing.blockHash.equals(blockHash)) {
+                      if (existing != null && existing.viewNumber == msg.viewNumber && !existing.blockHash.equals(blockHash)) {
                           log.error("[PBFT] SLASH: double-COMMIT from {} ({} vs {})",
                                   id, existing.blockHash, blockHash);
+                          reportEquivocation(existing, msg);
                           slashedValidators.add(id);
                           updateReputation(id, REP_INVALID_BLOCK);
                       }
@@ -753,6 +776,7 @@ public class PBFTConsensus implements Consensus {
     public void markCommitted(String blockHash, long seq, String proposerId) {
         committedBlocks.add(blockHash);
         lastCommittedSeq = Math.max(lastCommittedSeq, seq);
+        justifiedHashes.remove(seq);
         updateReputation(proposerId, REP_BLOCK_PROPOSED);
         log.info("[PBFT] Block {} committed at seq {} (proposer={})", blockHash, seq, proposerId);
         resetTimer();
@@ -791,6 +815,11 @@ public class PBFTConsensus implements Consensus {
         String nextLeader = selectLeader(newView);
         log.info("[PBFT] View {} quorum reached. Next leader: {}", newView, nextLeader);
         this.viewNumber = newView;
+        // [O-1] the new leader tells everyone which block (if any) must be re-proposed
+        if (localValidatorId != null && localValidatorId.equals(nextLeader) && localPrivateKey != null) {
+            NewViewProof nv = buildNewView(newView);
+            if (nv != null && messenger != null) messenger.broadcastNewViewProof(nv);
+        }
     }
 
     public void triggerViewChange() {
@@ -805,8 +834,11 @@ public class PBFTConsensus implements Consensus {
         PBFTMessage vcMsg = new PBFTMessage(Phase.VIEW_CHANGE, nextView, lastCommittedSeq, "VIEW_CHANGE_PROOF", localValidatorId); // [FIX A4]
         if (localPrivateKey != null) {
             vcMsg.sign(localPrivateKey);
+            ViewChangeProof vc = new ViewChangeProof(nextView, lastCommittedSeq, localValidatorId,
+                    HexUtils.encode(vcMsg.signature), localPreparedProof(lastCommittedSeq + 1));
+            viewChangeProofs.computeIfAbsent(nextView, k -> new ConcurrentHashMap<>()).put(localValidatorId, vc);
             if (messenger != null)
-                messenger.broadcastViewChange(nextView, lastCommittedSeq, localValidatorId, vcMsg.signature);
+                messenger.broadcastViewChangeProof(vc);
         }
         viewChangeLog.computeIfAbsent(nextView, k -> new ConcurrentHashMap<>())
                      .put(localValidatorId, vcMsg);
@@ -815,6 +847,263 @@ public class PBFTConsensus implements Consensus {
         if (viewChangeLog.get(nextView).size() >= quorumSize()) {   // [HC-002]
             processViewChange(nextView);
         }
+    }
+
+    // ── [O-1] NEW_VIEW: carrying prepared blocks across a view change ─────────
+    //
+    // Without this, a leader that failed after some honest nodes had sent COMMIT for block A
+    // could stall the chain: those nodes never COMMIT a different block at that height, and the
+    // next leader did not know A existed. Standard PBFT fixes this with NEW_VIEW:
+    //  1. every VIEW_CHANGE carries the block its sender saw PREPARED at the next height, with
+    //     the 2f+1 PREPARE signatures that prove it (a PreparedProof);
+    //  2. the new leader, holding 2f+1 VIEW_CHANGEs, re-proposes the prepared block with the
+    //     highest view (or nothing, if no valid proof exists) in a signed NEW_VIEW;
+    //  3. every node re-derives that choice from the same VIEW_CHANGEs and rejects a NEW_VIEW
+    //     that proposes anything else; the chosen hash becomes "justified" for that height, which
+    //     is what allows a node to COMMIT again in the new view.
+    // Safety: if A was committed anywhere, 2f+1 validators prepared it, so every 2f+1 VIEW_CHANGE
+    // set contains at least one honest proof of A and the rule re-selects A.
+
+    /** One validator's signed vote for (view, seq, hash): used for PREPARE proofs. */
+    public static class PreparedProof {
+        public long seq;
+        public String blockHash;
+        public List<Block.CommitSignature> prepares;   // validatorId, view, PREPARE signature
+        public Block block;
+
+        public PreparedProof() {
+        }
+
+        public PreparedProof(long seq, String blockHash, List<Block.CommitSignature> prepares, Block block) {
+            this.seq = seq;
+            this.blockHash = blockHash;
+            this.prepares = prepares;
+            this.block = block;
+        }
+
+        /** Highest view among the prepare signatures (the view the block was prepared in). */
+        public long view() {
+            long v = -1;
+            if (prepares != null) for (Block.CommitSignature p : prepares) if (p != null) v = Math.max(v, p.view);
+            return v;
+        }
+    }
+
+    public static class ViewChangeProof {
+        public long newView;
+        public long lastSeq;
+        public String validatorId;
+        public String signature;        // hex, over PBFTMessage(VIEW_CHANGE, newView, lastSeq, "VIEW_CHANGE_PROOF", id)
+        public PreparedProof prepared;  // may be null
+
+        public ViewChangeProof() {
+        }
+
+        public ViewChangeProof(long newView, long lastSeq, String validatorId, String signature, PreparedProof prepared) {
+            this.newView = newView;
+            this.lastSeq = lastSeq;
+            this.validatorId = validatorId;
+            this.signature = signature;
+            this.prepared = prepared;
+        }
+    }
+
+    public static class NewViewProof {
+        public long newView;
+        public String leaderId;
+        public List<ViewChangeProof> viewChanges;
+        public Block block;             // the re-proposed block, or null when nothing was prepared
+        public String signature;        // hex, over PBFTMessage(NEW_VIEW, newView, seq, hashOrEmpty, leaderId)
+
+        public NewViewProof() {
+        }
+    }
+
+    /** View-change messages with their proofs: newView -> validatorId -> message. */
+    private final Map<Long, Map<String, ViewChangeProof>> viewChangeProofs = new ConcurrentHashMap<>();
+    /** Heights whose block was re-proposed by a valid NEW_VIEW: seq -> hash. */
+    private final Map<Long, String> justifiedHashes = new ConcurrentHashMap<>();
+    /** Views for which a NEW_VIEW was already accepted. */
+    private final Set<Long> acceptedNewViews = ConcurrentHashMap.newKeySet();
+
+    /** The PREPARE votes this node holds for (seq, blockHash). */
+    public List<Block.CommitSignature> buildPrepareCertificate(long seq, String blockHash) {
+        List<Block.CommitSignature> cert = new ArrayList<>();
+        Map<Phase, Map<String, PBFTMessage>> seqLog = messageLog.get(seq);
+        if (seqLog == null || seqLog.get(Phase.PREPARE) == null) return cert;
+        for (PBFTMessage m : seqLog.get(Phase.PREPARE).values()) {
+            if (m != null && blockHash.equals(m.blockHash) && m.signature != null) {
+                cert.add(new Block.CommitSignature(m.validatorId, m.viewNumber,
+                        com.hybrid.blockchain.HexUtils.encode(m.signature)));
+            }
+        }
+        return cert;
+    }
+
+    /** This node's proof for the block prepared at {@code seq}, or null. */
+    public PreparedProof localPreparedProof(long seq) {
+        String hash = getQuorumHash(seq, Phase.PREPARE);
+        Block block = pendingBlocks.get(seq);
+        if (hash == null || block == null || !hash.equals(block.getHash())) return null;
+        return new PreparedProof(seq, hash, buildPrepareCertificate(seq, hash), block);
+    }
+
+    /** True iff the block is well-formed, signed by its proposer and carries 2f+1 valid PREPAREs. */
+    public boolean verifyPreparedProof(PreparedProof p) {
+        if (p == null || p.block == null || p.blockHash == null || p.prepares == null) return false;
+        if (p.prepares.size() > 4 * validators.size()) return false;
+        if (p.block.getIndex() != p.seq || !p.blockHash.equals(p.block.getHash())
+                || !p.blockHash.equals(p.block.calculateHash())) return false;
+        if (!verifyProposerSignature(p.block, null)) return false;
+        Set<String> valid = new HashSet<>();
+        for (Block.CommitSignature cs : p.prepares) {
+            if (cs == null || cs.validatorId == null || cs.signature == null || valid.contains(cs.validatorId)) continue;
+            byte[] key = validators.get(cs.validatorId);
+            if (key == null) continue;
+            PBFTMessage m = new PBFTMessage(Phase.PREPARE, cs.view, p.seq, p.blockHash, cs.validatorId);
+            try {
+                m.signature = com.hybrid.blockchain.HexUtils.decode(cs.signature);
+            } catch (Exception e) {
+                continue;
+            }
+            if (m.verify(key)) valid.add(cs.validatorId);
+        }
+        return valid.size() >= quorumSize();
+    }
+
+    private boolean verifyViewChangeSignature(ViewChangeProof vc) {
+        if (vc == null || vc.validatorId == null || vc.signature == null) return false;
+        byte[] key = validators.get(vc.validatorId);
+        if (key == null) return false;
+        PBFTMessage m = new PBFTMessage(Phase.VIEW_CHANGE, vc.newView, vc.lastSeq, "VIEW_CHANGE_PROOF", vc.validatorId);
+        try {
+            m.signature = com.hybrid.blockchain.HexUtils.decode(vc.signature);
+        } catch (Exception e) {
+            return false;
+        }
+        return m.verify(key);
+    }
+
+    /**
+     * Records a VIEW_CHANGE received from the network. An attached prepared proof that does not
+     * verify is dropped (the vote still counts); a bad signature rejects the message.
+     */
+    public void addViewChange(ViewChangeProof vc) {
+        if (!verifyViewChangeSignature(vc))
+            throw new SecurityException("Invalid VIEW_CHANGE signature from " + (vc == null ? null : vc.validatorId));
+        if (vc.prepared != null && !verifyPreparedProof(vc.prepared)) {
+            log.warn("[PBFT] VIEW_CHANGE from {} carried an invalid prepared proof; ignoring the proof", vc.validatorId);
+            vc.prepared = null;
+        }
+        viewChangeProofs.computeIfAbsent(vc.newView, k -> new ConcurrentHashMap<>()).put(vc.validatorId, vc);
+        addViewChangeVote(vc.newView, vc.lastSeq, vc.validatorId, com.hybrid.blockchain.HexUtils.decode(vc.signature));
+    }
+
+    /** The height a new view resumes at, from a set of view changes. */
+    private static long resumeSeq(Collection<ViewChangeProof> vcs) {
+        long max = 0;
+        for (ViewChangeProof vc : vcs) max = Math.max(max, vc.lastSeq);
+        return max + 1;
+    }
+
+    /**
+     * Deterministic choice: among valid proofs for the resume height, the one prepared in the
+     * highest view (ties broken by hash so every node picks the same one); null if none.
+     */
+    private PreparedProof choosePrepared(Collection<ViewChangeProof> vcs) {
+        long seq = resumeSeq(vcs);
+        PreparedProof best = null;
+        for (ViewChangeProof vc : vcs) {
+            PreparedProof p = vc.prepared;
+            if (p == null || p.seq != seq || !verifyPreparedProof(p)) continue;
+            if (best == null || p.view() > best.view()
+                    || (p.view() == best.view() && p.blockHash.compareTo(best.blockHash) < 0)) {
+                best = p;
+            }
+        }
+        return best;
+    }
+
+    private PBFTMessage newViewMessage(long newView, long seq, String hash, String leaderId) {
+        return new PBFTMessage(Phase.NEW_VIEW, newView, seq, hash == null ? "" : hash, leaderId);
+    }
+
+    /** Built by the leader of {@code newView} from the view changes it holds; null without a quorum. */
+    public NewViewProof buildNewView(long newView) {
+        Map<String, ViewChangeProof> held = viewChangeProofs.get(newView);
+        if (held == null) return null;
+        List<ViewChangeProof> valid = new ArrayList<>();
+        for (ViewChangeProof vc : held.values()) if (vc.newView == newView && verifyViewChangeSignature(vc)) valid.add(vc);
+        if (valid.size() < quorumSize()) return null;
+        PreparedProof chosen = choosePrepared(valid);
+        NewViewProof nv = new NewViewProof();
+        nv.newView = newView;
+        nv.leaderId = localValidatorId;
+        nv.viewChanges = valid;
+        nv.block = chosen == null ? null : chosen.block;
+        PBFTMessage m = newViewMessage(newView, resumeSeq(valid), chosen == null ? null : chosen.blockHash, localValidatorId);
+        m.sign(localPrivateKey);
+        nv.signature = com.hybrid.blockchain.HexUtils.encode(m.signature);
+        return nv;
+    }
+
+    /**
+     * Verifies a NEW_VIEW and, if valid, moves to that view. Checks: sender is the leader of the
+     * view, 2f+1 distinct valid VIEW_CHANGEs for it, the leader's signature, and that the
+     * re-proposed block is exactly the one the choice rule gives (or none when it gives none).
+     * On success the chosen block becomes the pending, justified block for its height.
+     *
+     * @return the re-proposed block (to PREPARE in the new view), or null when the leader is free
+     *         to propose a new one
+     * @throws SecurityException if the NEW_VIEW is not valid
+     */
+    public Block acceptNewView(NewViewProof nv) {
+        if (nv == null || nv.leaderId == null || nv.viewChanges == null)
+            throw new SecurityException("Malformed NEW_VIEW");
+        if (nv.newView < viewNumber)
+            throw new SecurityException("Stale NEW_VIEW for view " + nv.newView);
+        if (acceptedNewViews.contains(nv.newView)) return null;   // duplicate delivery (gossip)
+        Map<String, ViewChangeProof> distinct = new HashMap<>();
+        for (ViewChangeProof vc : nv.viewChanges) {
+            if (vc == null || vc.newView != nv.newView || distinct.containsKey(vc.validatorId)) continue;
+            if (!verifyViewChangeSignature(vc)) continue;
+            if (vc.prepared != null && !verifyPreparedProof(vc.prepared)) vc.prepared = null;
+            distinct.put(vc.validatorId, vc);
+        }
+        if (distinct.size() < quorumSize())
+            throw new SecurityException("NEW_VIEW carries " + distinct.size() + " valid view changes, need " + quorumSize());
+        // The 2f+1 VIEW_CHANGEs certify the view change itself, so apply it first: it adjusts the
+        // abandoned leader's reputation, which the leader election for the new view depends on.
+        if (viewNumber < nv.newView) processViewChange(nv.newView);
+        if (!nv.leaderId.equals(selectLeader(nv.newView)))
+            throw new SecurityException("NEW_VIEW for view " + nv.newView + " not from its leader");
+        long seq = resumeSeq(distinct.values());
+        PreparedProof chosen = choosePrepared(distinct.values());
+        String chosenHash = chosen == null ? null : chosen.blockHash;
+        PBFTMessage m = newViewMessage(nv.newView, seq, chosenHash, nv.leaderId);
+        try {
+            m.signature = com.hybrid.blockchain.HexUtils.decode(nv.signature);
+        } catch (Exception e) {
+            throw new SecurityException("NEW_VIEW signature malformed");
+        }
+        if (!m.verify(validators.get(nv.leaderId)))
+            throw new SecurityException("Invalid NEW_VIEW signature from " + nv.leaderId);
+        if (chosen == null) {
+            if (nv.block != null) throw new SecurityException("NEW_VIEW proposes a block although none was prepared");
+        } else if (nv.block == null || !chosenHash.equals(nv.block.getHash()) || !chosenHash.equals(nv.block.calculateHash())) {
+            throw new SecurityException("NEW_VIEW does not re-propose the prepared block " + chosenHash);
+        }
+        acceptedNewViews.add(nv.newView);
+        if (chosen == null) return null;
+        justifiedHashes.put(seq, chosenHash);
+        pendingBlocks.put(seq, chosen.block);
+        log.info("[PBFT] NEW_VIEW {} accepted: re-proposing block {} at seq {}", nv.newView, chosenHash, seq);
+        return chosen.block;
+    }
+
+    /** The block hash a valid NEW_VIEW re-proposed for {@code seq}, or null. */
+    public String getJustifiedHash(long seq) {
+        return justifiedHashes.get(seq);
     }
 
     // ── Accessors ────────────────────────────────────────────────────────────
@@ -879,5 +1168,86 @@ public class PBFTConsensus implements Consensus {
     private void ensureKnownValidator(String id) {
         if (!validators.containsKey(id))
             throw new SecurityException("Unknown validator: " + id);
+        if (jailedValidators.contains(id))
+            throw new SecurityException("Validator is jailed: " + id);   // [O-5]
+    }
+
+    // ── [O-5] on-chain equivocation evidence ─────────────────────────────────
+
+    /** Two votes of one validator for different blocks at the same (phase, view, seq). */
+    public static class EquivocationEvidence {
+        public String phase;          // PREPARE or COMMIT
+        public long view;
+        public long seq;
+        public String validatorId;
+        public String hashA;
+        public String signatureA;     // hex
+        public String hashB;
+        public String signatureB;     // hex
+
+        public EquivocationEvidence() {
+        }
+    }
+
+    /** Called with evidence whenever this node observes a double vote (wired to submit a tx). */
+    public void setEvidenceListener(java.util.function.Consumer<EquivocationEvidence> listener) {
+        this.evidenceListener = listener;
+    }
+
+    private void reportEquivocation(PBFTMessage a, PBFTMessage b) {
+        java.util.function.Consumer<EquivocationEvidence> l = evidenceListener;
+        if (l == null || a.signature == null || b.signature == null) return;
+        EquivocationEvidence ev = new EquivocationEvidence();
+        ev.phase = a.phase.name();
+        ev.view = a.viewNumber;
+        ev.seq = a.sequenceNumber;
+        ev.validatorId = a.validatorId;
+        ev.hashA = a.blockHash;
+        ev.signatureA = HexUtils.encode(a.signature);
+        ev.hashB = b.blockHash;
+        ev.signatureB = HexUtils.encode(b.signature);
+        try {
+            l.accept(ev);
+        } catch (Exception e) {
+            log.warn("[PBFT] Could not submit equivocation evidence: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * True iff the evidence proves equivocation: a known validator signed two PREPAREs (or two
+     * COMMITs) for DIFFERENT hashes at the same view and sequence. Depends only on the validator
+     * set, so every node reaches the same verdict.
+     */
+    public boolean verifyEvidence(EquivocationEvidence ev) {
+        if (ev == null || ev.validatorId == null || ev.hashA == null || ev.hashB == null
+                || ev.signatureA == null || ev.signatureB == null || ev.hashA.equals(ev.hashB)) return false;
+        Phase phase;
+        try {
+            phase = Phase.valueOf(ev.phase);
+        } catch (Exception e) {
+            return false;
+        }
+        if (phase != Phase.PREPARE && phase != Phase.COMMIT) return false;
+        byte[] key = validators.get(ev.validatorId);
+        if (key == null) return false;
+        try {
+            PBFTMessage a = new PBFTMessage(phase, ev.view, ev.seq, ev.hashA, ev.validatorId);
+            a.signature = HexUtils.decode(ev.signatureA);
+            PBFTMessage b = new PBFTMessage(phase, ev.view, ev.seq, ev.hashB, ev.validatorId);
+            b.signature = HexUtils.decode(ev.signatureB);
+            return a.verify(key) && b.verify(key);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** Mirror of the on-chain jail set (called after every accepted block and at start-up). */
+    public void setJailedValidators(Collection<String> jailed) {
+        jailedValidators.retainAll(jailed);
+        jailedValidators.addAll(jailed);
+    }
+
+    public Set<String> getJailedValidators() {
+        return Collections.unmodifiableSet(jailedValidators);
     }
 }

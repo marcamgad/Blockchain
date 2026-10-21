@@ -22,7 +22,9 @@ public final class Transaction {
         PRIVATE_TRANSFER,
         /** PAPER-IMPL: P1-B — Maftei et al. Sensors 2025, DOI:10.3390/s25092886
          *  Gateway aggregates N device TELEMETRY packets into 1 tx (MessagePack-encoded). */
-        TELEMETRY_BATCH
+        TELEMETRY_BATCH,
+        /** [O-5] Two conflicting signed votes of one validator; jails it on every node. Appended last: ordinals are hashed. */
+        EQUIVOCATION_EVIDENCE
     }
 
     private static final byte[] DOMAIN_PREFIX = "TX\0".getBytes(StandardCharsets.UTF_8);
@@ -321,7 +323,7 @@ public final class Transaction {
             return false;
         if (!Crypto.deriveAddress(pubKey).equals(from))
             return false;
-        
+
         byte[] payload = signingPayload();
         boolean ecValid = Crypto.verify(payload, signature, pubKey);
         if (!ecValid) return false;
@@ -330,7 +332,7 @@ public final class Transaction {
         if (Config.REQUIRE_QUANTUM_SIG) {
             if (dilithiumSignature == null || dilithiumPublicKey == null) return false;
             try {
-                // To avoid storing raw byte-arrays where Keys are needed, we assume 
+                // To avoid storing raw byte-arrays where Keys are needed, we assume
                 // QuantumResistantCrypto provides a way, or we reconstruct the key:
                 java.security.KeyFactory kf = java.security.KeyFactory.getInstance(com.hybrid.blockchain.security.QuantumResistantCrypto.ALGORITHM, com.hybrid.blockchain.security.QuantumResistantCrypto.PROVIDER);
                 java.security.PublicKey dPubKey = kf.generatePublic(new java.security.spec.X509EncodedKeySpec(dilithiumPublicKey));
