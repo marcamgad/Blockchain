@@ -21,7 +21,8 @@ PUMBA=(docker run --rm -v //var/run/docker.sock:/var/run/docker.sock gaiaadm/pum
 url() { echo "http://localhost:$((18080 + $1))"; }
 all_urls() { local s=""; for i in $(seq 1 "$N"); do s+="$(url "$i"),"; done; echo "${s%,}"; }
 ip() { echo "172.28.0.$((10 + $1))"; }
-check() { "$PY" "$HERE/check.py" --nodes "$(all_urls)" --out "$OUT" "$@"; }
+FAILS=0   # a failed phase is recorded and the run continues with the next scenario
+check() { "$PY" "$HERE/check.py" --nodes "$(all_urls)" --out "$OUT" "$@" || FAILS=$((FAILS + 1)); }
 container_of() { awk -v a="$1" '$2==a {print $1}' "$ADDR"; }
 leader() { curl -s "$(url 1)/api/v1/consensus" | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["currentLeader"])'; }
 key_of() { grep "^V$1_KEY=" "$ENV" | cut -d= -f2; }
@@ -92,5 +93,6 @@ for r in rows[1:]:
     g = lambda k: ("ok" if r[k]["ok"] else "FAIL") if k in r else "n/a"
     print(f"| {r['phase']} | {'PASS' if r['ok'] else 'FAIL'} | {g('safety')} | {g('liveness')} | {g('jail')} |")
 PYEOF
-echo "results: $OUT and ${OUT%.jsonl}.md"
+echo "results: $OUT and ${OUT%.jsonl}.md  (failed phases: $FAILS)"
 echo "stop the network with: ${DC[*]} down -v"
+exit $(( FAILS > 0 ? 1 : 0 ))
