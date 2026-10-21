@@ -693,7 +693,7 @@ The most important fixes, in plain words:
 - **Addresses have no checksum**, and there is no seed-phrase (BIP-39) wallet support.
 - **No protocol-upgrade mechanism.** Rule changes need every node to upgrade at once, often from empty storage.
 - **Contracts cannot hold or send funds**, and have no hashing or signature checks. There is no Ethereum compatibility.
-- **The anchoring module is simulated.** `StateAnchoringManager` creates a fake transaction hash and logs "ANCHORED … to external chain", but nothing is sent anywhere.
+- **No external anchoring.** The old `StateAnchoringManager` only logged a fabricated "ANCHORED" line, so it was removed. Real anchoring needs a light-client bridge (see the roadmap).
 - **The HSM is simulated.** Validator keys sit in environment variables.
 - **Actuator commands wait 6 blocks**, even though PBFT blocks are final immediately.
 - **`GovernanceManager` is unused**, and the `LIGHT` role is not complete.
@@ -740,7 +740,6 @@ All paths are under `src/main/java/com/hybrid/`.
 | `blockchain/ai/` | Federated learning, differential privacy, anomaly detection, threat scoring, contract auditor, proof of inference. |
 | `blockchain/reputation/` | Device reputation (the ZK eligibility gate was removed, O-7). |
 | `blockchain/governance/` | Council voting (not wired in). |
-| `blockchain/anchoring/` | External-chain anchoring (simulated). |
 | `blockchain/monitoring/` | Metrics and the Prometheus bridge. |
 | `blockchain/audit/` | Audit logging. |
 | `blockchain/iot/` | Older MQTT and CoAP adapters, and IoT state channels. |
