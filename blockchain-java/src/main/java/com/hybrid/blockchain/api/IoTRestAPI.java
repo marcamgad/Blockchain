@@ -375,9 +375,20 @@ public class IoTRestAPI {
     public ResponseEntity<?> getBlockByHeight(@PathVariable("height") int height) {
         blockchainLock.readLock().lock();
         try {
-            if (height < 0 || height >= blockchain.getChain().size())
+            // [HC-081] the height is the block INDEX, not a position in the in-memory list: after a
+            // restart from a snapshot, or on a pruned node, the list does not start at genesis
+            if (height < 0 || height > blockchain.getHeight())
                 return ResponseEntity.status(404).body(Map.of("error", "Block not found"));
-            return ResponseEntity.ok(blockchain.getChain().get(height));
+            List<Block> chain = blockchain.getChain();
+            if (!chain.isEmpty()) {
+                int pos = height - chain.get(0).getIndex();
+                if (pos >= 0 && pos < chain.size() && chain.get(pos).getIndex() == height)
+                    return ResponseEntity.ok(chain.get(pos));
+            }
+            Block stored = blockchain.getStorage().loadBlockByHeight(height);
+            if (stored == null || stored.getIndex() != height)
+                return ResponseEntity.status(404).body(Map.of("error", "Block not found"));
+            return ResponseEntity.ok(stored);
         } finally {
             blockchainLock.readLock().unlock();
         }
