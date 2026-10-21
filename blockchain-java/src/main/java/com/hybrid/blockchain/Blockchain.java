@@ -1457,33 +1457,6 @@ public class Blockchain {
                     // signal (see runAdvisoryAnomalyDetection), and never changes state.
                     final boolean isAnomaly = false;
 
-                    // P1-D: ZK-Firmware Integrity check
-                    try {
-                        com.hybrid.blockchain.lifecycle.DeviceLifecycleManager.DeviceRecord device = targetState.getLifecycleManager().getDeviceRecord(tx.getFrom());
-                        if (device != null && device.getFirmwareHistory() != null && !device.getFirmwareHistory().isEmpty()) {
-                            com.hybrid.blockchain.lifecycle.DeviceLifecycleManager.FirmwareUpdate latest = device.getFirmwareHistory().get(device.getFirmwareHistory().size() - 1);
-                            if (latest.getCommitment() != null) {
-                                // Attempt to find FirmwareProof in tx data (e.g. if it's a JSON with both Ownership and Firmware proofs)
-                                com.hybrid.blockchain.privacy.ZKProofSystem.FirmwareProof fwProof = null;
-                                try {
-                                    Map<String, Object> txData = MAPPER.readValue(tx.getData(), Map.class);
-                                    if (txData.containsKey("firmwareProof")) {
-                                        fwProof = MAPPER.convertValue(txData.get("firmwareProof"), com.hybrid.blockchain.privacy.ZKProofSystem.FirmwareProof.class);
-                                    }
-                                } catch (Exception ignored) {}
-
-                                if (fwProof == null || !java.util.Arrays.equals(fwProof.getCommitment(), latest.getCommitment())) {
-                                    log.warn("[P1-D] Device {} failed firmware integrity check. Applying penalty.", tx.getFrom());
-                                    // Validators that see TELEMETRY without FirmwareProof after firmware update reduce device reputation by 0.05
-                                    targetState.getLifecycleManager().recordDeviceActivity(tx.getFrom(), false);
-                                    // Additionally, we can force a small penalty
-                                    targetState.debit(tx.getFrom(), 5000); // 0.05 equivalent in base units if fee=100k
-                                }
-                            }
-                        }
-                    } catch (Exception ignored) {}
-
-
                     // Store telemetry data; hash large payloads (>= 1024 bytes)
                     byte[] toStore = telemetryPayload.length >= 1024 ? Crypto.hash(telemetryPayload) : telemetryPayload;
                     try {

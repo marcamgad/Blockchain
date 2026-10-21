@@ -431,30 +431,6 @@ public class DeviceLifecycleManager {
         log.info("[Lifecycle] Activated device: {} DID: {} Owner: {}", deviceId, did, owner);
     }
 
-    /**
-     * Update device firmware
-     * Only owner can update firmware
-     */
-    public void updateFirmware(String deviceId, String newVersion, byte[] firmwareHash, String caller, com.hybrid.blockchain.privacy.ZKProofSystem.FirmwareProof proof) {
-        DeviceRecord record = getDeviceRecord(deviceId);
-
-        // Verify device is active
-        if (record.getStatus() != DeviceStatus.ACTIVE) {
-            throw new IllegalStateException("Device not active: " + deviceId);
-        }
-
-        // Verify caller is owner
-        if (!caller.equals(record.getOwner())) {
-            throw new SecurityException("Only device owner can update firmware: " + deviceId);
-        }
-
-        // [HC-074] A FirmwareProof is a commitment that can only be checked with the device secret,
-        // so it cannot prove anything to a validator. It used to count as "VERIFIED" whenever its
-        // hash matched the one being installed (i.e. always, for whoever built it). It is now
-        // recorded but never treated as verification; see updateFirmwareSigned.
-        applyFirmwareUpdate(record, deviceId, newVersion, firmwareHash, caller,
-                false, proof != null ? proof.getCommitment() : null);
-    }
 
     /**
      * [HC-074] Digest a manufacturer signs to vouch for a firmware image for one device.
@@ -521,7 +497,9 @@ public class DeviceLifecycleManager {
      * Legacy updateFirmware for backward compatibility.
      */
     public void updateFirmware(String deviceId, String newVersion, byte[] firmwareHash, String caller) {
-        updateFirmware(deviceId, newVersion, firmwareHash, caller, null);
+        // [O-7] the FirmwareProof overload is gone (it was not a proof); without a manufacturer
+        // signature an update is applied UNVERIFIED (see updateFirmwareSigned)
+        updateFirmwareSigned(deviceId, newVersion, firmwareHash, caller, null);
     }
 
     /**

@@ -212,35 +212,6 @@ public class ZKProofSystem {
         return toBytes32(randomScalar());
     }
 
-    /**
-     * Inner class API for Range Proofs.
-     */
-    public static class RangeProof {
-        private final byte[] commitment;
-        private final byte[] proof;
-        private final long min, max;
-
-        public RangeProof(byte[] commitment, byte[] proof, long min, long max) {
-            this.commitment = commitment;
-            this.proof = proof;
-            this.min = min;
-            this.max = max;
-        }
-
-        public static RangeProof create(long v, long min, long max) {
-            ZKProofSystem zk = new ZKProofSystem();
-            BigInteger r = ZKProofSystem.randomScalar();
-            byte[] commitment = zk.createCommitment(v, r);
-            byte[] proof = zk.createRangeProofData(v, min, max, r);
-            return new RangeProof(commitment, proof, min, max);
-        }
-
-        public boolean verify() {
-            return new ZKProofSystem().verifyRangeProof(commitment, proof, min, max);
-        }
-
-        public byte[] getCommitment() { return commitment; }
-    }
 
     /**
      * Inner class API for Ownership Proofs.
@@ -362,91 +333,7 @@ public class ZKProofSystem {
         return com.hybrid.blockchain.HexUtils.encode(Crypto.hash(proofBytes));
     }
 
-    /**
-     * Inner class API for Threshold Proofs.
-     */
-    public static class ThresholdProof {
-        private final byte[] commitment;
-        private final byte[] proof;
-        private final long threshold;
 
-        public ThresholdProof(byte[] commitment, byte[] proof, long threshold) {
-            this.commitment = commitment;
-            this.proof = proof;
-            this.threshold = threshold;
-        }
-
-        public static ThresholdProof create(long v, long threshold, boolean claimAbove) {
-            ZKProofSystem zk = new ZKProofSystem();
-            BigInteger r = ZKProofSystem.randomScalar();
-            byte[] commitment = zk.createCommitment(v, r);
-
-            if (claimAbove) {
-                if (v < threshold) throw new IllegalArgumentException("Value below threshold");
-                byte[] proof = zk.createThresholdProof(v, r, threshold);
-                return new ThresholdProof(commitment, proof, threshold);
-            }
-
-            if (v >= threshold) {
-                return new ThresholdProof(new byte[65], new byte[0], threshold) {
-                    @Override public boolean verify() { return true; }
-                };
-            }
-
-            long gap = Math.subtractExact(threshold - 1, v);
-            BigInteger negR = N.subtract(r.mod(N)).mod(N);
-            byte[] proof = zk.createRangeProofData(gap, 0, Long.MAX_VALUE, negR);
-            return new ThresholdProof(commitment, proof, threshold);
-        }
-
-        /**
-         * [HC-073] Fails closed: a deserialised proof without a commitment used to verify as TRUE.
-         * NOTE: the commitment is chosen by the prover and is not bound to the validator's real
-         * reputation, so this proves only "I know SOME value above the bar". The leader
-         * eligibility gate built on it (PBFTConsensus.setZkEligibilityRequired) is off by default
-         * and must stay off until the commitment is issued/anchored by the protocol.
-         */
-        public boolean verify() {
-            if (commitment == null || proof == null) return false;
-            return new ZKProofSystem().verifyThresholdProof(commitment, proof, threshold);
-        }
-
-        /** The threshold this proof is bound to, so a verifier can confirm it equals the required one. */
-        public long getThreshold() {
-            return threshold;
-        }
-
-        public byte[] getCommitment() {
-            return commitment;
-        }
-    }
-
-    /**
-     * Inner class API for Firmware Integrity Proofs.
-     * PAPER-IMPL: P1-D — zk-IoT
-     */
-    public static class FirmwareProof {
-        private final byte[] firmwareHash;
-        private final byte[] commitment;
-
-        public FirmwareProof(byte[] firmwareHash, byte[] commitment) {
-            this.firmwareHash = firmwareHash;
-            this.commitment = commitment;
-        }
-
-        public static FirmwareProof create(byte[] firmwareHash, byte[] secret) {
-            ZKProofSystem zk = new ZKProofSystem();
-            byte[] commitment = zk.generateCommitment(firmwareHash, new byte[32], secret);
-            return new FirmwareProof(firmwareHash, commitment);
-        }
-
-        public boolean verify(byte[] secret) {
-            return new ZKProofSystem().verifyCommitment(commitment, firmwareHash, new byte[32], secret);
-        }
-
-        public byte[] getCommitment() { return commitment; }
-        public byte[] getFirmwareHash() { return firmwareHash; }
-    }
 
     /**
      * Inner class API for Equality Proofs.
@@ -522,198 +409,13 @@ public class ZKProofSystem {
         return pointBytes(C);
     }
 
-    /**
-     * Proves that the committed value lies in {@code [min, max]} using
-     * bit-decomposition sigma proofs.
-     *
-     * <p>Strategy: decompose {@code (v - min)} into bits; create a Pedersen
-     * commitment {@code Ci = bi*G + ri*H} for each bit, and a sigma OR-proof
-     * (Morita–Okamoto) that each {@code Ci} commits to 0 or 1.
-     *
-     * @param v   the plaintext value (must satisfy {@code min <= v <= max})
-     * @param min lower bound of the range (inclusive)
-     * @param max upper bound of the range (inclusive)
-     * @param r   the blinding factor used in the outer commitment
-     * @return serialised proof bytes
-     * @throws IllegalArgumentException if {@code v} is out of {@code [min, max]}
-     */
-    public byte[] createRangeProofData(long v, long min, long max, BigInteger r) {
-        if (v < min || v > max)
-            throw new IllegalArgumentException("Value " + v + " out of range [" + min + "," + max + "]");
 
-        long shifted = v - min;
-        int bits = 64 - Long.numberOfLeadingZeros(max - min); // number of bits needed
-        if (bits == 0) bits = 1;
-
-        // bit[i] rᵢ, commitment Cᵢ per bit
-        byte[] proof = new byte[bits * (65 + 32 + 32 + 32 + 32 + 32)]; // Ci, ri, e0, s0, e1, s1
-        int offset = 0;
-        BigInteger rSum = BigInteger.ZERO;
-
-        for (int i = 0; i < bits; i++) {
-            int bit = (int) ((shifted >> i) & 1);
-            BigInteger ri;
-            // Last bit blinding factor set so sum of bit-scaled ri == outer r
-            BigInteger scale = BigInteger.TWO.pow(i).mod(N);
-            if (i == bits - 1) {
-                BigInteger scaleInv = scale.modInverse(N);
-                ri = r.subtract(rSum).multiply(scaleInv).mod(N);
-                // If negative, wrap around
-                if (ri.signum() < 0) ri = ri.add(N);
-            } else {
-                ri = ZKProofSystem.randomScalar();
-                rSum = rSum.add(ri.multiply(scale)).mod(N);
-            }
-
-            Point Ci = pedersen(BigInteger.valueOf(bit), ri);
-            byte[] CiBytes = pointBytes(Ci);
-
-            // Build an OR-proof for "Ci commits to 0" OR "Ci commits to 1"
-            // Proven bit is `bit`; simulated bit is `1 - bit`.
-            BigInteger e0, s0, e1, s1;
-            if (bit == 0) {
-                // Real proof for bit=0, simulated for bit=1
-                BigInteger k0 = ZKProofSystem.randomScalar();
-                Point R0 = mul(H(), k0); // R0 = k0*H (commitment to 0 with blinding k0)
-                // Simulate bit=1: pick e1, s1 such that s1*H + e1*(Ci - G) = R1
-                e1 = ZKProofSystem.randomScalar(); s1 = ZKProofSystem.randomScalar();
-                Point CiMinusG = add(Ci, neg(G()));
-                Point R1 = add(mul(H(), s1), mul(CiMinusG, e1));
-                // Challenge binds both responses
-                BigInteger e = hashToScalar(CiBytes, pointBytes(R0), pointBytes(R1));
-                e0 = e.subtract(e1).mod(N);
-                s0 = k0.subtract(e0.multiply(ri)).mod(N);
-            } else {
-                // Real proof for bit=1, simulated for bit=0
-                BigInteger k1 = ZKProofSystem.randomScalar();
-                Point R1 = mul(H(), k1);
-                e0 = ZKProofSystem.randomScalar(); s0 = ZKProofSystem.randomScalar();
-                Point R0 = add(mul(H(), s0), mul(Ci, e0));
-                BigInteger e = hashToScalar(CiBytes, pointBytes(R0), pointBytes(R1));
-                e1 = e.subtract(e0).mod(N);
-                s1 = k1.subtract(e1.multiply(ri)).mod(N);
-            }
-
-            System.arraycopy(CiBytes,       0, proof, offset, 65); offset += 65;
-            byte[] rb = ZKProofSystem.toBytes32(ri.mod(N));
-            System.arraycopy(rb,            0, proof, offset, 32); offset += 32;
-            System.arraycopy(ZKProofSystem.toBytes32(e0), 0, proof, offset, 32); offset += 32;
-            System.arraycopy(ZKProofSystem.toBytes32(s0), 0, proof, offset, 32); offset += 32;
-            System.arraycopy(ZKProofSystem.toBytes32(e1), 0, proof, offset, 32); offset += 32;
-            System.arraycopy(ZKProofSystem.toBytes32(s1), 0, proof, offset, 32); offset += 32;
-        }
-        return proof;
-    }
-
-    /**
-     * Verifies that the commitment {@code commitmentBytes} contains a value in {@code [min, max]}.
-     *
-     * @param commitmentBytes 65-byte uncompressed point
-     * @param proofBytes      proof bytes produced by {@link #createRangeProofData}
-     * @param min             lower bound (inclusive)
-     * @param max             upper bound (inclusive)
-     * @return true iff the proof is valid
-     */
-    public boolean verifyRangeProof(byte[] commitmentBytes, byte[] proofBytes, long min, long max) {
-        try {
-            int bits = 64 - Long.numberOfLeadingZeros(max - min);
-            if (bits == 0) bits = 1;
-            int stride = 65 + 32 + 32 + 32 + 32 + 32;
-            if (proofBytes.length < bits * stride) return false;
-
-            Point CTotal = Point.INFINITY;
-
-            for (int i = 0; i < bits; i++) {
-                int off = i * stride;
-                byte[] CiBytes = Arrays.copyOfRange(proofBytes, off, off + 65);      off += 65;
-                // ri not used in verification (it's prover-side); skip 32 bytes
-                off += 32;
-                BigInteger e0 = new BigInteger(1, Arrays.copyOfRange(proofBytes, off, off+32)); off += 32;
-                BigInteger s0 = new BigInteger(1, Arrays.copyOfRange(proofBytes, off, off+32)); off += 32;
-                BigInteger e1 = new BigInteger(1, Arrays.copyOfRange(proofBytes, off, off+32)); off += 32;
-                BigInteger s1 = new BigInteger(1, Arrays.copyOfRange(proofBytes, off, off+32));
-
-                Point Ci = decodePoint(CiBytes);
-                if (Ci == null) return false;
-
-                // Verify OR-proof for Ci commits to 0 or 1:
-                //   R0 = s0*H + e0*Ci        (for bit=0: Ci = ri*H)
-                //   R1 = s1*H + e1*(Ci - G)  (for bit=1: Ci = G + ri*H)
-                Point R0 = add(mul(H(), s0), mul(Ci, e0));
-                Point CiMinusG = add(Ci, neg(G()));
-                Point R1 = add(mul(H(), s1), mul(CiMinusG, e1));
-
-                BigInteger eTotal = hashToScalar(CiBytes, pointBytes(R0), pointBytes(R1));
-                BigInteger eCheck = e0.add(e1).mod(N);
-                if (!eTotal.equals(eCheck)) return false;
-
-                // Accumulate bit commitments: C0*1 + C1*2 + ... must equal outer commitment
-                Point scaled = mul(Ci, BigInteger.TWO.pow(i).mod(N));
-                CTotal = add(CTotal, scaled);
-            }
-
-            // Outer commitment encodes (v - min)*G + r*H; bit sum encodes same thing
-            // Account for min: subtract min*G from outer commitment
-            Point outerC  = decodePoint(commitmentBytes);
-            if (outerC == null) return false;
-            Point minAdj  = add(outerC, neg(mul(G(), BigInteger.valueOf(min).mod(N))));
-            // CTotal should equal minAdj (both commit to (v-min) with same blinding)
-            // We only check x-coordinate equality (affine point equality)
-            return CTotal.x != null && minAdj.x != null && CTotal.x.equals(minAdj.x);
-        } catch (Exception e) {
-            log.warn("[ZKP] RangeProof verification error: {}", e.getMessage());
-            return false;
-        }
-    }
 
     // ═══════════════════════════════════════════════════════════════════════════
     //  THRESHOLD PROOF  (non-interactive Schnorr for committed value comparison)
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Proves that the value {@code v} committed in {@code C} = {@code v*G + r*H}
-     * satisfies {@code v >= threshold} using a Schnorr challenge-response proof.
-     *
-     * @param v         the plaintext value
-     * @param r         the Pedersen blinding factor
-     * @param threshold the minimum required value
-     * @return 96-byte proof: [R_bytes(65) | s_bytes(32) - redundant e is recomputed]
-     * @throws IllegalArgumentException if {@code v < threshold}
-     */
-    public byte[] createThresholdProof(long v, BigInteger r, long threshold) {
-        if (v < threshold)
-            throw new IllegalArgumentException("Value " + v + " does not meet threshold " + threshold);
 
-        long delta = Math.subtractExact(v, threshold);
-        return createRangeProofData(delta, 0, Long.MAX_VALUE, r);
-    }
-
-    /**
-     * Verifies a threshold proof: the commitment {@code commitmentBytes} encodes
-     * a value {@code v >= threshold}.
-     *
-     * @param commitmentBytes commitment {@code C = v*G + r*H} (65-byte uncompressed)
-     * @param proofBytes      proof produced by {@link #createThresholdProof}
-     * @param threshold       the minimum value that must be committed
-     * @return true iff the proof satisfies the verifier equations
-     */
-    public boolean verifyThresholdProof(byte[] commitmentBytes, byte[] proofBytes, long threshold) {
-        try {
-            Point C = decodePoint(commitmentBytes);
-            if (C == null) return false;
-
-            Point aboveCadj = add(C, neg(mul(G(), BigInteger.valueOf(threshold).mod(N))));
-            if (verifyRangeProof(pointBytes(aboveCadj), proofBytes, 0, Long.MAX_VALUE)) {
-                return true;
-            }
-
-            Point belowCadj = add(neg(C), mul(G(), BigInteger.valueOf(Math.max(0L, threshold - 1)).mod(N)));
-            return verifyRangeProof(pointBytes(belowCadj), proofBytes, 0, Long.MAX_VALUE);
-        } catch (Exception e) {
-            log.warn("[ZKP] ThresholdProof verification error: {}", e.getMessage());
-            return false;
-        }
-    }
 
     // ═══════════════════════════════════════════════════════════════════════════
     //  OWNERSHIP PROOF  (non-interactive Schnorr on DID private key)
@@ -794,31 +496,7 @@ public class ZKProofSystem {
     //  PRIVATE-DATA  helpers (kept from original API surface)
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Generates a cryptographic commitment for a private data value.
-     *
-     * @param data        the private data
-     * @param salt        random salt
-     * @param privateKey  key used to bind commitment to identity
-     * @return commitment bytes
-     */
-    public byte[] generateCommitment(byte[] data, byte[] salt, byte[] privateKey) {
-        return sha256(data, salt, privateKey);
-    }
 
-    /**
-     * Verifies a private data commitment.
-     *
-     * @param commitment  the commitment bytes
-     * @param data        the private data to verify
-     * @param salt        the salt used when creating the commitment
-     * @param publicKey   the verifier's public key
-     * @return true if the commitment is valid
-     */
-    public boolean verifyCommitment(byte[] commitment, byte[] data, byte[] salt, byte[] publicKey) {
-        byte[] expected = sha256(data, salt, publicKey);
-        return MessageDigest.isEqual(commitment, expected);
-    }
 
     // ── Point deserialisation ──────────────────────────────────────────────────
 

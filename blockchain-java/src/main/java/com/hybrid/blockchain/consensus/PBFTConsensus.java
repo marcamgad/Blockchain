@@ -211,62 +211,6 @@ public class PBFTConsensus implements Consensus {
         resetTimer();
     }
 
-    // ── ZK-gated leader eligibility ──────────────────────────────────────────
-    // A validator proves reputation ≥ minEligibleReputation via a Pedersen threshold
-    // proof (ZkEligibilityGate) instead of publishing its plaintext score. Verified
-    // proofs mark the validator eligible; ineligible validators get zero selection
-    // weight. This keeps the *predicate* verifiable while hiding the *value*.
-    //
-    // Determinism note: selection stays deterministic across honest nodes as long as
-    // every node has seen the same set of eligibility proofs (they are gossiped /
-    // anchored like other consensus messages). Disabled by default so existing
-    // deployments and tests are unaffected.
-    private volatile boolean zkEligibilityRequired = false;
-    private volatile double  minEligibleReputation = 0.5;
-    private final Map<String, Boolean> zkEligible = new ConcurrentHashMap<>();
-
-    /** Enables/disables the ZK eligibility gate for leader selection. */
-    public void setZkEligibilityRequired(boolean required) { this.zkEligibilityRequired = required; }
-
-    public boolean isZkEligibilityRequired() { return zkEligibilityRequired; }
-
-    /** Sets the reputation bar a validator must prove it meets to be leader-eligible. */
-    public void setMinEligibleReputation(double minReputation) { this.minEligibleReputation = minReputation; }
-
-    public double getMinEligibleReputation() { return minEligibleReputation; }
-
-    /**
-     * Submits a zero-knowledge proof that {@code validatorId}'s reputation meets the
-     * eligibility bar, without revealing the score. The proof is bound to the required
-     * threshold and rejected outright for slashed validators.
-     *
-     * @return true if the proof verified and the validator is now leader-eligible
-     */
-    public boolean submitEligibilityProof(String validatorId,
-            com.hybrid.blockchain.privacy.ZKProofSystem.ThresholdProof proof) {
-        if (!validators.containsKey(validatorId)) return false;
-        boolean ok = com.hybrid.blockchain.reputation.ZkEligibilityGate.verify(
-                proof, minEligibleReputation, slashedValidators.contains(validatorId));
-        if (ok) {
-            zkEligible.put(validatorId, Boolean.TRUE);
-            log.info("[PBFT] Validator {} proved leader eligibility (score hidden)", validatorId);
-        } else {
-            zkEligible.remove(validatorId);
-            log.warn("[PBFT] Validator {} failed ZK eligibility verification", validatorId);
-        }
-        return ok;
-    }
-
-    /** True when the validator currently holds a verified eligibility proof. */
-    public boolean isZkEligible(String validatorId) {
-        return Boolean.TRUE.equals(zkEligible.get(validatorId));
-    }
-
-    /** Clears a validator's eligibility (e.g. after slashing or a new epoch). */
-    public void revokeEligibility(String validatorId) {
-        zkEligible.remove(validatorId);
-    }
-
     // PAPER-IMPL: P1-A — RWA-BFT (Sensors 2025, DOI:10.3390/s25020413)
     // Two-layer async BFT: high-rep committee can skip PREPARE (optimistic fast path)
     private volatile boolean asyncEnabled = false;
@@ -566,10 +510,6 @@ public class PBFTConsensus implements Consensus {
             // Re-admitting it into selection requires the commit-then-use construction.
             if (jailedValidators.contains(valId)) {
                 weights[i] = 0L;   // [O-5] jailed on-chain: never leader
-            } else if (zkEligibilityRequired && !isZkEligible(valId)) {
-                // No verified zero-knowledge eligibility proof → not leader-eligible.
-                // (Eligibility proofs are consensus-visible artifacts, not local state.)
-                weights[i] = 0L;
             } else {
                 weights[i] = Math.max(REP_MIN_SCALED, validatorReputation.getOrDefault(valId, REP_SCALE));
             }
@@ -577,9 +517,6 @@ public class PBFTConsensus implements Consensus {
         }
 
         if (total <= 0L) {
-            if (zkEligibilityRequired) {
-                log.warn("[PBFT] No ZK-eligible validators for view {} — cannot select a leader", view);
-            }
             return null;
         }
 

@@ -553,11 +553,11 @@ This identity layer is the base for credential use cases outside IoT as well: di
 
 | Proof | Used for | Status |
 |---|---|---|
-| Ownership proof | Prove knowledge of a key without revealing it (PUF telemetry, private transfers). | Works. Challenges are now bound to the transaction. |
-| Range proof | A committed value lies in [min, max]. | Works as a building block. |
-| Threshold proof | A committed value is ≥ a threshold (validator eligibility). | Fails closed now, but **unsound for its purpose**: the prover chooses the commitment, so it says nothing about the real reputation. The eligibility gate using it is off by default and must stay off. |
-| Equality proof | Two commitments hide the same value. | Works as a building block. |
-| Firmware proof | A commitment to a firmware hash. | Only checkable with the device secret, so it is **not** a zero-knowledge proof. It no longer counts as verification; manufacturer signatures do (HC-074). |
+| Ownership proof (Schnorr) | Prove knowledge of a key without revealing it (PUF telemetry). | Kept. The challenge is bound to the transaction. |
+| Equality proof | Two commitments hide the same value. | Kept as a building block. |
+| Range, threshold and firmware "proofs", eligibility gate | Range checks, validator eligibility, firmware integrity | **Removed (O-7).** The range proof accepted a commitment to −5 as being in [0, 100] and leaked the value. The threshold proof was built on it. The firmware proof could only be checked with the device secret. The gate's commitment was chosen by the prover. Evidence: `docs/decisions/O-7-unsound-zk-removal.md`. |
+
+"Kept" means reviewed, not formally proven or externally audited.
 
 `PRIVATE_TRANSFER` is disabled (O-6): it never moved value, so every such transaction is rejected.
 
@@ -680,7 +680,6 @@ The most important fixes, in plain words:
 | HC-079 | **Fixed for new `hq` accounts.** Classical `hb` accounts (including validator reward accounts) remain ECDSA-only by construction. | Medium (until funds move to `hq`) |
 | O-2 | No test yet on several real machines with real network faults. | High |
 | O-3 | Rotate every key that was ever derived from a published seed. | High |
-| O-7 | The ZK eligibility gate is unsound and must stay disabled. | Medium |
 | O-8 | LevelDB data, `node_modules` and scratch files are committed to git. | Low |
 
 ---
