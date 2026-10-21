@@ -133,7 +133,8 @@ public class App {
             if (parts.length == 2) {
                 String host = parts[0];
                 int port = Integer.parseInt(parts[1]);
-                peerNode.connectToPeer(host, port);
+                // [HC-080] retried while this node has no peer (the seed may start after us)
+                peerNode.maintainSeedConnection(host, port, 10_000L);
             }
         }
 

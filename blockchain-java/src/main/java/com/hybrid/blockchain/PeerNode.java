@@ -1238,6 +1238,25 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
         });
     }
 
+    /**
+     * [HC-080] Keeps a connection to the seed: whenever this node has no connected peer, it dials
+     * the seed again every {@code periodMs}. Before, the seed was dialled exactly once at start-up;
+     * a node that started before its seed got "connection refused", never retried, had no peers,
+     * and could never sync (found by the first live Docker run of the fault-injection harness).
+     */
+    public void maintainSeedConnection(String host, int port, long periodMs) {
+        peerSyncScheduler.scheduleWithFixedDelay(() -> {
+            try {
+                if (peerConnections.isEmpty()) {
+                    log.info("[P2P] No connected peers; dialling seed {}:{}", host, port);
+                    connectToPeer(host, port);
+                }
+            } catch (Throwable t) {   // keep the periodic task alive
+                log.warn("[P2P] Seed reconnect attempt failed: {}", t.getMessage());
+            }
+        }, 0, periodMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
     public Collection<PeerManager.PeerInfo> getPeers() {
         return peerManager.getAllPeers();
     }
