@@ -247,7 +247,7 @@ A Bitcoin-style set of unspent outputs, kept alongside the accounts. A UTXO spen
 | `TELEMETRY_BATCH` | Many readings in one transaction from a gateway. | Gateway. | Format only. The readings are **not** device-signed, so they are logged but never trusted for AI training. |
 | `FEDERATED_UPDATE` | Submit local AI model weights. | Participating node. | Applied only after the block is accepted. |
 | `FEDERATED_COMMIT` | Commit an aggregated AI model. | Validator. | Model hash must match the weights. |
-| `PRIVATE_TRANSFER` | Placeholder for private payments. | Account holder. | Proof bound to sender and nonce, and nullifier derived from the proof. **Moves no value yet.** |
+| `PRIVATE_TRANSFER` | **Disabled** (O-6). It never moved value. | Nobody. | Always rejected. Kept in the enum only so later types keep their numbers. |
 | `EQUIVOCATION_EVIDENCE` | Prove a validator voted for two different blocks at the same height and view. Jails it. | Anyone (nodes submit it automatically). | Both votes correctly signed by that validator, same phase, view and height, different blocks. |
 
 All signed transactions pay at least the current base fee (HC-033).
@@ -559,7 +559,7 @@ This identity layer is the base for credential use cases outside IoT as well: di
 | Equality proof | Two commitments hide the same value. | Works as a building block. |
 | Firmware proof | A commitment to a firmware hash. | Only checkable with the device secret, so it is **not** a zero-knowledge proof. It no longer counts as verification; manufacturer signatures do (HC-074). |
 
-`PRIVATE_TRANSFER` validates a bound ownership proof and records its nullifier, but it does not move any value. It is a placeholder.
+`PRIVATE_TRANSFER` is disabled (O-6): it never moved value, so every such transaction is rejected.
 
 ---
 
@@ -680,7 +680,6 @@ The most important fixes, in plain words:
 | HC-079 | **Fixed for new `hq` accounts.** Classical `hb` accounts (including validator reward accounts) remain ECDSA-only by construction. | Medium (until funds move to `hq`) |
 | O-2 | No test yet on several real machines with real network faults. | High |
 | O-3 | Rotate every key that was ever derived from a published seed. | High |
-| O-6 | `PRIVATE_TRANSFER` moves no value. | Medium |
 | O-7 | The ZK eligibility gate is unsound and must stay disabled. | Medium |
 | O-8 | LevelDB data, `node_modules` and scratch files are committed to git. | Low |
 

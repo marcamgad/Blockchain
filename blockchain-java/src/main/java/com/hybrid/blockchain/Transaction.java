@@ -18,7 +18,12 @@ public final class Transaction {
         FEDERATED_UPDATE,
         /** Aggregated model committed on-chain by the PBFT leader. */
         FEDERATED_COMMIT,
-        /** Zero-knowledge ownership transfer. */
+        /**
+         * Zero-knowledge ownership transfer. [O-6] DISABLED: it never moved any value (only the fee
+         * and a nullifier), so every PRIVATE_TRANSFER is rejected. Kept only to preserve the ordinals
+         * of the types after it, which are part of every transaction's signed encoding.
+         */
+        @Deprecated
         PRIVATE_TRANSFER,
         /** PAPER-IMPL: P1-B — Maftei et al. Sensors 2025, DOI:10.3390/s25092886
          *  Gateway aggregates N device TELEMETRY packets into 1 tx (MessagePack-encoded). */

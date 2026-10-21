@@ -446,6 +446,10 @@ public class Blockchain {
                 break;
 
             case PRIVATE_TRANSFER:
+                // [O-6] disabled: the type accepted a proof and a fee but moved no value, so users
+                // could believe a payment happened. Rejected until a real shielded design exists.
+                if (Config.PRIVATE_TRANSFER_DISABLED)
+                    throw new Exception("PRIVATE_TRANSFER is disabled: it does not transfer any value (O-6)");
                 // [PHASE-0] FIX-6: ZKP Private Transfer validation
                 if (tx.getFrom() == null) throw new Exception("PRIVATE_TRANSFER must have a from address");
                 try {

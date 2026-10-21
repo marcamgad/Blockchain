@@ -48,6 +48,13 @@ public final class Config {
      */
     public static final long HYBRID_ADDRESS_ACTIVATION_HEIGHT = 0L;
 
+    /**
+     * [O-6] Protocol constant (not an environment flag: a per-node setting would change validity).
+     * PRIVATE_TRANSFER moves no value, so it is rejected. Consensus rule: a chain that already
+     * contains PRIVATE_TRANSFER transactions cannot be replayed by nodes with this rule.
+     */
+    public static final boolean PRIVATE_TRANSFER_DISABLED = true;
+
     // ─── Fee Market (EIP-1559 style) ─────────────────────────────────────────
     /** Starting base fee in smallest token units. */
     public static final long BASE_FEE_INITIAL = 0L;
