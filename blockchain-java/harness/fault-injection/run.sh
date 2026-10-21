@@ -22,7 +22,13 @@ url() { echo "http://localhost:$((18080 + $1))"; }
 all_urls() { local s=""; for i in $(seq 1 "$N"); do s+="$(url "$i"),"; done; echo "${s%,}"; }
 ip() { echo "172.28.0.$((10 + $1))"; }
 FAILS=0   # a failed phase is recorded and the run continues with the next scenario
-check() { "$PY" "$HERE/check.py" --nodes "$(all_urls)" --out "$OUT" "$@" || FAILS=$((FAILS + 1)); }
+check() {
+  if ! "$PY" "$HERE/check.py" --nodes "$(all_urls)" --out "$OUT" "$@"; then
+    FAILS=$((FAILS + 1))
+    # keep the evidence: last log lines of every node at the moment the phase failed
+    for i in $(seq 1 "$N"); do timeout 20 docker logs --tail 200 "hc-v$i" > "${OUT%.jsonl}.fail$FAILS.v$i.log" 2>&1 || true; done
+  fi
+}
 container_of() { awk -v a="$1" '$2==a {print $1}' "$ADDR"; }
 leader() { curl -s "$(url 1)/api/v1/consensus" | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["currentLeader"])'; }
 key_of() { grep "^V$1_KEY=" "$ENV" | cut -d= -f2; }
