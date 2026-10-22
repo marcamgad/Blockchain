@@ -9,6 +9,10 @@ import com.hybrid.blockchain.security.QuantumResistantCrypto;
 import org.eclipse.californium.core.CoapClient;
 import org.eclipse.californium.core.CoapResponse;
 import org.eclipse.californium.core.coap.MediaTypeRegistry;
+import org.eclipse.californium.core.config.CoapConfig;
+import org.eclipse.californium.elements.config.Configuration;
+import org.eclipse.californium.elements.config.SystemConfig;
+import org.eclipse.californium.elements.config.UdpConfig;
 
 import java.math.BigInteger;
 import java.net.URI;
@@ -88,8 +92,15 @@ public final class EquivocationEvidenceTool {
         long baseFee = fee.values().stream().filter(v -> v instanceof Number).mapToLong(v -> ((Number) v).longValue()).max().orElse(1);
         Transaction tx = transaction(evidence(cheater, 0, 999_999L), reporter, nonce, Math.max(1, baseFee));
         byte[] json = m.writeValueAsBytes(tx);
+        // the node registers these in CoAPAdapter; a standalone client must do the same, or
+        // Californium fails with "Configuration contains no definitions!" (live harness run)
+        CoapConfig.register();
+        UdpConfig.register();
+        SystemConfig.register();
+        Configuration.setStandard(Configuration.createStandardWithoutFile());   // no properties file in the repo
         CoapResponse r = new CoapClient(args[3]).post(json, MediaTypeRegistry.APPLICATION_JSON);
         System.out.println("EVIDENCE_SUBMITTED code=" + (r == null ? "none" : r.getCode()) + " body=" + (r == null ? "" : r.getResponseText())
                 + " cheater=" + Crypto.deriveAddress(Crypto.derivePublicKey(cheater)));
+        if (r == null || !r.isSuccess()) System.exit(1);   // run.sh records the phase as failed
     }
 }
