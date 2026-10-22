@@ -6,13 +6,7 @@ import com.hybrid.blockchain.HexUtils;
 import com.hybrid.blockchain.Transaction;
 import com.hybrid.blockchain.consensus.PBFTConsensus;
 import com.hybrid.blockchain.security.QuantumResistantCrypto;
-import org.eclipse.californium.core.CoapClient;
-import org.eclipse.californium.core.CoapResponse;
-import org.eclipse.californium.core.coap.MediaTypeRegistry;
-import org.eclipse.californium.core.config.CoapConfig;
-import org.eclipse.californium.elements.config.Configuration;
-import org.eclipse.californium.elements.config.SystemConfig;
-import org.eclipse.californium.elements.config.UdpConfig;
+import com.hybrid.blockchain.api.JwtManager;
 
 import java.math.BigInteger;
 import java.net.URI;
@@ -27,14 +21,20 @@ import java.util.Map;
  *
  * <p>Simulates an equivocating validator: signs two conflicting PREPARE votes (same view and
  * height, different hashes) with that validator's key, wraps them in an EQUIVOCATION_EVIDENCE
- * transaction signed by a reporter, and submits it to a node over CoAP {@code /tx}. It does NOT
+ * transaction signed by a reporter, and submits it to a node over REST
+ * {@code /api/v1/transactions/submit-signed}. It does NOT
  * exercise live double-voting on the wire; it checks that evidence is accepted and that every node
  * then agrees on the jail list.</p>
  *
  * <pre>java -cp target/test-classes;target/classes;&lt;deps&gt; com.hybrid.blockchain.harness.EquivocationEvidenceTool \
- *     &lt;cheaterPrivHex&gt; &lt;reporterPrivHex&gt; &lt;restBaseUrl&gt; &lt;coapTxUri&gt;</pre>
+ *     &lt;cheaterPrivHex&gt; &lt;reporterPrivHex&gt; &lt;restBaseUrl&gt;</pre>
  *
- * <p>Private keys are read from the command line, so run it only on a throw-away harness network.</p>
+ * <p>The endpoint needs a JWT for the sender. No production endpoint issues one for an existing key,
+ * so the tool mints it with the network's {@code JWT_SECRET} (environment or -D), which the harness
+ * generated. CoAP was used before, but a VALIDATOR node does not start its CoAP server (GATEWAY only).</p>
+ *
+ * <p>Private keys and the secret are read from the command line and environment, so run it only on
+ * a throw-away harness network.</p>
  */
 public final class EquivocationEvidenceTool {
 
@@ -75,8 +75,13 @@ public final class EquivocationEvidenceTool {
 
     @SuppressWarnings("unchecked")
     public static void main(String[] args) throws Exception {
-        if (args.length != 4) {
-            System.err.println("usage: <cheaterPrivHex> <reporterPrivHex> <restBaseUrl> <coapTxUri>");
+        if (args.length < 3) {
+            System.err.println("usage: <cheaterPrivHex> <reporterPrivHex> <restBaseUrl>   (JWT_SECRET in the environment)");
+            System.exit(2);
+        }
+        String secret = System.getProperty("JWT_SECRET", System.getenv("JWT_SECRET"));
+        if (secret == null || secret.isEmpty()) {
+            System.err.println("JWT_SECRET must be set (the harness network's secret from .env.<N>)");
             System.exit(2);
         }
         BigInteger cheater = new BigInteger(args[0], 16), reporter = new BigInteger(args[1], 16);
@@ -92,15 +97,13 @@ public final class EquivocationEvidenceTool {
         long baseFee = fee.values().stream().filter(v -> v instanceof Number).mapToLong(v -> ((Number) v).longValue()).max().orElse(1);
         Transaction tx = transaction(evidence(cheater, 0, 999_999L), reporter, nonce, Math.max(1, baseFee));
         byte[] json = m.writeValueAsBytes(tx);
-        // the node registers these in CoAPAdapter; a standalone client must do the same, or
-        // Californium fails with "Configuration contains no definitions!" (live harness run)
-        CoapConfig.register();
-        UdpConfig.register();
-        SystemConfig.register();
-        Configuration.setStandard(Configuration.createStandardWithoutFile());   // no properties file in the repo
-        CoapResponse r = new CoapClient(args[3]).post(json, MediaTypeRegistry.APPLICATION_JSON);
-        System.out.println("EVIDENCE_SUBMITTED code=" + (r == null ? "none" : r.getCode()) + " body=" + (r == null ? "" : r.getResponseText())
+        HttpResponse<String> r = http.send(HttpRequest.newBuilder(URI.create(rest + "/api/v1/transactions/submit-signed"))
+                        .header("Content-Type", "application/json")
+                        .header("Authorization", "Bearer " + new JwtManager(secret).issueToken(reporterAddr))
+                        .POST(HttpRequest.BodyPublishers.ofByteArray(json)).build(),
+                HttpResponse.BodyHandlers.ofString());
+        System.out.println("EVIDENCE_SUBMITTED code=" + r.statusCode() + " body=" + r.body()
                 + " cheater=" + Crypto.deriveAddress(Crypto.derivePublicKey(cheater)));
-        if (r == null || !r.isSuccess()) System.exit(1);   // run.sh records the phase as failed
+        if (r.statusCode() != 200) System.exit(1);   // run.sh records the phase as failed
     }
 }
