@@ -161,7 +161,10 @@ public class IoTRestAPI {
         return ResponseEntity.ok(Map.of(
                 "status", "ok",
                 "height", blockchain != null ? blockchain.getHeight() : -1,
-                "peers", sharedPeerNode != null ? sharedPeerNode.getPeers().size() : 0));
+                "peers", sharedPeerNode != null ? sharedPeerNode.getPeers().size() : 0,
+                // the node's own clock: block timestamps are checked against it (MAX_TIMESTAMP_DRIFT),
+                // and the clock-skew harness uses it to confirm the skew reached the JVM
+                "time", System.currentTimeMillis()));
     }
 
     @GetMapping(value = "/metrics", produces = "text/plain")

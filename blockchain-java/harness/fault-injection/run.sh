@@ -34,7 +34,7 @@ leader() { curl -s "$(url 1)/api/v1/consensus" | "$PY" -c 'import json,sys; prin
 key_of() { grep "^V$1_KEY=" "$ENV" | cut -d= -f2; }
 wait_up() { for i in $(seq 1 "$N"); do for _ in $(seq 1 60); do curl -sf "$(url "$i")/api/v1/health" >/dev/null && break; sleep 5; done; done; }
 
-[[ -f "$ENV" ]] || "$HERE/gen.sh" "$N"
+"$HERE/gen.sh" "$N"   # keys only the first time; the compose file every time
 echo "[1/4] building the node jar";        ( cd "$ROOT" && mvn -q -o -DskipTests package )
 echo "[2/4] building hybridchain-node";    ( cd "$ROOT" && docker build -t hybridchain-node:local -f Dockerfile . )
 echo "[3/4] building hybridchain-harness"; docker build -t hybridchain-harness:local -f "$HERE/Dockerfile.harness" "$HERE"
@@ -43,6 +43,8 @@ for other in "$HERE"/docker-compose.*.yml; do
   M="${other##*/docker-compose.}"; M="${M%.yml}"
   [[ "$M" != "$N" && -f "$HERE/.env.$M" ]] && docker compose --env-file "$HERE/.env.$M" -f "$other" down >/dev/null 2>&1 || true
 done
+# every run starts from genesis: remove this network's own data volumes (harness data only)
+"${DC[@]}" down -v >/dev/null 2>&1 || true
 echo "[4/4] starting $N validators";       "${DC[@]}" up -d --force-recreate; wait_up
 for i in $(seq 1 "$N"); do
   curl -sf "$(url "$i")/api/v1/health" >/dev/null || { echo "node v$i did not start; last log lines:" >&2; docker logs --tail 20 "hc-v$i" >&2; exit 1; }
@@ -99,11 +101,20 @@ for sc in "${SCENARIOS[@]}"; do
         echo '{"phase": "equivocation/jail", "ok": false, "error": "evidence tool failed"}' >> "$OUT"; FAILS=$((FAILS + 1))
       fi ;;
     clock-skew)
-      export "V${N}_FAKETIME=+30s" "V${N}_PRELOAD=/usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1"
-      "${DC[@]}" up -d "v$N"; wait_up
-      check --phase clock-skew/during --expect-progress 2 --timeout $((BLOCK_S * 8)) || true
+      # the last validator's clock runs 30 s fast, then 30 s slow (MAX_TIMESTAMP_DRIFT is 15 s).
+      # Each phase checks the skew reached the JVM, the network keeps committing, and the skewed
+      # node keeps its chain (named volume) and stays within one block of the others.
+      SN="$(url "$N")"
+      for SKEW in 30 -30; do
+        export "V${N}_FAKETIME=$( [[ $SKEW -gt 0 ]] && echo "+${SKEW}s" || echo "${SKEW}s" )" \
+               "V${N}_PRELOAD=/usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1"
+        "${DC[@]}" up -d "v$N"; wait_up
+        check --phase "clock-skew/${SKEW}s" --expect-skew "$SN" --skew-seconds "$SKEW" \
+              --expect-progress 2 --timeout $((BLOCK_S * 8)) --expect-synced "$SN" --max-lag 1
+      done
       unset "V${N}_FAKETIME" "V${N}_PRELOAD"; "${DC[@]}" up -d "v$N"; wait_up
-      check --phase clock-skew/after --expect-progress 1 --timeout $((BLOCK_S * 5)) ;;
+      check --phase clock-skew/after --expect-skew "$SN" --skew-seconds 0 \
+            --expect-progress 1 --timeout $((BLOCK_S * 5)) --expect-synced "$SN" --max-lag 1 ;;
     *) echo "unknown scenario $sc" >&2; exit 2 ;;
   esac
 done
@@ -113,10 +124,10 @@ import json, sys
 rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
 print("# Fault-injection results\n")
 print("**Environment:** " + rows[0].get("environment", "?") + "\n")
-print("| Phase | Result | Safety | Liveness | Jail agreement |\n|---|---|---|---|---|")
+print("| Phase | Result | Safety | Liveness | Jail agreement | Clock skew | Skewed node synced |\n|---|---|---|---|---|---|---|")
 for r in rows[1:]:
     g = lambda k: ("ok" if r[k]["ok"] else "FAIL") if k in r else "n/a"
-    print(f"| {r['phase']} | {'PASS' if r['ok'] else 'FAIL'} | {g('safety')} | {g('liveness')} | {g('jail')} |")
+    print(f"| {r['phase']} | {'PASS' if r['ok'] else 'FAIL'} | {g('safety')} | {g('liveness')} | {g('jail')} | {g('skew')} | {g('synced')} |")
 PYEOF
 echo "results: $OUT and ${OUT%.jsonl}.md  (failed phases: $FAILS)"
 echo "stop the network with: ${DC[*]} down -v"

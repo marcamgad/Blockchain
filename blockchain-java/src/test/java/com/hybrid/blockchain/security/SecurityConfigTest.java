@@ -40,6 +40,16 @@ public class SecurityConfigTest {
     }
 
     @Test
+    @DisplayName("health reports the node's own clock (the clock-skew harness checks the skew reached the JVM)")
+    public void healthReportsNodeTime() throws Exception {
+        long before = System.currentTimeMillis();
+        mockMvc.perform(get("/api/v1/health"))
+               .andExpect(status().isOk())
+               .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.time")
+                       .value(org.hamcrest.Matchers.greaterThanOrEqualTo(before)));
+    }
+
+    @Test
     @DisplayName("Security: Account creation endpoint must be accessible without auth")
     public void testAccountCreateIsPermittedAll() throws Exception {
         mockMvc.perform(post("/api/v1/account/create")

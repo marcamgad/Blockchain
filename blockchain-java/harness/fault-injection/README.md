@@ -22,7 +22,7 @@ Runs 4 or 7 validators as Docker containers on **one machine**, injects faults, 
 | `delay-loss` | 300 ms ± 100 ms delay and 10% loss on every node | safety; slower progress |
 | `restart-resync` | one validator stopped for 3 blocks, then restarted | it catches up with identical blocks |
 | `equivocation` | conflicting PREPAREs signed offline with one validator's key and submitted as evidence over REST (token minted with the network's JWT_SECRET) | every node jails that validator |
-| `clock-skew` | one validator runs 30 s ahead (libfaketime) | safety; progress (its proposals exceed the 15 s drift limit) |
+| `clock-skew` | one validator runs 30 s fast, then 30 s slow (libfaketime); the drift limit is 15 s | the skew is visible in that node's `/api/v1/health` `time`; safety; the whole network (skewed node included) commits; the skewed node keeps its chain (named volume) and stays within one block |
 
 The equivocation scenario does **not** reproduce live double-voting on the wire. It checks the evidence path and jail agreement.
 
@@ -38,4 +38,4 @@ harness/fault-injection/run.sh 4
 harness/fault-injection/run.sh 7 leader-crash partition
 ```
 
-`gen.sh` creates throw-away random keys in `harness/fault-injection/.env.N` (mode 600; ignored by git). Blocks come every 60 s (`Config.TARGET_BLOCK_TIME_MS`, a protocol constant), so a full run takes about an hour. Stop with the `docker compose … down -v` line the runner prints.
+`gen.sh` creates throw-away random keys in `harness/fault-injection/.env.N` (mode 600; ignored by git) once, and rewrites `docker-compose.N.yml` on every run. Each node keeps its chain in a named volume; every run starts from genesis (`run.sh` removes that network's own volumes first). Blocks come every 60 s (`Config.TARGET_BLOCK_TIME_MS`, a protocol constant), so a full run takes about an hour. Stop with the `docker compose … down -v` line the runner prints.
