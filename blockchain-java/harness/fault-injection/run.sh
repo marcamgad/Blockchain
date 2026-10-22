@@ -78,11 +78,19 @@ for sc in "${SCENARIOS[@]}"; do
       docker stop "hc-v$N" >/dev/null; sleep $((BLOCK_S * 3)); docker start "hc-v$N" >/dev/null; wait_up
       check --phase restart-resync --expect-progress 1 --timeout $((BLOCK_S * 8)) ;;
     equivocation)
-      ( cd "$ROOT" && SEP=":"; case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) SEP=";" ;; esac
-        java -cp "target/test-classes${SEP}target/classes${SEP}$(cat cp.txt)" com.hybrid.blockchain.harness.EquivocationEvidenceTool \
-          "$(key_of "$N")" "$(key_of 1)" "$(url 1)" "coap://localhost:$((15683 + 1))/tx" ) | tee -a "$OUT.log"
-      CHEATER="$(awk -v c="hc-v$N" '$1==c {print $2}' "$ADDR")"
-      sleep $((BLOCK_S * 3)); check --phase equivocation/jail --expect-jailed "$CHEATER" --expect-progress 1 --timeout $((BLOCK_S * 6)) ;;
+      # the tool runs on the host, where Config's static checks need a storage key; it stores
+      # nothing, so a throw-away random key and DEBUG mode are enough
+      TOOL_AES="$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')"
+      if ( cd "$ROOT" && SEP=":"; case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) SEP=";" ;; esac
+        java -DDEBUG=true -DSTORAGE_AES_KEY="$TOOL_AES" -cp "target/test-classes${SEP}target/classes${SEP}$(cat cp.txt)" \
+          com.hybrid.blockchain.harness.EquivocationEvidenceTool \
+          "$(key_of "$N")" "$(key_of 1)" "$(url 1)" "coap://localhost:$((15683 + 1))/tx" ) 2>&1 | tee -a "$OUT.log"; [[ ${PIPESTATUS[0]} -eq 0 ]]; then
+        CHEATER="$(awk -v c="hc-v$N" '$1==c {print $2}' "$ADDR")"
+        sleep $((BLOCK_S * 3)); check --phase equivocation/jail --expect-jailed "$CHEATER" --expect-progress 1 --timeout $((BLOCK_S * 6))
+      else
+        echo "equivocation tool failed; phase recorded as FAIL, continuing" >&2
+        echo '{"phase": "equivocation/jail", "ok": false, "error": "evidence tool failed"}' >> "$OUT"; FAILS=$((FAILS + 1))
+      fi ;;
     clock-skew)
       export "V${N}_FAKETIME=+30s" "V${N}_PRELOAD=/usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1"
       "${DC[@]}" up -d "v$N"; wait_up
