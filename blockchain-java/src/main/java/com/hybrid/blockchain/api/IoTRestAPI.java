@@ -330,6 +330,66 @@ public class IoTRestAPI {
         return ResponseEntity.ok(Map.of("txId", tx.getTxid(), "status", "pending", "timestamp", tx.getTimestamp()));
     }
 
+    // ── [HC-085] challenge-response login ─────────────────────────────────────────────────
+    // Outside DEBUG nothing issued a token for a key the client already holds (account/create is
+    // DEBUG-only and generates the key on the server), so submit-signed and the per-account
+    // endpoints were unreachable for real clients.
+
+    private final AuthChallenges authChallenges = new AuthChallenges();
+    private static final java.util.regex.Pattern ADDRESS = java.util.regex.Pattern.compile("^h[bq][0-9a-f]{40}$");
+
+    /** Body {address}. Returns a one-time challenge to sign: hashWithDomain("HYBRIDCHAIN-AUTH-v1", address, challenge). */
+    @PostMapping("/auth/challenge")
+    public ResponseEntity<?> authChallenge(@RequestBody(required = false) Map<String, Object> req) {
+        Object address = req == null ? null : req.get("address");
+        if (!(address instanceof String) || !ADDRESS.matcher((String) address).matches()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "address required"));
+        }
+        try {
+            byte[] challenge = authChallenges.issue((String) address);
+            return ResponseEntity.ok(Map.of("challenge", HexUtils.encode(challenge),
+                    "expiresInMs", AuthChallenges.TTL_MS, "domain", AuthChallenges.DOMAIN));
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(503).body(Map.of("error", "too many pending challenges; retry later"));
+        }
+    }
+
+    /**
+     * Body {address, publicKey, [mldsaPublicKey], challenge, signature} (hex). The challenge must
+     * have been issued to address and not used; publicKey must derive address (an hq address
+     * needs mldsaPublicKey too); signature is over {@link AuthChallenges#digest}. Any failure is
+     * the same 401.
+     */
+    @PostMapping("/auth/token")
+    public ResponseEntity<?> authToken(@RequestBody(required = false) Map<String, Object> req) {
+        byte[] pub, challenge, signature, mldsa = null;
+        String address;
+        try {
+            address = (String) req.get("address");
+            if (address == null || !ADDRESS.matcher(address).matches()) throw new IllegalArgumentException();
+            pub = HexUtils.decode((String) req.get("publicKey"));
+            challenge = HexUtils.decode((String) req.get("challenge"));
+            signature = HexUtils.decode((String) req.get("signature"));
+            if (req.get("mldsaPublicKey") != null) mldsa = HexUtils.decode((String) req.get("mldsaPublicKey"));
+        } catch (Exception e) {   // missing field, wrong type, bad hex
+            return ResponseEntity.badRequest().body(Map.of("error", "address, publicKey, challenge and signature (hex) required"));
+        }
+        boolean issued = authChallenges.consume(address, challenge);   // used up before any other check
+        boolean bound;
+        try {
+            bound = Crypto.isHybridAddress(address)
+                    ? mldsa != null && Crypto.deriveHybridAddress(pub, mldsa).equals(address)
+                    : Crypto.deriveAddress(pub).equals(address);
+        } catch (Exception e) {
+            bound = false;
+        }
+        if (!issued || !bound || !Crypto.verify(AuthChallenges.digest(address, challenge), signature, pub)) {
+            return unauthorized();
+        }
+        log.info("Issued token by challenge login: {}", address);
+        return ResponseEntity.ok(Map.of("token", jwtManager.issueToken(address), "address", address));
+    }
+
     @GetMapping("/transactions/{txId}")
     public ResponseEntity<?> getTransaction(@PathVariable("txId") String txId) {
         blockchainLock.readLock().lock();

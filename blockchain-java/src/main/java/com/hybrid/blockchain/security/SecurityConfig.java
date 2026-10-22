@@ -67,6 +67,8 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/**").permitAll()
 
                 .requestMatchers(HttpMethod.POST, "/api/v1/account/create").permitAll()
+                // [HC-085] challenge-response login: the signature, not a token, authenticates
+                .requestMatchers(HttpMethod.POST, "/api/v1/auth/challenge", "/api/v1/auth/token").permitAll()
                 // Write endpoints require authentication
                 .requestMatchers(HttpMethod.POST, "/api/**").authenticated()
                 .requestMatchers(HttpMethod.PUT, "/api/**").authenticated()

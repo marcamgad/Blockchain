@@ -21,7 +21,7 @@ Runs 4 or 7 validators as Docker containers on **one machine**, injects faults, 
 | `partition` | 2/2 split for 4 validators, 3/4 for 7 (pumba netem, 100% loss between halves) | no conflicting blocks during the split; progress after healing |
 | `delay-loss` | 300 ms ± 100 ms delay and 10% loss on every node | safety; slower progress |
 | `restart-resync` | one validator stopped for 3 blocks, then restarted | it catches up with identical blocks |
-| `equivocation` | conflicting PREPAREs signed offline with one validator's key and submitted as evidence over REST (token minted with the network's JWT_SECRET) | every node jails that validator |
+| `equivocation` | conflicting PREPAREs signed offline with one validator's key and submitted over REST after a challenge-response login (HC-085) | every node jails that validator |
 | `clock-skew` | one validator runs 30 s fast, then 30 s slow (libfaketime); the drift limit is 15 s | the skew is visible in that node's `/api/v1/health` `time`; safety; the whole network (skewed node included) commits; the skewed node keeps its chain (named volume) and stays within one block |
 
 The equivocation scenario does **not** reproduce live double-voting on the wire. It checks the evidence path and jail agreement.

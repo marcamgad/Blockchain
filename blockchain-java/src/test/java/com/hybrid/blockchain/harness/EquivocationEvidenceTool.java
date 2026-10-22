@@ -6,7 +6,7 @@ import com.hybrid.blockchain.HexUtils;
 import com.hybrid.blockchain.Transaction;
 import com.hybrid.blockchain.consensus.PBFTConsensus;
 import com.hybrid.blockchain.security.QuantumResistantCrypto;
-import com.hybrid.blockchain.api.JwtManager;
+import com.hybrid.blockchain.api.AuthChallenges;
 
 import java.math.BigInteger;
 import java.net.URI;
@@ -29,12 +29,11 @@ import java.util.Map;
  * <pre>java -cp target/test-classes;target/classes;&lt;deps&gt; com.hybrid.blockchain.harness.EquivocationEvidenceTool \
  *     &lt;cheaterPrivHex&gt; &lt;reporterPrivHex&gt; &lt;restBaseUrl&gt;</pre>
  *
- * <p>The endpoint needs a JWT for the sender. No production endpoint issues one for an existing key,
- * so the tool mints it with the network's {@code JWT_SECRET} (environment or -D), which the harness
- * generated. CoAP was used before, but a VALIDATOR node does not start its CoAP server (GATEWAY only).</p>
+ * <p>The endpoint needs a JWT for the sender: the tool logs in like any client, by signing a one-time
+ * challenge ([HC-085] {@code /api/v1/auth/challenge} and {@code /api/v1/auth/token}). CoAP was used
+ * before, but a VALIDATOR node does not start its CoAP server (GATEWAY only).</p>
  *
- * <p>Private keys and the secret are read from the command line and environment, so run it only on
- * a throw-away harness network.</p>
+ * <p>Private keys are read from the command line, so run it only on a throw-away harness network.</p>
  */
 public final class EquivocationEvidenceTool {
 
@@ -73,15 +72,31 @@ public final class EquivocationEvidenceTool {
                 .signHybrid(reporter, pub, pq.getPrivate(), pq.getPublic());
     }
 
+    /** [HC-085] challenge-response login: sign the node's one-time challenge with the account key. */
+    @SuppressWarnings("unchecked")
+    static String login(HttpClient http, ObjectMapper m, String rest, BigInteger key) throws Exception {
+        byte[] pub = Crypto.derivePublicKey(key);
+        String addr = Crypto.deriveAddress(pub);
+        HttpResponse<String> c = http.send(HttpRequest.newBuilder(URI.create(rest + "/api/v1/auth/challenge"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(m.writeValueAsString(Map.of("address", addr)))).build(),
+                HttpResponse.BodyHandlers.ofString());
+        if (c.statusCode() != 200) throw new IllegalStateException("challenge: HTTP " + c.statusCode() + " " + c.body());
+        byte[] ch = HexUtils.decode((String) m.readValue(c.body(), Map.class).get("challenge"));
+        Map<String, Object> req = Map.of("address", addr, "publicKey", HexUtils.encode(pub), "challenge", HexUtils.encode(ch),
+                "signature", HexUtils.encode(Crypto.sign(AuthChallenges.digest(addr, ch), key)));
+        HttpResponse<String> t = http.send(HttpRequest.newBuilder(URI.create(rest + "/api/v1/auth/token"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(m.writeValueAsString(req))).build(),
+                HttpResponse.BodyHandlers.ofString());
+        if (t.statusCode() != 200) throw new IllegalStateException("login: HTTP " + t.statusCode() + " " + t.body());
+        return (String) m.readValue(t.body(), Map.class).get("token");
+    }
+
     @SuppressWarnings("unchecked")
     public static void main(String[] args) throws Exception {
         if (args.length < 3) {
-            System.err.println("usage: <cheaterPrivHex> <reporterPrivHex> <restBaseUrl>   (JWT_SECRET in the environment)");
-            System.exit(2);
-        }
-        String secret = System.getProperty("JWT_SECRET", System.getenv("JWT_SECRET"));
-        if (secret == null || secret.isEmpty()) {
-            System.err.println("JWT_SECRET must be set (the harness network's secret from .env.<N>)");
+            System.err.println("usage: <cheaterPrivHex> <reporterPrivHex> <restBaseUrl>");
             System.exit(2);
         }
         BigInteger cheater = new BigInteger(args[0], 16), reporter = new BigInteger(args[1], 16);
@@ -89,8 +104,9 @@ public final class EquivocationEvidenceTool {
         String reporterAddr = Crypto.deriveAddress(Crypto.derivePublicKey(reporter));
         ObjectMapper m = new ObjectMapper();
         HttpClient http = HttpClient.newHttpClient();
-        Map<String, Object> acct = m.readValue(http.send(HttpRequest.newBuilder(URI.create(rest + "/api/v1/accounts/" + reporterAddr)).build(),
-                HttpResponse.BodyHandlers.ofString()).body(), Map.class);
+        String token = login(http, m, rest, reporter);
+        Map<String, Object> acct = m.readValue(http.send(HttpRequest.newBuilder(URI.create(rest + "/api/v1/accounts/" + reporterAddr))
+                .header("Authorization", "Bearer " + token).build(), HttpResponse.BodyHandlers.ofString()).body(), Map.class);
         Map<String, Object> fee = m.readValue(http.send(HttpRequest.newBuilder(URI.create(rest + "/api/v1/fee/estimate")).build(),
                 HttpResponse.BodyHandlers.ofString()).body(), Map.class);
         long nonce = ((Number) acct.getOrDefault("nonce", 0)).longValue() + 1;
@@ -99,7 +115,7 @@ public final class EquivocationEvidenceTool {
         byte[] json = m.writeValueAsBytes(tx);
         HttpResponse<String> r = http.send(HttpRequest.newBuilder(URI.create(rest + "/api/v1/transactions/submit-signed"))
                         .header("Content-Type", "application/json")
-                        .header("Authorization", "Bearer " + new JwtManager(secret).issueToken(reporterAddr))
+                        .header("Authorization", "Bearer " + token)
                         .POST(HttpRequest.BodyPublishers.ofByteArray(json)).build(),
                 HttpResponse.BodyHandlers.ofString());
         System.out.println("EVIDENCE_SUBMITTED code=" + r.statusCode() + " body=" + r.body()

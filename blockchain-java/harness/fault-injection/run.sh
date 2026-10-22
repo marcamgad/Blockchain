@@ -89,8 +89,6 @@ for sc in "${SCENARIOS[@]}"; do
       # nothing, so a throw-away random key and DEBUG mode are enough
       TOOL_AES="$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')"
       if ( cd "$ROOT" && SEP=":"; case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) SEP=";" ;; esac
-        # submit-signed needs a token for the reporter; the operator's JWT_SECRET mints it
-        JWT_SECRET="$(grep "^JWT_SECRET=" "$ENV" | cut -d= -f2-)" \
         java -DDEBUG=true -DSTORAGE_AES_KEY="$TOOL_AES" -cp "target/test-classes${SEP}target/classes${SEP}$(cat cp.txt)" \
           com.hybrid.blockchain.harness.EquivocationEvidenceTool \
           "$(key_of "$N")" "$(key_of 1)" "$(url 1)" ) 2>&1 | tee -a "$OUT.log"; [[ ${PIPESTATUS[0]} -eq 0 ]]; then
