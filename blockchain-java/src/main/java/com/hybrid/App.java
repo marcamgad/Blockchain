@@ -143,8 +143,11 @@ public class App {
 
         // TASK 2 — Seed node broadcasts its peer list every 30 s
         // so newly joined validators can discover each other.
+        // [HC-084] EVERY node (not only the seed) announces itself and its peers, and dials the peers
+        // it discovers, so the network becomes a mesh and survives the loss of the seed
         ScheduledExecutorService seedScheduler = null;
-        if (Config.IS_SEED) {
+        peerNode.maintainMesh(30_000L);
+        {
             seedScheduler = Executors.newSingleThreadScheduledExecutor();
             final ScheduledExecutorService ss = seedScheduler;
             ss.scheduleAtFixedRate(() -> {
@@ -155,7 +158,7 @@ public class App {
                     log.warn("[SEED] Peer-list broadcast failed: {}", t.getMessage());
                 }
             }, 30_000L, 30_000L, TimeUnit.MILLISECONDS);
-            log.info("[SEED] Peer-list broadcast enabled (every 30 s)");
+            log.info("[P2P] Peer-list broadcast and mesh dialling enabled (every 30 s)");
         }
 
         // 16. Add graceful shutdown hook (now including the scheduler)

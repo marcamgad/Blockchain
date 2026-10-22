@@ -352,8 +352,14 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                     // [HC-068] the sender's own entry carries its height (the message is signed by
                     // the sender, so it can only speak for itself). Heights were never recorded,
                     // so every peer looked like height 0 and a lagging node never synced.
-                    if (id != null && id.equals(msg.getSenderId()) && p.get("height") instanceof Number) {
-                        recordPeerHeight(id, ((Number) p.get("height")).longValue());
+                    if (id != null && id.equals(msg.getSenderId())) {
+                        if (p.get("height") instanceof Number) recordPeerHeight(id, ((Number) p.get("height")).longValue());
+                        // [HC-084] a directly connected peer tells us the port it listens on; the
+                        // socket only shows its ephemeral outgoing port for inbound connections
+                        PeerManager.PeerInfo info = peerManager.getPeer(id);
+                        if (info != null && p.get("port") instanceof Number) {
+                            info.setListenPort(((Number) p.get("port")).intValue());
+                        }
                         continue;
                     }
                     String addr = (String) p.get("address");
@@ -632,12 +638,20 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
             Map<String, Object> self = new HashMap<>();   // [HC-068] advertise our height
             self.put("id", localAddress);
             self.put("height", blockchain.getHeight());
+            self.put("port", port);                        // [HC-084] and our listening port
+            // [HC-084] the gossip id is hash(sender, type, payload): without a timestamp an
+            // unchanged list (same height, e.g. on a stalled chain) is dropped as already seen
+            self.put("ts", System.currentTimeMillis());
             list.add(self);
             for (PeerManager.PeerInfo p : peerManager.getTopPeers(10)) {
+                // [HC-084] advertise only a port the peer announced as its listening port; for an
+                // inbound connection getPort() is the peer's ephemeral outgoing port
+                int listen = p.getListenPort();
+                if (listen <= 0) continue;
                 Map<String, Object> map = new HashMap<>();
                 map.put("id", p.getId());
                 map.put("address", p.getAddress());
-                map.put("port", p.getPort());
+                map.put("port", listen);
                 list.add(map);
             }
             byte[] payload = new ObjectMapper().writeValueAsBytes(list);
@@ -762,8 +776,11 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                 }
             } finally {
                 if (remotePeerId != null) {
-                    peerConnections.remove(remotePeerId);
-                    peerManager.removePeer(remotePeerId);
+                    // [HC-084] with mesh dialling two nodes can dial each other at once; closing the
+                    // extra connection must not drop the one that replaced it in the table
+                    if (peerConnections.remove(remotePeerId, out) || !peerConnections.containsKey(remotePeerId)) {
+                        peerManager.removePeer(remotePeerId);
+                    }
                 }
                 String remoteIp = socket.getInetAddress().getHostAddress();
                 ipConnectionCounts.computeIfPresent(remoteIp, (ip, c) -> c > 1 ? c - 1 : null);
@@ -1255,6 +1272,32 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                 log.warn("[P2P] Seed reconnect attempt failed: {}", t.getMessage());
             }
         }, 0, periodMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * [HC-084] Dials discovered peers this node is not connected to (at most 8 per round), so the
+     * network becomes a mesh instead of a star around the seed. Discovered peers used to be
+     * recorded and never dialled: in the live leader-crash run the seed was the leader, and when it
+     * was killed the three survivors had no connection to each other and could never form a
+     * quorum. The handshake still decides who is admitted.
+     */
+    public void maintainMesh(long periodMs) {
+        peerSyncScheduler.scheduleWithFixedDelay(() -> {
+            try {
+                int dialled = 0;
+                for (Map.Entry<String, String> c : getDiscoveredPeers().entrySet()) {
+                    if (dialled >= 8) break;
+                    String id = c.getKey();
+                    if (id.equals(localAddress) || peerConnections.containsKey(id)) continue;
+                    int colon = c.getValue().lastIndexOf(':');
+                    if (colon <= 0) continue;
+                    connectToPeer(c.getValue().substring(0, colon), Integer.parseInt(c.getValue().substring(colon + 1)));
+                    dialled++;
+                }
+            } catch (Throwable t) {   // keep the periodic task alive
+                log.warn("[P2P] Mesh maintenance failed: {}", t.getMessage());
+            }
+        }, periodMs, periodMs, java.util.concurrent.TimeUnit.MILLISECONDS);
     }
 
     public Collection<PeerManager.PeerInfo> getPeers() {

@@ -23,6 +23,8 @@ public class PeerManager {
         private long latency;
         private long blockHeight;
         private long slashedUntil; // 0 if not slashed
+        /** [HC-084] the port the peer LISTENS on (its own announcement); -1 until known */
+        private volatile int listenPort = -1;
         private final Map<P2PMessage.Type, AtomicInteger> messageCounts = new ConcurrentHashMap<>();
 
         public PeerInfo(String id, String address, int port) {
@@ -66,6 +68,8 @@ public class PeerManager {
         public long getLastSeen() { return lastSeen; }
         public long getLatency() { return latency; }
         public long getBlockHeight() { return blockHeight; }
+        public int getListenPort() { return listenPort; }
+        public void setListenPort(int p) { if (p > 0 && p <= 65535) this.listenPort = p; }
         public void setBlockHeight(long height) { this.blockHeight = height; }
     }
 
