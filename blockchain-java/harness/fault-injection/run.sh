@@ -38,6 +38,11 @@ wait_up() { for i in $(seq 1 "$N"); do for _ in $(seq 1 60); do curl -sf "$(url 
 echo "[1/4] building the node jar";        ( cd "$ROOT" && mvn -q -o -DskipTests package )
 echo "[2/4] building hybridchain-node";    ( cd "$ROOT" && docker build -t hybridchain-node:local -f Dockerfile . )
 echo "[3/4] building hybridchain-harness"; docker build -t hybridchain-harness:local -f "$HERE/Dockerfile.harness" "$HERE"
+# networks of other sizes share the subnet, container names and host ports: stop them first
+for other in "$HERE"/docker-compose.*.yml; do
+  M="${other##*/docker-compose.}"; M="${M%.yml}"
+  [[ "$M" != "$N" && -f "$HERE/.env.$M" ]] && docker compose --env-file "$HERE/.env.$M" -f "$other" down >/dev/null 2>&1 || true
+done
 echo "[4/4] starting $N validators";       "${DC[@]}" up -d --force-recreate; wait_up
 for i in $(seq 1 "$N"); do
   curl -sf "$(url "$i")/api/v1/health" >/dev/null || { echo "node v$i did not start; last log lines:" >&2; docker logs --tail 20 "hc-v$i" >&2; exit 1; }
