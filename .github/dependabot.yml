@@ -1,4 +1,6 @@
 # Dependabot: weekly update pull requests, each one tested by CI (.github/workflows/ci.yml).
+# Do not merge its PRs as they are: that puts dependabot[bot] in the commit history. Apply the
+# update as your own commit (Dependabot closes its PR once main has the new version).
 # Minor and patch updates are grouped into one PR per ecosystem; major updates come one per PR,
 # because they need a migration (e.g. Spring Boot 4, see blockchain-java/docs/UPGRADE_AUDIT.md U1).
 # Consensus-critical libraries (BouncyCastle, the chicory WASM runtime) change signatures, hashes
@@ -14,6 +16,12 @@ updates:
     groups:
       maven-minor-patch:
         update-types: [minor, patch]
+        # consensus-critical: each gets its own PR, merged only after a harness run
+        exclude-patterns: ['org.bouncycastle:*', 'com.dylibso.chicory:*']
+    ignore:
+      # Tomcat 11 belongs to Spring Boot 4; it comes with that migration (UPGRADE_AUDIT U1)
+      - dependency-name: 'org.apache.tomcat.embed:*'
+        update-types: ['version-update:semver-major']
     labels: [dependencies]
 
   - package-ecosystem: docker
@@ -21,6 +29,10 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    ignore:
+      # a new Java major is changed by hand in the pom, CI and Docker together (UPGRADE_AUDIT U2)
+      - dependency-name: eclipse-temurin
+        update-types: ['version-update:semver-major']
     labels: [dependencies]
 
   - package-ecosystem: github-actions
