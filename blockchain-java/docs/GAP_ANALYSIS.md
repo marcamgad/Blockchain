@@ -116,3 +116,5 @@ production, **P2** quality, research or product depth.
 5. **A1 client SDK/CLI** and **I1 a real device**: needed for anyone to actually use it.
 6. **T1 load and soak test**, then **T4 measured numbers**: needed for any performance or research claim.
 7. **S1 external audit** before any production use with real value or real data.
+
+See also [`UPGRADE_AUDIT.md`](UPGRADE_AUDIT.md) for dependency upgrades and code health.
