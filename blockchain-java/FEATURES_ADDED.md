@@ -14,7 +14,7 @@ Exposed a comprehensive set of RESTful endpoints under `/api/v1/admin/` secured 
 - `GET /api/v1/admin/status`: Fetch deep metrics of the mempool size, peer count, node difficulty, and operational paused state.
 - `GET /api/v1/admin/peers`, `DELETE /api/v1/admin/peers/{id}`: View connected peers and disconnect specific malicious peers directly.
 - `POST /api/v1/admin/broadcast-block`: Manually force a block broadcast for recovery scenarios.
-- `POST /api/v1/admin/config/update`: Modify `MAX_TRANSACTIONS_PER_BLOCK` and `TARGET_BLOCK_TIME_MS` on the fly.
+- ~~`POST /api/v1/admin/config/update`~~: removed in HC-086 (it changed network parameters on one node only; they now change only by protocol upgrade).
 
 ## 4. Device Reputation Scoring Engine
 Introduced `ReputationEngine.java` as a trust-scoring component for IoT edge devices. It

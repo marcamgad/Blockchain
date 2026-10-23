@@ -818,57 +818,8 @@ public class IoTRestAPI {
         }
     }
 
-    // Safe operating bounds for runtime-tunable config (see adminUpdateConfig).
-    private static final int  MIN_TX_PER_BLOCK      = 1;
-    private static final int  MAX_TX_PER_BLOCK_LIMIT = 100_000;
-    private static final long MIN_BLOCK_TIME_MS     = 100L;        // never 0 — would spin the proposer
-    private static final long MAX_BLOCK_TIME_MS     = 3_600_000L;  // 1 hour
-
-    @PostMapping("/admin/config/update")
-    public ResponseEntity<?> adminUpdateConfig(@RequestHeader(value = "Authorization", required = false) String auth,
-            @RequestBody Map<String, Object> payload) {
-        ResponseEntity<?> authCheck = requireAdmin(auth);
-        if (authCheck != null) {
-            return authCheck;
-        }
-        // Limited dynamic config updates for production.
-        // Authentication proves WHO is calling, not that the VALUE is sane — a leaked or
-        // misused admin token could otherwise set targetBlockTimeMs=0 (runaway block
-        // proposal loop) or a negative maxTransactionsPerBlock (downstream code assumes
-        // positive). Bounds-check before assigning.
-        try {
-            if (payload.containsKey("maxTransactionsPerBlock")) {
-                Object raw = payload.get("maxTransactionsPerBlock");
-                if (!(raw instanceof Number)) {
-                    return ResponseEntity.badRequest().body(Map.of("error", "maxTransactionsPerBlock must be a number"));
-                }
-                int v = ((Number) raw).intValue();
-                if (v < MIN_TX_PER_BLOCK || v > MAX_TX_PER_BLOCK_LIMIT) {
-                    return ResponseEntity.badRequest().body(Map.of("error",
-                            "maxTransactionsPerBlock must be in [" + MIN_TX_PER_BLOCK + ", " + MAX_TX_PER_BLOCK_LIMIT + "]"));
-                }
-                Config.MAX_TRANSACTIONS_PER_BLOCK = v;
-            }
-            if (payload.containsKey("targetBlockTimeMs")) {
-                Object raw = payload.get("targetBlockTimeMs");
-                if (!(raw instanceof Number)) {
-                    return ResponseEntity.badRequest().body(Map.of("error", "targetBlockTimeMs must be a number"));
-                }
-                long v = ((Number) raw).longValue();
-                if (v < MIN_BLOCK_TIME_MS || v > MAX_BLOCK_TIME_MS) {
-                    return ResponseEntity.badRequest().body(Map.of("error",
-                            "targetBlockTimeMs must be in [" + MIN_BLOCK_TIME_MS + ", " + MAX_BLOCK_TIME_MS + "]"));
-                }
-                Config.TARGET_BLOCK_TIME_MS = v;
-            }
-        } catch (ClassCastException e) {
-            return ResponseEntity.badRequest().body(Map.of("error", "Invalid config value type"));
-        }
-        return ResponseEntity.ok(Map.of("status", "updated", "config", Map.of(
-            "maxTransactionsPerBlock", Config.MAX_TRANSACTIONS_PER_BLOCK,
-            "targetBlockTimeMs", Config.TARGET_BLOCK_TIME_MS
-        )));
-    }
+    // [HC-086] POST /admin/config/update was removed: it changed block size and block time on this
+    // node only. Network parameters are final in Config and change by protocol upgrade.
 
    @GetMapping("/admin/peers")
 public ResponseEntity<?> adminPeers(@RequestHeader(value = "Authorization", required = false) String auth) {

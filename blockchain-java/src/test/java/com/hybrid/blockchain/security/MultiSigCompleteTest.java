@@ -82,19 +82,19 @@ public class MultiSigCompleteTest {
     }
 
     @Test
-    @DisplayName("MS1.10 — PARAMETER_CHANGE governance")
+    @DisplayName("MS1.10 — [HC-086] PARAMETER_CHANGE does not change a network parameter on this node")
     void testParamChangeProposal() {
+        // This test used to assert the opposite (TARGET_BLOCK_TIME_MS became 5000). The proposal is
+        // node-local state, so applying it changed one node's parameter; parameters are final now
+        // and change only through a protocol upgrade.
         TestKeyPair admin = new TestKeyPair(1);
         String walletId = manager.createWallet(List.of(admin.getAddress()), 1);
-        
-        long oldTime = Config.TARGET_BLOCK_TIME_MS;
-        String metadata = "PARAMETER_CHANGE:TARGET_BLOCK_TIME_MS:5000";
-        
-        String propId = manager.proposeTransaction(walletId, "GOV", metadata.getBytes());
+        long before = Config.TARGET_BLOCK_TIME_MS;
+
+        String propId = manager.proposeTransaction(walletId, "GOV", "PARAMETER_CHANGE:TARGET_BLOCK_TIME_MS:5000".getBytes());
         approve(propId, admin);
-        
-        assertThat(Config.TARGET_BLOCK_TIME_MS).isEqualTo(5000L);
-        Config.TARGET_BLOCK_TIME_MS = oldTime; // Restore
+
+        assertThat(Config.TARGET_BLOCK_TIME_MS).isEqualTo(before);
     }
 
     /** Externally produced approval, verified by MultiSigManager (address, public key, signature). */

@@ -460,14 +460,10 @@ public class MultiSigManager {
                     if (blockchain != null && parts.length >= 3) {
                         blockchain.getConsensus().addValidator(parts[1], com.hybrid.blockchain.HexUtils.decode(parts[2]));
                     }
-                } else if (metadata.startsWith("PARAMETER_CHANGE:")) {
-                    String[] parts = metadata.split(":");
-                    if (parts.length >= 3) {
-                        if (parts[1].equals("TARGET_BLOCK_TIME_MS")) {
-                            com.hybrid.blockchain.Config.TARGET_BLOCK_TIME_MS = Long.parseLong(parts[2]);
-                        }
-                    }
                 }
+                // [HC-086] PARAMETER_CHANGE used to write Config.TARGET_BLOCK_TIME_MS here: a
+                // node-local proposal changing one node's network parameter. Parameters are final
+                // and change only through a protocol upgrade (docs/design/PROTOCOL_UPGRADES.md).
             }
         } catch (Exception e) {
             return false;

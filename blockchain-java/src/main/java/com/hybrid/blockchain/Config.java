@@ -10,8 +10,9 @@ public final class Config {
     // ─── Core Chain Parameters ────────────────────────────────────────────────
     public static final int INITIAL_DIFFICULTY = 4;
     public static final int DIFFICULTY_ADJUSTMENT_INTERVAL = 10;
-    public static long TARGET_BLOCK_TIME_MS = 60000; // 1 min target
-    public static int MAX_TRANSACTIONS_PER_BLOCK = 2000;
+    // [HC-086] final: network parameters change only through a protocol upgrade, never per node
+    public static final long TARGET_BLOCK_TIME_MS = 60000; // 1 min target
+    public static final int MAX_TRANSACTIONS_PER_BLOCK = 2000;
     public static final int MAX_BLOCK_SIZE = 2 * 1024 * 1024; // 2 MB
     /** Legacy constant kept for backward compatibility; prefer Tokenomics.INITIAL_REWARD. */
     public static final long MINER_REWARD = 50;
@@ -27,6 +28,7 @@ public final class Config {
     public static final boolean ENABLE_SMART_CONTRACTS = true;
     public static final long CONTRACT_EXECUTION_LIMIT = 10_000;
     public static final int MAX_CONTRACT_SIZE = 32 * 1024;
+    /** Test-only switch: node code never writes it, and start-up refuses it in a production profile. */
     public static boolean BYPASS_CONTRACT_AUDIT = false;
 
     // ─── Fee Market Prediction ────────────────────────────────────────────────
@@ -123,7 +125,7 @@ public final class Config {
     /** UDP port for the CoAP server; only active when NODE_ROLE=GATEWAY. */
     public static final int COAP_PORT = getIntEnv("COAP_PORT", 5683);
 
-    public static int MAX_NONCE_GAP = 100;
+    public static final int MAX_NONCE_GAP = 100;   // [HC-086] final
 
     // ─── Storage Encryption ───────────────────────────────────────────────────
     public static final byte[] STORAGE_AES_KEY;

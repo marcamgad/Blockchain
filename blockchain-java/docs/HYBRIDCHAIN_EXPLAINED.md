@@ -596,7 +596,7 @@ All AI components are **advisory**. They read accepted blocks and authenticated 
 | Contracts | `GET /contracts/{address}/abi`. Deploy and call go through `submit-signed` (the old endpoints point there). |
 | IoT | `GET /iot/devices/{deviceId}`, `/devices/{deviceId}/telemetry?fromBlock=&toBlock=` |
 | AI | `GET /ai/threat-scores`, `/ai/anomalies`, `/ai/anomalies/{deviceId}`, `/ai/federated/model`, `/ai/fee-prediction`; `POST /ai/federated/submit` (JWT must match the node ID, HC-055) |
-| Admin | `GET /admin/status`, `/admin/peers`, `/admin/metrics`; `POST /admin/node/pause`, `/admin/node/resume`, `/admin/config/update`, `/admin/broadcast-block`; `DELETE /admin/peers/{peerId}` |
+| Admin | `GET /admin/status`, `/admin/peers`, `/admin/metrics`; `POST /admin/node/pause`, `/admin/node/resume`, `/admin/broadcast-block`; `DELETE /admin/peers/{peerId}` |
 
 ### WebSocket (`/ws/events`)
 

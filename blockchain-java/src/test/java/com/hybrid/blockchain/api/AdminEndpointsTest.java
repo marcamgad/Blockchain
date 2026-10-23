@@ -59,14 +59,16 @@ public class AdminEndpointsTest {
     }
 
     @Test
-    @DisplayName("Admin: Config update endpoint")
-    public void testAdminConfigUpdate() throws Exception {
+    @DisplayName("[HC-086] the config update endpoint is gone: network parameters do not change per node")
+    public void testAdminConfigUpdateRemoved() throws Exception {
+        // This test used to expect 200. The endpoint changed block size and block time on ONE node
+        // (see NetworkParameterImmutabilityTest); a network parameter changes only by protocol upgrade.
         JwtManager jwtManager = new JwtManager();
         String adminToken = jwtManager.issueToken("admin-device", "ADMIN");
         mockMvc.perform(post("/api/v1/admin/config/update")
                 .header("Authorization", "Bearer " + adminToken)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"maxTransactionsPerBlock\":500}"))
-               .andExpect(status().isOk());
+               .andExpect(status().isNotFound());
     }
 }
