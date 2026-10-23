@@ -110,12 +110,12 @@ public class JwtManager {
     public String issueToken(String subject, String role, Date expiry) {
         Date now = new Date();
         return Jwts.builder()
-                .setIssuer(ISSUER)
-                .setSubject(subject)
+                .issuer(ISSUER)
+                .subject(subject)
                 .claim(ROLE_CLAIM, role == null ? ROLE_DEVICE : role)
-                .setId(UUID.randomUUID().toString())
-                .setIssuedAt(now)
-                .setExpiration(expiry)
+                .id(UUID.randomUUID().toString())
+                .issuedAt(now)
+                .expiration(expiry)
                 .signWith(key)
                 .compact();
     }
@@ -139,12 +139,12 @@ public class JwtManager {
     /** Full validation outcome, for audit logging and threat scoring. */
     public ValidationResult validateDetailed(String token) {
         try {
-            Jws<Claims> jws = Jwts.parserBuilder()
+            Jws<Claims> jws = Jwts.parser()   // jjwt 0.12+: signed tokens only (no "alg":"none")
                     .requireIssuer(ISSUER)
-                    .setSigningKey(key)
+                    .verifyWith(key)
                     .build()
-                    .parseClaimsJws(token);
-            if (isRevoked(jws.getBody())) return ValidationResult.REVOKED;
+                    .parseSignedClaims(token);
+            if (isRevoked(jws.getPayload())) return ValidationResult.REVOKED;
             return ValidationResult.VALID;
         } catch (ExpiredJwtException e) {
             return ValidationResult.EXPIRED;
@@ -213,12 +213,12 @@ public class JwtManager {
 
     private Optional<Claims> parse(String token) {
         try {
-            return Optional.of(Jwts.parserBuilder()
+            return Optional.of(Jwts.parser()
                     .requireIssuer(ISSUER)
-                    .setSigningKey(key)
+                    .verifyWith(key)
                     .build()
-                    .parseClaimsJws(token)
-                    .getBody());
+                    .parseSignedClaims(token)
+                    .getPayload());
         } catch (Exception e) {
             return Optional.empty();
         }
