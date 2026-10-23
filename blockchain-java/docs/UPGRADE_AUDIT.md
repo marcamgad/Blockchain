@@ -10,12 +10,12 @@ come from the code at `c0d23db` and the JaCoCo report of the last full `mvn veri
 |---|---|---|---|---|---|
 | U1 | **Spring Boot** | 3.5.16 | **4.1.x** | 3.5's free support ended in June 2026, and 3.5.16 was its last free release. New Spring CVEs will not get free 3.5 fixes. 4.0's free support ends December 2026, so go straight to 4.1. | Large: Spring Framework 7, Spring Security 7, Jakarta EE 11, and Jackson 3 as the default JSON library. Do it on its own branch, with the full suite and a harness run as the gate. |
 | U2 | **Java** | 17 | **21** (or 25) | Oracle premier support for 17 ended in September 2026. 21 adds virtual threads, which suit `PeerNode`'s one-thread-per-connection model. 25 is the newest long-term-support release. | Small: compiler level, Docker base image `eclipse-temurin:21-jre`. |
-| U3 | jjwt | 0.11.5 (2022) | 0.13.x | 0.12 replaced the builder API (`setSubject`/`signWith(key)` are deprecated). Only `JwtManager` uses it. | Small |
+| U3 | jjwt — *done 2026-10-23: 0.13.0* | 0.11.5 (2022) | 0.13.x | 0.12 replaced the builder API (`setSubject`/`signWith(key)` are deprecated). Only `JwtManager` uses it. | Small |
 | U4 | LevelDB (`leveldbjni-all` 1.8, `iq80 leveldb` 0.12) | 2013 / 2016 | RocksDB (`rocksdbjni`) | Both are unmaintained. The JNI build has no ARM64 binary (Pi falls back to the pure-Java port, which is slower). RocksDB is maintained, ships ARM64 binaries, and is what most chains use. | Medium: everything goes through `Storage`. Needs a one-time data migration tool, or fresh networks only. |
 | U5 | Paho MQTT v3 client | 1.2.5 (2020) | Paho MQTT v5 or the HiveMQ client | v3 is in low-maintenance mode. MQTT 5 adds per-message expiry and reason codes, which are useful for devices. | Small: one adapter (`api/MQTTAdapter`). |
 | U6 | Californium CoAP | 3.10.0 | latest 3.x, plus **Scandium (DTLS)** | DTLS is missing (GAP_ANALYSIS S3); Scandium is Californium's own DTLS module. | Medium |
-| U7 | Guava 33.3.1, commons-io 2.16.1, msgpack 0.9.12, chicory 1.0.0 | — | current releases | Routine. Check chicory first: the WASM runtime is consensus-critical (gas and results must be identical on every node), so pin the exact version and run the WASM tests. | Small |
-| U8 | Build plugins: compiler 3.11.0, cyclonedx 2.7.11, spotbugs 4.8.6.6, pitest 1.15.3 | — | current releases | Routine. | Small |
+| U7 | Guava 33.3.1, commons-io 2.16.1, msgpack 0.9.12, chicory 1.0.0 — *done 2026-10-23 except chicory (still 1.0.0, own PR + harness run)* | — | current releases | Routine. Check chicory first: the WASM runtime is consensus-critical (gas and results must be identical on every node), so pin the exact version and run the WASM tests. | Small |
+| U8 | Build plugins: compiler 3.11.0, cyclonedx 2.7.11, spotbugs 4.8.6.6, pitest 1.15.3 — *done 2026-10-23* | — | current releases | Routine. | Small |
 
 ## 2. Code health
 
