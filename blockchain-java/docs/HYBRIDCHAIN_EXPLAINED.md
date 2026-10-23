@@ -521,7 +521,6 @@ Readings are stored per device and per block. They can be read through `GET /api
 |---|---|---|
 | MQTT | `api/MQTTAdapter.java` | Topic `blockchain/iot/<device>/telemetry`: a device-signed reading. Topic `blockchain/iot/<device>/mgmt`: a full **owner-signed** `IOT_MANAGEMENT` transaction. The node never signs management actions for a publisher (HC-064). |
 | CoAP | `api/CoAPAdapter.java` | `/health`, `/balance?address=`, `/tx` (a signed transaction), `/telemetry` (a device-signed reading). Rate limit per sender. |
-| State channels | `iot/IoTStateChannel.java` | Off-chain high-frequency readings, with only the final state settled on-chain (research feature). |
 | Private data | `privacy/PrivateDataCollection.java` | Encrypted data readable by authorized members, with public hashes for integrity. |
 
 Note: older copies of the MQTT and CoAP adapters also exist in the `iot` package. The ones in `api` are the current ones.
@@ -576,7 +575,6 @@ All AI components are **advisory**. They read accepted blocks and authenticated 
 | Telemetry anomaly detector | `ai/TelemetryAnomalyDetector.java` | Z-score plus an ARIMA(1,1,1) approximation over a 50-reading window. Runs after a block is accepted, on authenticated `TELEMETRY` only, and publishes alerts to the `anomalies` WebSocket topic. |
 | Predictive threat scorer | `ai/PredictiveThreatScorer.java` | Moving-average score of validator behaviour, for monitoring. Deliberately not used in leader selection. |
 | Smart-contract auditor | `ai/SmartContractAuditor.java` | Static scan of bytecode for dangerous patterns before deployment. |
-| Proof of Inference | `ai/ProofOfInference.java` | Research feature: a device proves it ran a specific model on its raw data. |
 
 ---
 
