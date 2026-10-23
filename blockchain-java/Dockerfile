@@ -1,4 +1,4 @@
-FROM eclipse-temurin:17-jre-jammy
+FROM eclipse-temurin:25-jre-jammy
 WORKDIR /app
 
 # Copy the Spring Boot executable JAR from the host. The *-jar-with-dependencies.jar is NOT runnable:
