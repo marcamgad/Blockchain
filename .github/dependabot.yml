@@ -1,0 +1,34 @@
+# Dependabot: weekly update pull requests, each one tested by CI (.github/workflows/ci.yml).
+# Minor and patch updates are grouped into one PR per ecosystem; major updates come one per PR,
+# because they need a migration (e.g. Spring Boot 4, see blockchain-java/docs/UPGRADE_AUDIT.md U1).
+# Consensus-critical libraries (BouncyCastle, the chicory WASM runtime) change signatures, hashes
+# or gas results if they change behaviour: review their PRs together with a harness run.
+version: 2
+updates:
+  - package-ecosystem: maven
+    directory: /blockchain-java
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      maven-minor-patch:
+        update-types: [minor, patch]
+    labels: [dependencies]
+
+  - package-ecosystem: docker
+    directory: /blockchain-java
+    schedule:
+      interval: weekly
+      day: monday
+    labels: [dependencies]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ['*']
+    labels: [dependencies]
