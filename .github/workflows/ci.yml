@@ -1,0 +1,93 @@
+# HybridChain CI: every push and pull request.
+#   build-test     mvn verify: the full test suite plus the JaCoCo coverage floors in the pom
+#   harness        the fault-injection checker's self-test and a syntax check of the harness scripts
+#                  (the live Docker harness takes about an hour and runs by hand: harness/fault-injection)
+#   dependencies   CycloneDX SBOM and an OSV vulnerability report (report-only for now)
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: blockchain-java
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      # JWT_SECRET must stay unset: JwtSecretPolicyTest checks the fail-closed default
+      - name: mvn verify
+        run: mvn -B -ntp verify
+      - name: Keep test and coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            blockchain-java/target/surefire-reports/
+            blockchain-java/target/site/jacoco/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  harness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: check.py self-test
+        run: python harness/fault-injection/check.py --self-test
+      - name: Harness scripts parse
+        run: |
+          for f in harness/fault-injection/*.sh; do bash -n "$f" && echo "ok $f"; done
+
+  dependencies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - name: CycloneDX SBOM
+        run: mvn -B -ntp -Paudit-sbom -DskipTests org.cyclonedx:cyclonedx-maven-plugin:makeBom
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: blockchain-java/target/bom.*
+          if-no-files-found: warn
+      # Report-only until the first runs are reviewed: known findings (see docs/UPGRADE_AUDIT.md U1)
+      # would otherwise fail every build. Make it blocking once the baseline is clean.
+      - name: OSV vulnerability report
+        continue-on-error: true
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src ghcr.io/google/osv-scanner:latest \
+            scan source --recursive /src | tee osv-report.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: osv-report
+          path: blockchain-java/osv-report.txt
+          if-no-files-found: ignore

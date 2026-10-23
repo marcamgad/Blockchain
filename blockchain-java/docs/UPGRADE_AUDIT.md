@@ -35,7 +35,7 @@ come from the code at `c0d23db` and the JaCoCo report of the last full `mvn veri
 
 | # | Item | Recommendation |
 |---|---|---|
-| P1 | **No CI** | GitHub Actions: `mvn -B verify` (tests and coverage floors), `py harness/fault-injection/check.py --self-test`, CycloneDX SBOM plus an OSV dependency scan. Already configured in the pom but not run automatically: SpotBugs/FindSecBugs and PIT. Run those weekly. |
+| P1 | **No CI** — *added 2026-10-23: `.github/workflows/ci.yml` and `weekly-audit.yml`; first runs pending* | GitHub Actions: `mvn -B verify` (tests and coverage floors), `py harness/fault-injection/check.py --self-test`, CycloneDX SBOM plus an OSV dependency scan. Already configured in the pom but not run automatically: SpotBugs/FindSecBugs and PIT. Run those weekly. |
 | P2 | Dependency updates are manual | Enable Dependabot or Renovate for Maven and Docker base images. Group minor updates, keep major ones manual. |
 | P3 | Live harness runs only by hand | Run the 4-validator harness nightly on a self-hosted runner (it needs Docker, and takes about an hour). |
 | P4 | Commit and branch practice | One maintainer, direct commits to `main`. Use branches and pull requests so CI gates every change. |
