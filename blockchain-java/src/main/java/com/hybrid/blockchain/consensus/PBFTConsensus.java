@@ -158,8 +158,6 @@ public class PBFTConsensus implements Consensus {
     private final Map<Long, Map<Phase, Map<String, PBFTMessage>>> messageLog;
 
     /** Async fast-path trackers: seq → path */
-    private final Map<Long, AsyncCommitPath> asyncPaths = new ConcurrentHashMap<>();
-    private volatile long lastFastPathSeq = -1;
 
     /** Blocks awaiting quorum: seq → block. */
     private final Map<Long, Block>     pendingBlocks  = new ConcurrentHashMap<>();
@@ -222,86 +220,9 @@ public class PBFTConsensus implements Consensus {
         resetTimer();
     }
 
-    // PAPER-IMPL: P1-A — RWA-BFT (Sensors 2025, DOI:10.3390/s25020413)
-    // Two-layer async BFT: high-rep committee can skip PREPARE (optimistic fast path)
-    private volatile boolean asyncEnabled = false;
-
-    public void setAsyncEnabled(boolean enabled) { this.asyncEnabled = enabled; }
-    public boolean isAsyncEnabled() { return asyncEnabled; }
-
-    /**
-     * Forms the high-reputation committee (layer-2) for async BFT.
-     * Only validators with reputation >= minRepThreshold are eligible.
-     *
-     * @paper RWA-BFT Sensors 2025, DOI:10.3390/s25020413 — two-layer BFT with reputation filtering
-     * @gap   HybridChain previously ran single-layer PBFT; all validators participated regardless of rep
-     */
-    public Map<String, byte[]> formCommittee(int minRepThreshold) {
-        Map<String, byte[]> committee = new LinkedHashMap<>();
-        List<String> sorted = new ArrayList<>(validators.keySet());
-        Collections.sort(sorted);
-        for (String id : sorted) {
-            double rep = fromScaled(validatorReputation.getOrDefault(id, REP_SCALE));
-            if (rep >= minRepThreshold) {
-                committee.put(id, validators.get(id));
-            }
-        }
-        log.debug("[PBFT] Committee formed: {}/{} validators with rep>={}",
-                committee.size(), validators.size(), minRepThreshold);
-        return committee;
-    }
-
-    /**
-     * Factory method: create an async commit path for the current round.
-     *
-     * @param minRepThreshold minimum reputation to be in the fast-path committee
-     */
-    public AsyncCommitPath createAsyncCommitPath(int minRepThreshold) {
-        return new AsyncCommitPath(formCommittee(minRepThreshold), timeoutMs);
-    }
-
-    /**
-     * Tracks the async fast-path state for a single consensus round.
-     * When ALL committee members send COMMIT within {@code timeoutMs/2},
-     * the next round may skip PREPARE entirely (optimistic path), achieving
-     * up to 2.3x PBFT throughput as shown in RWA-BFT benchmarks.
-     *
-     * @paper RWA-BFT Sensors 2025, DOI:10.3390/s25020413 — async BFT layer-2 fast path
-     * @novel Integrated with HybridChain's per-validator reputation scoring for dynamic committee formation
-     */
-    public class AsyncCommitPath {
-        private final Set<String> committee;
-        private final Set<String> fastCommits = ConcurrentHashMap.newKeySet();
-        private final long fastPathDeadline;
-        private volatile boolean fastPathActivated = false;
-
-        public AsyncCommitPath(Map<String, byte[]> committee, long timeoutMs) {
-            this.committee = new HashSet<>(committee.keySet());
-            this.fastPathDeadline = System.currentTimeMillis() + timeoutMs / 2;
-        }
-
-        /**
-         * Record a commit vote from a committee member.
-         * @return true if the fast path was just activated by this vote
-         */
-        public boolean recordCommit(String validatorId) {
-            if (!committee.contains(validatorId)) return false;
-            fastCommits.add(validatorId);
-            if (!fastPathActivated
-                    && System.currentTimeMillis() <= fastPathDeadline
-                    && fastCommits.containsAll(committee)) {
-                fastPathActivated = true;
-                log.info("[PBFT-ASYNC] Fast path ACTIVATED: all {} committee members committed within half-timeout",
-                        committee.size());
-            }
-            return fastPathActivated;
-        }
-
-        public boolean isFastPathActivated() { return fastPathActivated; }
-        public int getCommitCount() { return fastCommits.size(); }
-        public int getCommitteeSize() { return committee.size(); }
-        public Set<String> getCommittee() { return Collections.unmodifiableSet(committee); }
-    }
+    // [HC-092] The RWA-BFT "async fast path" (COMMIT without a PREPARE quorum, committee chosen by
+    // node-local reputation and a wall-clock deadline) was removed: without a prepared certificate a
+    // NEW_VIEW could replace an already committed block. See NoFastPathTest.
 
     private void initReputation() {
         for (String id : validators.keySet()) {
@@ -633,20 +554,9 @@ public class PBFTConsensus implements Consensus {
                       return msg;
                   });
 
-        // Track fast-path committee commits
-        if (asyncEnabled) {
-            AsyncCommitPath path = asyncPaths.computeIfAbsent(seq, k -> createAsyncCommitPath(0)); // Default minRep=0 for tracking
-            if (path.recordCommit(validatorId)) {
-                lastFastPathSeq = seq;
-            }
-        }
         log.debug("[PBFT] COMMIT from {} seq={}", validatorId, seq);
     }
 
-    /** Returns true if the optimistic fast-path is active for this sequence. */
-    public boolean isFastPathActive(long seq) {
-        return asyncEnabled && lastFastPathSeq == seq - 1;
-    }
 
     /**
      * Checks whether phase has reached 2f+1 votes <b>for a single block hash</b>.

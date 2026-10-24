@@ -307,13 +307,6 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
 
                         pbft.setPendingBlock(seq, block);
 
-                        // [PHASE-1] P1-A: Async Fast Path
-                        if (pbft.isFastPathActive(seq)) {
-                            log.info("[PBFT-ASYNC] Fast path active for seq {}. Skipping PREPARE.", seq);
-                            sendCommit(pbft, seq, hash, view);
-                            return;
-                        }
-
                         // Generate and send PREPARE
                         PBFTConsensus.PBFTMessage prepMsg = new PBFTConsensus.PBFTMessage(
                                 PBFTConsensus.Phase.PREPARE, view, seq, hash, localAddress);
