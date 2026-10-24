@@ -386,6 +386,12 @@ hash(sender, type, payload):
 
 They are now delivered point-to-point after the origin check.
 
+**Verified live after the fixes:** all 13 phases passed in both runs.
+- `20261024T205908Z-N4` (4 validators). One caveat: pumba failed to remove the 10 % loss after `loss/during`, so v1–v3 ran the later phases under that loss. This was confirmed with `tc qdisc`, and the harness now checks for leftover rules (`fae91f8`).
+- `20261024T215848Z-N7` (7 validators), with the leftover-rule check active and passing: no network-fault rule remained on any node.
+
+Both runs are single-host Docker networks, so C-12 (multi-machine) is still open.
+
 **Harness bug found in the same run:** the clock-skew phases never applied a skew. Git Bash had
 rewritten `LD_PRELOAD` to a Windows path; fixed in `be5931e`. The skew check itself worked: it
 reported the missing skew instead of passing.
