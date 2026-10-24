@@ -71,6 +71,12 @@ public final class Config {
     public static final long READING_ORDER_ACTIVATION_HEIGHT = 0L;
 
     /**
+     * [HC-098] From this height WASM contracts with float or SIMD types/instructions are refused at
+     * deployment and execution (non-deterministic NaN bits across CPUs). 0 = every new network.
+     */
+    public static final long WASM_FLOAT_BAN_ACTIVATION_HEIGHT = 0L;
+
+    /**
      * [O-6] Protocol constant (not an environment flag: a per-node setting would change validity).
      * PRIVATE_TRANSFER moves no value, so it is rejected. Consensus rule: a chain that already
      * contains PRIVATE_TRANSFER transactions cannot be replayed by nodes with this rule.

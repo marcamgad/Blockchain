@@ -78,6 +78,11 @@ public class WasmContractEngine {
      * @throws Exception       on any other execution failure
      */
     public void execute(String functionName, List<Long> args) throws Exception {
+        // [HC-098] defence in depth: never execute a module with float/SIMD features
+        List<String> nonDet = WasmDeterminism.nonDeterministicFeatures(wasmBinary);
+        if (!nonDet.isEmpty()) {
+            throw new RevertException("[HC-098] WASM module uses non-deterministic features: " + nonDet.get(0));
+        }
         ExecutorService executor = Executors.newSingleThreadExecutor();
         try {
             Future<Void> future = executor.submit(() -> {

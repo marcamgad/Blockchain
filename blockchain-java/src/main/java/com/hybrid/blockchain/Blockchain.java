@@ -388,6 +388,16 @@ public class Blockchain {
                     if (!Config.ENABLE_SMART_CONTRACTS)
                         throw new Exception("Contracts disabled");
 
+                    // [HC-098] deterministic WASM only; NOT subject to the (test-only) audit bypass
+                    if (tx.getTo() == null && tx.getData() != null && isWasm(tx.getData())
+                            && state.getBlockHeight() >= Config.WASM_FLOAT_BAN_ACTIVATION_HEIGHT) {
+                        java.util.List<String> nonDet = WasmDeterminism.nonDeterministicFeatures(tx.getData());
+                        if (!nonDet.isEmpty()) {
+                            throw new Exception("[HC-098] WASM contract uses non-deterministic features (float/SIMD): "
+                                    + String.join(", ", nonDet.subList(0, Math.min(5, nonDet.size()))));
+                        }
+                    }
+
                     // [SECURITY] Audit check for contract creation
                     if (tx.getTo() == null && tx.getData() != null && tx.getData().length > 0) {
                         if (!Config.BYPASS_CONTRACT_AUDIT) {
