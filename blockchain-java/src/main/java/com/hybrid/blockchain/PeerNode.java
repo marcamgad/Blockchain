@@ -394,6 +394,8 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                             // [HC-046] applyBlock -> verifyBlock requires the commit certificate
                             blockchain.applyBlock(b);
                             recordPeerHeight(msg.getSenderId(), b.getIndex());
+                            if (consensus instanceof PBFTConsensus)   // [HC-105] catch up with the network's view
+                                ((PBFTConsensus) consensus).adoptViewFromCertificate(b);
                         } catch (Exception ve) {
                             log.warn("[P2P] Sync block {} rejected: {}", b.getIndex(), ve.getMessage());
                             peerManager.updatePeerScore(msg.getSenderId(), -5.0);

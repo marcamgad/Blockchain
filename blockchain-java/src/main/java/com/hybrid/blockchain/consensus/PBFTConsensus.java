@@ -373,6 +373,30 @@ public class PBFTConsensus implements Consensus {
         return valid.size() >= quorumSize();
     }
 
+    /**
+     * [HC-105] Joins the view of a valid commit certificate when it is later than this node's. A
+     * node that restarted (or was cut off) in an older view refused the current leader's proposals
+     * and signed votes for the wrong view; nothing moved it forward. A valid certificate from view V
+     * holds q signatures, so at least f + 1 honest validators have reached V, and honest views only
+     * increase: joining V is safe (the PBFT "join on f + 1" rule). Leaders are round-robin
+     * ({@link #selectLeader(long)}), so no reputation update is involved.
+     *
+     * @return true if the view moved forward
+     */
+    public synchronized boolean adoptViewFromCertificate(Block block) {
+        if (block == null || block.getCommitCertificate() == null || block.getCommitCertificate().isEmpty()) return false;
+        List<Block.CommitSignature> cert = block.getCommitCertificate();
+        if (!singleView(cert) || !verifyCommitCertificate(block)) return false;
+        long certView = -1;
+        for (Block.CommitSignature cs : cert) if (cs != null) { certView = cs.view; break; }
+        if (certView <= viewNumber) return false;
+        log.info("[PBFT] View {} -> {} from the commit certificate of block {} (seq {})", viewNumber, certView, block.getHash(), block.getIndex());
+        viewNumber = certView;
+        persistSigningRecord();   // [HC-095] a restart resumes in this view
+        resetTimer();             // the current leader gets a full period from this node
+        return true;
+    }
+
     /** [HC-102] True if every signature in the list is from the same view. */
     private static boolean singleView(List<Block.CommitSignature> sigs) {
         Long view = null;
