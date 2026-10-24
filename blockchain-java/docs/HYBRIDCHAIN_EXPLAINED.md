@@ -7,7 +7,7 @@ A complete guide to what HybridChain is, why it exists, how every part works, an
 | **Project** | HybridChain (`blockchain-java`) |
 | **Language / stack** | Java 17, Maven, Spring Boot 3.5.16, BouncyCastle 1.86, LevelDB, Chicory WASM 1.0.0 |
 | **Entry point** | `com.hybrid.App` |
-| **Size** | 96 main source files (about 21,400 lines), 157 test files, 695 tests |
+| **Size** | 92 main source files (about 21,600 lines), about 180 test files, 720+ tests |
 | **Status** | Ready for a private testnet or supervised pilot. Not yet ready for production or for a public cryptocurrency. |
 | **Written** | 21 October 2026, after two security-audit rounds |
 
@@ -165,7 +165,7 @@ Set with `NODE_ROLE` (`Config.NodeRole`):
 9. **Start the P2P node** with its CA-signed certificate, connect PBFT to it, and load the on-chain jail list into consensus.
 10. **Register the equivocation reporter**: if this node sees a validator vote twice, it submits on-chain evidence automatically.
 11. **Start the block proposer** (every `TARGET_BLOCK_TIME_MS`, default 60 s). When this node is the leader, it builds, signs and broadcasts a block.
-12. **Seed nodes** (`IS_SEED=true`) broadcast their peer list every 30 seconds.
+12. **Every node** broadcasts its peer list every 30 seconds and dials discovered peers, so the network is a mesh, not a star around the seed (HC-084). A node without peers redials its seed every 10 seconds (HC-080).
 13. **Start the REST API** (Spring Boot on `API_PORT`, default 8080). If it fails, the node exits instead of running half-alive (HC-009).
 
 A legacy launcher, `com.hybrid.blockchain.App`, still exists but is not the packaged entry point.
@@ -190,7 +190,7 @@ A legacy launcher, `com.hybrid.blockchain.App`, still exists but is not the pack
 | `signature` | Proposer's signature over the block hash. |
 | `commitCertificate` | The COMMIT signatures of a quorum of validators. **Not** part of the hash (the voters sign the hash). It lets any node, including one that is syncing later, prove the block is final. |
 
-The block's canonical encoding is binary and length-prefixed, with a `BLOCK\0` domain prefix, so it cannot be confused with any other signed message.
+The block's canonical encoding is binary and length-prefixed; its SHA-256 is the block hash. The proposer signs `hashWithDomain("HYBRIDCHAIN-BLOCK-SIG-v1", blockHash, validatorId)`, so the signature can't be confused with any other signed message and covers the proposer id (HC-091).
 
 ### Transaction (`Transaction.java`)
 
@@ -222,7 +222,7 @@ The state contains:
 - **Spent nullifiers**: for zero-knowledge and one-time proofs.
 - **Jailed validators**: validators punished by on-chain evidence.
 
-**State root** = hash of (account trie root, identity hash, device hash, nullifier hash, and, once non-empty, the jail-list hash). Collections are sorted before hashing, so every node computes the same bytes.
+**State root** (v2, HC-090) = `hashWithDomain("HYBRIDCHAIN-STATE-ROOT-v2", account trie root, H(identity), H(devices), H(nullifiers), H(jail list), H(sensor readings))`. The identity, device, nullifier and jail parts are hashed in a canonical binary encoding (`CanonicalEncoding`), not as JSON text, so a JSON library upgrade can't change roots. A golden test (`StateRootV2Test`) guards it.
 
 ### UTXO set (`UTXOSet.java`)
 
@@ -306,7 +306,7 @@ Earlier versions weighted the choice by reputation. Reputation is node-local: no
 ### Normal case
 
 1. **Proposal.** The leader broadcasts a signed block.
-2. **PREPARE.** Each validator that accepts the proposal signs PREPARE(view, height, hash).
+2. **PREPARE.** Each validator accepts a proposal only from the **leader of its current view**, and signs **at most one** PREPARE per (view, height) (HC-087). A second, different proposal at that height is ignored, so an honest validator can never produce equivocation evidence against itself.
 3. **COMMIT.** When a validator sees 2f+1 PREPAREs for the same hash, it signs COMMIT for **that** hash. It never commits two different blocks at one height in one view.
 4. **Apply.** When 2f+1 COMMITs for the same hash exist, the block is applied, and its commit certificate is attached and stored.
 
@@ -323,7 +323,7 @@ Before HC-046, one leader's signature was enough. That was the most serious cons
 
 ### View change and NEW_VIEW (leader failure)
 
-If no block commits within the timeout (15 s), validators send VIEW_CHANGE for the next view. Each one carries a **prepared proof**: the block this validator saw prepared, with its 2f+1 PREPARE signatures. When the new leader has 2f+1 view changes, it sends a signed **NEW_VIEW**. NEW_VIEW contains those view changes and re-proposes the prepared block with the highest view, or nothing if none was prepared. Every node re-derives that choice and rejects a NEW_VIEW that proposes anything else. This guarantees that a block committed anywhere is never replaced, and that the chain does not stall when a leader dies at the wrong moment.
+If no block commits within the timeout (135 s, then 270, 540 and 1,080 s with back-off, HC-083), validators send VIEW_CHANGE for the next view. Each one carries a **prepared proof**: the block this validator saw prepared, with its 2f+1 PREPARE signatures. When the new leader has 2f+1 view changes, it sends a signed **NEW_VIEW**. NEW_VIEW contains those view changes and re-proposes the prepared block with the highest view, or nothing if none was prepared. Every node re-derives that choice and rejects a NEW_VIEW that proposes anything else. This guarantees that a block committed anywhere is never replaced, and that the chain does not stall when a leader dies at the wrong moment.
 
 ### Misbehaviour: equivocation evidence
 
@@ -363,7 +363,7 @@ Every 1,000 blocks, validators sign a checkpoint (height, block hash, state root
 
 ## 10. Storage
 
-`Storage.java` uses **LevelDB**. Every value is encrypted with **AES-GCM**, and the record's key is bound in as authenticated data, so an encrypted value cannot be moved under a different key (HC-041). Keys themselves are hashed before use.
+`Storage.java` uses **LevelDB**. Every value is encrypted with **AES-GCM**, and the record's key is bound in as authenticated data, so an encrypted value cannot be moved under a different key (HC-041). Keys are stored as they are (not hashed). All writes of one block go into one atomic batch, and a store whose state doesn't match its tip is refused at start-up (HC-089).
 
 | Key pattern | Content |
 |---|---|
@@ -418,8 +418,8 @@ These numbers are counted in the smallest unit, so the coin has **no decimals**:
 An EIP-1559-style fee market:
 
 - a **base fee** that rises when blocks are fuller than the target (half the maximum) and falls when they are emptier, changing by at most 1/8 per block;
-- the base-fee part is **burned**;
-- any amount above the base fee goes to the block proposer;
+- every signed transaction pays at least the base fee;
+- **the whole fee goes to the block proposer** (nothing is burned);
 - the base fee is consensus state and is rolled back correctly on fork revert (HC-022).
 
 ### Fee estimate
@@ -523,7 +523,7 @@ Readings are stored per device and per block. They can be read through `GET /api
 | CoAP | `api/CoAPAdapter.java` | `/health`, `/balance?address=`, `/tx` (a signed transaction), `/telemetry` (a device-signed reading). Rate limit per sender. |
 | Private data | `privacy/PrivateDataCollection.java` | Encrypted data readable by authorized members, with public hashes for integrity. |
 
-Note: older copies of the MQTT and CoAP adapters also exist in the `iot` package. The ones in `api` are the current ones.
+The CoAP server runs only on `NODE_ROLE=GATEWAY` nodes.
 
 ### Hardware abstraction (`HardwareManager.java`)
 
@@ -622,7 +622,7 @@ Every setting can be given as an environment variable or a Java system property 
 | `NETWORK_ID` | 101 | Chain ID inside every transaction. |
 | `NODE_ROLE` | `OBSERVER` | `VALIDATOR`, `OBSERVER`, `GATEWAY` or `LIGHT`. |
 | `IS_SEED` / `SEED_PEER` | false / none | Seed-node behaviour and the seed to contact. |
-| `MIN_PEERS` | see `PeerManager` | Minimum peers for gossip (HC-001). |
+| `MIN_PEERS` | 1 | Minimum peers for gossip (HC-001). |
 | `MAX_BLOCKS` | 0 (keep all) | Keep only the last N blocks (`PrunedBlockchain`). |
 | `REQUIRE_QUANTUM_SIG` | true | Require the ML-DSA signature on transactions. Must be the same on every node. |
 | `MIN_FL_CONTRIBUTORS` | 3 | Minimum contributors for a federated-learning round. |
@@ -649,12 +649,12 @@ mvn -o test -Dtest=HybridChainAuditPoCTest -Daudit.excluded=none
 mvn -o package -DskipTests
 
 # Run a node (values from your own .env)
-java -jar target/blockchain-java-1.0-SNAPSHOT-jar-with-dependencies.jar
+java -jar target/blockchain-java-1.0-SNAPSHOT.jar   # the Spring Boot jar; the jar-with-dependencies is not runnable
 ```
 
 Docker: the `Dockerfile` copies the jar, exposes ports 6001 and 8000, and runs as the unprivileged user `hybrid` (HC-076). Port 8000 works because the compose file sets `API_PORT=8000`; without it the API listens on 8080. `docker-compose.20nodes.yml` describes a 20-node test network.
 
-Test suite: 695 tests (unit, integration, Byzantine fault injection, pentests, and the audit proofs), with 74.2% line coverage and 60.6% branch coverage. A TLA+ model of leader selection lives in `docs/formal/`.
+Test suite: 720+ tests (unit, integration, Byzantine fault injection, pentests, and the audit proofs), about 75% line and 63% branch coverage, run by CI on every push. A TLA+ model of leader selection lives in `docs/formal/`.
 
 ---
 
@@ -737,13 +737,12 @@ All paths are under `src/main/java/com/hybrid/`.
 | `blockchain/identity/` | DIDs, SSI manager, verifiable credentials. |
 | `blockchain/lifecycle/` | Device lifecycle and device-signed readings. |
 | `blockchain/privacy/` | Zero-knowledge proofs and private data collections. |
-| `blockchain/ai/` | Federated learning, differential privacy, anomaly detection, threat scoring, contract auditor, proof of inference. |
+| `blockchain/ai/` | Federated learning, differential privacy, anomaly detection, threat scoring, contract auditor. |
 | `blockchain/reputation/` | Device reputation (the ZK eligibility gate was removed, O-7). |
 | `blockchain/governance/` | Council voting (not wired in). |
 | `blockchain/monitoring/` | Metrics and the Prometheus bridge. |
 | `blockchain/audit/` | Audit logging. |
-| `blockchain/iot/` | Older MQTT and CoAP adapters, and IoT state channels. |
-| `blockchain/tools/KeygenTool.java`, `examples/` | Key generator and examples. |
+| `blockchain/tools/KeygenTool.java` | Key generator. |
 
 Other important folders:
 
