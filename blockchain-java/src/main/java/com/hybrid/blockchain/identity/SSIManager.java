@@ -258,15 +258,22 @@ public class SSIManager {
                 for (Map.Entry<String, Object> entry : registryMap.entrySet()) {
                     DecentralizedIdentifier didDoc = mapper.convertValue(entry.getValue(), DecentralizedIdentifier.class);
                     manager.didRegistry.put(entry.getKey(), didDoc);
+                }
+            }
+
+            // [HC-093] the persisted device -> DID map is authoritative. It used to be rebuilt from the
+            // registry for EVERY DID, so a device whose DID was revoked (and unmapped) was mapped
+            // again after a restart: a different state root, and different validity for
+            // re-registering that device, on restarted nodes. Derive it only for data without it.
+            if (json.containsKey("deviceToDID")) {
+                Map<String, String> mappings = mapper.convertValue(json.get("deviceToDID"), new TypeReference<Map<String, String>>() {});
+                manager.deviceToDID.putAll(mappings);
+            } else {
+                for (DecentralizedIdentifier didDoc : manager.didRegistry.values()) {
                     if (didDoc != null && didDoc.getDeviceId() != null && didDoc.getDid() != null) {
                         manager.deviceToDID.put(didDoc.getDeviceId(), didDoc.getDid());
                     }
                 }
-            }
-
-            if (json.containsKey("deviceToDID")) {
-                Map<String, String> mappings = mapper.convertValue(json.get("deviceToDID"), new TypeReference<Map<String, String>>() {});
-                manager.deviceToDID.putAll(mappings);
             }
 
             // Restore Credentials
