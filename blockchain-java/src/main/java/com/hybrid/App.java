@@ -104,6 +104,7 @@ public class App {
 
         // 12. Call pbft.setMessenger(peerNode)
         pbft.setMessenger(peerNode);
+        blockchain.setTransactionBroadcaster(peerNode::broadcastTransaction);   // [HC-104] client transactions are gossiped
 
         // [O-5] consensus follows the on-chain jail set; a double vote this node observes is
         // reported on-chain so that every node jails the validator, not only this one
@@ -115,8 +116,7 @@ public class App {
             try {
                 Transaction tx = com.hybrid.blockchain.consensus.EvidenceTransactions.build(ev, privKey, nodeMldsa,
                         blockchain.getNonce(nodeId) + 1, Math.max(1, blockchain.getCurrentBaseFee()));
-                blockchain.addTransaction(tx);
-                peerNode.broadcastTransaction(tx);
+                blockchain.submitTransaction(tx);
                 log.warn("[SLASH] Submitted equivocation evidence against {} as tx {}", ev.validatorId, tx.getTxid());
             } catch (Exception e) {
                 log.warn("[SLASH] Could not submit evidence against {}: {}", ev.validatorId, e.getMessage());

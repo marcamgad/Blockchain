@@ -32,10 +32,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @SpringBootTest(classes = {IoTRestAPI.class, SecurityConfig.class, JwtAuthFilter.class, MDCCorrelationInterceptor.class})
 @AutoConfigureMockMvc
+// IoTRestAPI copies the static node at construction: a context cached from another test class would hold that class's chain
+@org.springframework.test.annotation.DirtiesContext(classMode = org.springframework.test.annotation.DirtiesContext.ClassMode.BEFORE_CLASS)
 class ChallengeLoginTest {
 
+    private static final com.hybrid.blockchain.Blockchain CHAIN = org.mockito.Mockito.mock(com.hybrid.blockchain.Blockchain.class);
+
     static {
-        com.hybrid.blockchain.Blockchain b = org.mockito.Mockito.mock(com.hybrid.blockchain.Blockchain.class);
+        com.hybrid.blockchain.Blockchain b = CHAIN;
         org.mockito.Mockito.when(b.getMempool()).thenReturn(org.mockito.Mockito.mock(com.hybrid.blockchain.Mempool.class));
         org.mockito.Mockito.when(b.getStorage()).thenReturn(org.mockito.Mockito.mock(com.hybrid.blockchain.Storage.class));
         IoTRestAPI.setNode(b, null, null);
@@ -109,6 +113,22 @@ class ChallengeLoginTest {
         Map<String, Object> ok = signed(hq, ec.getPublicKey(), ec.getPrivateKey(), challenge(hq));
         ok.put("mldsaPublicKey", HexUtils.encode(pq.getPublic().getEncoded()));
         login(ok).andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("[HC-104] submit-signed hands the transaction to submitTransaction (validate + propagate)")
+    void submitSignedPropagates() throws Exception {
+        TestKeyPair k = new TestKeyPair(8505);
+        com.hybrid.blockchain.Transaction tx = new com.hybrid.blockchain.Transaction.Builder()
+                .type(com.hybrid.blockchain.Transaction.Type.ACCOUNT).from(k.getAddress()).to("hb" + "00".repeat(20))
+                .amount(1).fee(1).nonce(1).sign(k.getPrivateKey(), k.getPublicKey());
+        com.hybrid.blockchain.Blockchain chain = CHAIN;
+        org.mockito.Mockito.when(chain.deserializeTransaction(org.mockito.ArgumentMatchers.any())).thenReturn(tx);
+        String token = new JwtManager().issueToken(k.getAddress());
+        mvc.perform(post("/api/v1/transactions/submit-signed").header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isOk());
+        org.mockito.Mockito.verify(chain).submitTransaction(tx);
     }
 
     @Test

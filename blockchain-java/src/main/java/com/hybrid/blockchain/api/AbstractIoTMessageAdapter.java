@@ -115,7 +115,7 @@ public abstract class AbstractIoTMessageAdapter implements IoTMessageAdapter {
                 .nonce(nonce)
                 .sign(privKey, pubKey);
 
-        blockchain.addTransaction(tx);
+        blockchain.submitTransaction(tx);   // [HC-104] admit and gossip
         log.info("Submitted {} tx {} for device {}", type, tx.getTxid(), deviceId);
         return tx.getTxid();
     }
@@ -139,7 +139,7 @@ public abstract class AbstractIoTMessageAdapter implements IoTMessageAdapter {
         if (!allowIngress(tx.getFrom())) {
             throw new RateLimitedException("Ingress rate limit exceeded for " + tx.getFrom());
         }
-        blockchain.addTransaction(tx);
+        blockchain.submitTransaction(tx);   // [HC-104] admit and gossip
         log.info("Relayed signed {} tx {} from {}", tx.getType(), tx.getTxid(), tx.getFrom());
         return tx.getTxid();
     }

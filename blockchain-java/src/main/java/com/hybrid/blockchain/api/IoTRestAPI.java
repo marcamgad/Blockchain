@@ -320,7 +320,7 @@ public class IoTRestAPI {
             return ResponseEntity.status(429).body(Map.of("error", "Rate limit exceeded"));
         }
         try {
-            blockchain.addTransaction(tx);
+            blockchain.submitTransaction(tx);   // [HC-104] admit and gossip
         } catch (Exception e) {
             String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             int status = msg.toLowerCase().contains("rate limit") ? 429 : 400;

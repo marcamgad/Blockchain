@@ -37,6 +37,7 @@ public class Blockchain {
     private TokenRegistry tokenRegistry;
     private com.hybrid.blockchain.api.EventBus eventBus;
     private PeerNode peerNode;
+    private volatile java.util.function.Consumer<Transaction> txBroadcaster;
     private long totalMinted = 0;
     /**
      * [HC-024] Storage side effects of the block being applied (receipts, indexes, telemetry,
@@ -82,6 +83,8 @@ public class Blockchain {
     public com.hybrid.blockchain.api.EventBus getEventBus() { return eventBus; }
     public void setEventBus(com.hybrid.blockchain.api.EventBus eventBus) { this.eventBus = eventBus; }
     public void setPeerNode(PeerNode peerNode) { this.peerNode = peerNode; }
+    /** [HC-104] how {@link #submitTransaction} gossips a client transaction (the node's PeerNode). */
+    public void setTransactionBroadcaster(java.util.function.Consumer<Transaction> broadcaster) { this.txBroadcaster = broadcaster; }
     public DeviceLifecycleManager getDeviceLifecycleManager() { return state.getDeviceLifecycleManager(); }
     public void setMonitor(com.hybrid.blockchain.monitoring.BlockchainMonitor monitor) { this.monitor = monitor; }
     public com.hybrid.blockchain.monitoring.BlockchainMonitor getMonitor() { return monitor; }
@@ -1145,6 +1148,19 @@ public class Blockchain {
                     block.getHash(), block.getIndex(), e.getMessage());
             throw e;
         }
+    }
+
+    /**
+     * [HC-104] Entry point for transactions from clients (REST, CoAP, MQTT): admit the transaction
+     * to the local mempool, then gossip it to the peers. Before this, a client transaction stayed in
+     * the mempool of the node it was sent to and was only included when that node led a view.
+     * Transactions received by gossip use {@link #addTransaction} (the gossip layer relays them).
+     */
+    public boolean submitTransaction(Transaction tx) throws Exception {
+        boolean added = addTransaction(tx);
+        java.util.function.Consumer<Transaction> b = txBroadcaster;
+        if (added && b != null) b.accept(tx);   // outside the write lock
+        return added;
     }
 
     // Add transaction to pending pool
