@@ -103,7 +103,7 @@ class LedgerPropertyTest {
                 Block bad = new Block(good.getIndex(), good.getTimestamp(), good.getTransactions(), good.getPrevHash(),
                         good.getDifficulty(), Crypto.bytesToHex(rnd(r, 32)));
                 bad.setValidatorId(good.getValidatorId());
-                bad.setSignature(Crypto.sign(Crypto.hash(bad.serializeCanonical()), LedgerPoCFixture.VALIDATORS[0].getPrivateKey()));
+                bad.setSignature(Crypto.sign(bad.signingDigest(), LedgerPoCFixture.VALIDATORS[0].getPrivateKey()));
                 try { f.commitAndApply(bad); } catch (Exception expected) { }
                 assertThat(f.chain.getState().calculateStateRoot()).as("seed=%d", seed).isEqualTo(rootBefore);
                 assertThat(f.chain.getState().getBalance(users[0].getAddress())).isEqualTo(b0);

@@ -4,7 +4,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 public class Block {
-    private static final byte[] DOMAIN_PREFIX = "BLOCK\0".getBytes(StandardCharsets.UTF_8);
 
     public int index;
     public long timestamp;
@@ -67,6 +66,25 @@ public class Block {
             leaves.add(Crypto.hash(tx.serializeCanonical()));
         }
         return Crypto.bytesToHex(MerkleTree.computeRoot(leaves));
+    }
+
+    /**
+     * [HC-091] What the proposer signs: hashWithDomain("HYBRIDCHAIN-BLOCK-SIG-v1", blockHash,
+     * validatorId). Before, the proposer signed the bare block hash (SHA-256 of the header): the
+     * only signed structure without a domain tag, and the proposer id was not covered. Blocks below
+     * {@link Config#BLOCK_SIG_V2_ACTIVATION_HEIGHT} keep the old form.
+     */
+    public byte[] signingDigest() {
+        byte[] headerHash = Crypto.hash(serializeCanonical());
+        if (index < Config.BLOCK_SIG_V2_ACTIVATION_HEIGHT) return headerHash;
+        return Crypto.hashWithDomain("HYBRIDCHAIN-BLOCK-SIG-v1", headerHash,
+                (validatorId == null ? "" : validatorId).getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** [HC-091] Signs as proposer; set {@code validatorId} first (it is part of the signed digest). */
+    public void sign(java.math.BigInteger privateKey) {
+        if (validatorId == null) throw new IllegalStateException("set validatorId before signing a block");
+        this.signature = Crypto.sign(signingDigest(), privateKey);
     }
 
     public String calculateHash() {

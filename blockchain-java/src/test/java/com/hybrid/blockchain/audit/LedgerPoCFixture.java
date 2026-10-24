@@ -108,7 +108,7 @@ final class LedgerPoCFixture implements AutoCloseable {
         if (fees > 0) s.credit(v.getAddress(), fees);
         Block b = new Block(idx, ts, new ArrayList<>(txs), prev.getHash(), c.getDifficulty(), s.calculateStateRoot());
         b.setValidatorId(v.getAddress());
-        b.setSignature(Crypto.sign(Crypto.hash(b.serializeCanonical()), v.getPrivateKey()));
+        b.setSignature(Crypto.sign(b.signingDigest(), v.getPrivateKey()));
         return b;
     }
 

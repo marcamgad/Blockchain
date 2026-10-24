@@ -130,7 +130,7 @@ public class App {
                         Block block = blockchain.createBlock(localId, Config.MAX_TRANSACTIONS_PER_BLOCK);
 
                         // Sign the block with our private key
-                        byte[] sig = Crypto.sign(Crypto.hash(block.serializeCanonical()), privateKey);
+                        byte[] sig = Crypto.sign(block.signingDigest(), privateKey);
                         block.setSignature(sig);
                         // Recalculate hash after signature is set
                         block.setHash(block.calculateHash());

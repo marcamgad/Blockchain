@@ -300,7 +300,7 @@ public class PBFTConsensus implements Consensus {
             return false;
         }
 
-        if (!Crypto.verify(Crypto.hash(block.serializeCanonical()), block.getSignature(), leaderPubKey)) {
+        if (!Crypto.verify(block.signingDigest(), block.getSignature(), leaderPubKey)) {
             log.warn("[PBFT] Invalid leader signature on block {}", blockHash);
             return false;
         }
@@ -343,7 +343,7 @@ public class PBFTConsensus implements Consensus {
         if (block == null || block.getValidatorId() == null || block.getSignature() == null) return false;
         byte[] proposerKey = validators.get(block.getValidatorId());
         if (proposerKey == null) return false;
-        return Crypto.verify(Crypto.hash(block.serializeCanonical()), block.getSignature(), proposerKey);
+        return Crypto.verify(block.signingDigest(), block.getSignature(), proposerKey);
     }
 
     /**

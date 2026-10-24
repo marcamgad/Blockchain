@@ -80,7 +80,7 @@ class CommitCertificateTest {
             Block last = t.getBlockchain().getLatestBlock();
             Block p = new Block(last.getIndex() + 1, last.getTimestamp() + 1, List.of(), last.getHash(), 1, "root");
             p.setValidatorId(t.getValidatorKey().getAddress());
-            p.setSignature(Crypto.sign(Crypto.hash(p.serializeCanonical()), new TestKeyPair(99).getPrivateKey()));
+            p.setSignature(Crypto.sign(p.signingDigest(), new TestKeyPair(99).getPrivateKey()));
             assertThatThrownBy(() -> t.getBlockchain().validateBlock(p)).hasMessageContaining("Invalid proposer signature");
         }
     }

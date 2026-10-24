@@ -54,7 +54,7 @@ public class SecurityAttackCompleteTest {
         TestKeyPair rogue = new TestKeyPair(666);
         Block b = new Block(1, System.currentTimeMillis(), List.of(), blockchain.getLatestBlock().getHash(), 1, "state");
         b.setValidatorId(rogue.getAddress());
-        b.setSignature(Crypto.sign(Crypto.hash(b.serializeCanonical()), rogue.getPrivateKey()));
+        b.setSignature(Crypto.sign(b.signingDigest(), rogue.getPrivateKey()));
         assertThatThrownBy(() -> blockchain.validateBlock(b)).hasMessageContaining("Unknown validator");
     }
 

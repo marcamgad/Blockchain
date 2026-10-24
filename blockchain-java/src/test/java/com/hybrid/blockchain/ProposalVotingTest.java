@@ -58,7 +58,7 @@ class ProposalVotingTest {
         Block b = new Block(tip.getIndex() + 1, timestamp, new ArrayList<>(), tip.getHash(), tip.getDifficulty(), tip.getStateRoot());
         b.setValidatorId(proposer.getAddress());
         b.setHash(b.calculateHash());
-        b.setSignature(Crypto.sign(Crypto.hash(b.serializeCanonical()), proposer.getPrivateKey()));
+        b.setSignature(Crypto.sign(b.signingDigest(), proposer.getPrivateKey()));
         return b;
     }
 

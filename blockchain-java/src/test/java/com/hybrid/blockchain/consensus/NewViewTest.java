@@ -59,7 +59,7 @@ class NewViewTest {
     private Block block(String proposer, String stateRoot) {
         Block b = new Block(1, 1_000L, List.of(), "00".repeat(32), 1, Crypto.bytesToHex(Crypto.hash(stateRoot.getBytes())));
         b.setValidatorId(proposer);
-        b.setSignature(Crypto.sign(Crypto.hash(b.serializeCanonical()), byId.get(proposer).getPrivateKey()));
+        b.setSignature(Crypto.sign(b.signingDigest(), byId.get(proposer).getPrivateKey()));
         return b;
     }
 

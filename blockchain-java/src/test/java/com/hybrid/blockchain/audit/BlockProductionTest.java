@@ -30,7 +30,7 @@ class BlockProductionTest {
 
             TestKeyPair producer = LedgerPoCFixture.VALIDATORS[0];
             Block b = f.chain.createBlock(producer.getAddress(), 100);
-            b.setSignature(Crypto.sign(Crypto.hash(b.serializeCanonical()), producer.getPrivateKey()));
+            b.setSignature(Crypto.sign(b.signingDigest(), producer.getPrivateKey()));
             assertThat(b.getTransactions()).extracting(Transaction::getId).contains(t1.getId(), t2.getId());
 
             f.commitAndApply(b);
@@ -58,7 +58,7 @@ class BlockProductionTest {
                 if (c.getHash().compareTo(good.getHash()) > 0) bad = c;
             }
             bad.setValidatorId(v0);
-            bad.setSignature(Crypto.sign(Crypto.hash(bad.serializeCanonical()), LedgerPoCFixture.VALIDATORS[0].getPrivateKey()));
+            bad.setSignature(Crypto.sign(bad.signingDigest(), LedgerPoCFixture.VALIDATORS[0].getPrivateKey()));
             f.consensus.markCommitted(bad.getHash(), bad.getIndex(), v0);
             Block badFinal = bad;
             org.assertj.core.api.Assertions.assertThatThrownBy(() -> f.chain.applyBlock(badFinal))
@@ -106,7 +106,7 @@ class BlockProductionTest {
 
             TestKeyPair producer = LedgerPoCFixture.VALIDATORS[0];
             Block b = f.chain.createBlock(producer.getAddress(), 100);
-            b.setSignature(Crypto.sign(Crypto.hash(b.serializeCanonical()), producer.getPrivateKey()));
+            b.setSignature(Crypto.sign(b.signingDigest(), producer.getPrivateKey()));
             f.commitAndApply(b);                               // must apply: no inapplicable tx included
             assertThat(f.chain.getState().getBalance("x")).isEqualTo(half);
         }

@@ -277,9 +277,9 @@ public class App {
                     Block block = blockchain.createBlock(nodeId, Config.MAX_TRANSACTIONS_PER_BLOCK);
 
                     // Sign block header
-                    byte[] headerSig = Crypto.sign(Crypto.hash(block.serializeCanonical()), privKey);
-                    block.setSignature(headerSig);
+                    // [HC-091] the proposer id is part of the signed digest: set it before signing
                     block.setValidatorId(nodeId);
+                    block.sign(privKey);
 
                     long seq = block.getIndex();
                     String hash = block.getHash();

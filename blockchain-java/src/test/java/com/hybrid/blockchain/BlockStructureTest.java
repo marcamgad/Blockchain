@@ -111,7 +111,7 @@ public class BlockStructureTest {
         Block last = blockchain.getLatestBlock();
         Block b = new Block(last.getIndex() + 1, last.getTimestamp() - 1, List.of(), last.getHash(), 1, "state");
         b.setValidatorId(tb.getValidatorKey().getAddress());
-        b.setSignature(Crypto.sign(Crypto.hash(b.serializeCanonical()), tb.getValidatorKey().getPrivateKey()));
+        b.setSignature(Crypto.sign(b.signingDigest(), tb.getValidatorKey().getPrivateKey()));
         
         assertThatThrownBy(() -> blockchain.applyBlock(b))
                 .hasMessageContaining("Block timestamp older than previous block");
@@ -124,7 +124,7 @@ public class BlockStructureTest {
         long future = System.currentTimeMillis() + (Config.MAX_TIMESTAMP_DRIFT_MS * 2);
         Block b = new Block(last.getIndex() + 1, future, List.of(), last.getHash(), 1, "state");
         b.setValidatorId(tb.getValidatorKey().getAddress());
-        b.setSignature(Crypto.sign(Crypto.hash(b.serializeCanonical()), tb.getValidatorKey().getPrivateKey()));
+        b.setSignature(Crypto.sign(b.signingDigest(), tb.getValidatorKey().getPrivateKey()));
         
         assertThatThrownBy(() -> blockchain.applyBlock(b))
                 .hasMessageContaining("Block timestamp too far in future");
@@ -136,7 +136,7 @@ public class BlockStructureTest {
         Block last = blockchain.getLatestBlock();
         Block b = new Block(last.getIndex() + 1, System.currentTimeMillis(), List.of(), "WRONG_HASH", 1, "state");
         b.setValidatorId(tb.getValidatorKey().getAddress());
-        b.setSignature(Crypto.sign(Crypto.hash(b.serializeCanonical()), tb.getValidatorKey().getPrivateKey()));
+        b.setSignature(Crypto.sign(b.signingDigest(), tb.getValidatorKey().getPrivateKey()));
         
         assertThatThrownBy(() -> blockchain.applyBlock(b))
                 .hasMessageContaining("prevHash does not chain");
@@ -162,7 +162,7 @@ public class BlockStructureTest {
         
         Block b = new Block(last.getIndex() + 1, System.currentTimeMillis(), txs, last.getHash(), 1, "state");
         b.setValidatorId(tb.getValidatorKey().getAddress());
-        b.setSignature(Crypto.sign(Crypto.hash(b.serializeCanonical()), tb.getValidatorKey().getPrivateKey()));
+        b.setSignature(Crypto.sign(b.signingDigest(), tb.getValidatorKey().getPrivateKey()));
         
         assertThatThrownBy(() -> blockchain.validateBlock(b))
                 .hasMessageContaining("exceeds limit");
@@ -189,7 +189,7 @@ public class BlockStructureTest {
         // parent + 1: a wall-clock read can equal the genesis millisecond (flaky "timestamp older" error)
         Block b = new Block(last.getIndex() + 1, last.getTimestamp() + 1, List.of(), last.getHash(), 1, "WRONG_STATE");
         b.setValidatorId(tb.getValidatorKey().getAddress());
-        b.setSignature(Crypto.sign(Crypto.hash(b.serializeCanonical()), tb.getValidatorKey().getPrivateKey()));
+        b.setSignature(Crypto.sign(b.signingDigest(), tb.getValidatorKey().getPrivateKey()));
         // [HC-046] a leader signature alone is no longer final; mark it committed to reach the state check
         tb.getConsensus().markCommitted(b.getHash(), b.getIndex(), tb.getValidatorKey().getAddress());
 
@@ -215,7 +215,7 @@ public class BlockStructureTest {
         Block last = blockchain.getLatestBlock();
         Block b = new Block(last.getIndex() + 1, System.currentTimeMillis(), List.of(), last.getHash(), 1, "state");
         b.setValidatorId(tb.getValidatorKey().getAddress());
-        b.setSignature(Crypto.sign(Crypto.hash(b.serializeCanonical()), tb.getValidatorKey().getPrivateKey()));
+        b.setSignature(Crypto.sign(b.signingDigest(), tb.getValidatorKey().getPrivateKey()));
         
         // Should not throw
         blockchain.validateBlock(b);

@@ -95,8 +95,7 @@ public class BlockApplier {
         block.setValidatorId(leader.getAddress());
         
         // Sign as leader
-        byte[] blockHash = Crypto.hash(block.serializeCanonical());
-        block.setSignature(Crypto.sign(blockHash, leader.getPrivateKey()));
+        block.setSignature(Crypto.sign(block.signingDigest(), leader.getPrivateKey()));
         
         String hash = block.getHash();
         

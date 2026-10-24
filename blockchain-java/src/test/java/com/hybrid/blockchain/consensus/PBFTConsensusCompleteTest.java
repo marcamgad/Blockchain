@@ -169,7 +169,7 @@ public class PBFTConsensusCompleteTest {
     void testValidateBlock() {
         Block block = new Block(1, System.currentTimeMillis(), new ArrayList<>(), "prev", 1, "state");
         block.setValidatorId(leaderKey.getAddress());
-        byte[] sig = Crypto.sign(Crypto.hash(block.serializeCanonical()), leaderKey.getPrivateKey());
+        byte[] sig = Crypto.sign(block.signingDigest(), leaderKey.getPrivateKey());
         block.setSignature(sig);
         
         // P1.11: Valid

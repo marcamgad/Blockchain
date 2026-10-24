@@ -396,7 +396,7 @@ public class HybridChainAuditPoCTest {
             com.hybrid.blockchain.Block b = f.chain.createBlock(LedgerPoCFixture.VALIDATORS[0].getAddress(), 100);
             b.setValidatorId(LedgerPoCFixture.VALIDATORS[0].getAddress());
             b.setHash(b.calculateHash());
-            b.setSignature(Crypto.sign(Crypto.hash(b.serializeCanonical()), LedgerPoCFixture.VALIDATORS[0].getPrivateKey()));
+            b.setSignature(Crypto.sign(b.signingDigest(), LedgerPoCFixture.VALIDATORS[0].getPrivateKey()));
             long mints = b.getTransactions().stream().filter(t -> t.getType() == Transaction.Type.MINT).count();
             String err = null;
             try { f.commitAndApply(b); } catch (Exception e) { err = e.getMessage(); }
@@ -685,7 +685,7 @@ public class HybridChainAuditPoCTest {
             com.hybrid.blockchain.Block bad = new com.hybrid.blockchain.Block(good.getIndex(), good.getTimestamp(),
                     good.getTransactions(), good.getPrevHash(), good.getDifficulty(), "ab".repeat(32)); // wrong root
             bad.setValidatorId(good.getValidatorId());
-            bad.setSignature(Crypto.sign(Crypto.hash(bad.serializeCanonical()),
+            bad.setSignature(Crypto.sign(bad.signingDigest(),
                     LedgerPoCFixture.VALIDATORS[0].getPrivateKey()));
             String err = null;
             try { f.commitAndApply(bad); } catch (Exception e) { err = e.getMessage(); }
@@ -710,7 +710,7 @@ public class HybridChainAuditPoCTest {
             com.hybrid.blockchain.Block bad = new com.hybrid.blockchain.Block(good.getIndex(), good.getTimestamp(),
                     good.getTransactions(), good.getPrevHash(), good.getDifficulty(), "cd".repeat(32));
             bad.setValidatorId(good.getValidatorId());
-            bad.setSignature(Crypto.sign(Crypto.hash(bad.serializeCanonical()),
+            bad.setSignature(Crypto.sign(bad.signingDigest(),
                     LedgerPoCFixture.VALIDATORS[0].getPrivateKey()));
             String err = null;
             try { f.commitAndApply(bad); } catch (Exception e) { err = e.getMessage(); }

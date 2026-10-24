@@ -39,7 +39,7 @@ class PbftEdgeCasesTest {
     private Block block(TestKeyPair proposer, String tag, int index) {
         Block b = new Block(index, 1_000L, List.of(), "00".repeat(32), 1, HexUtils.encode(Crypto.hash(tag.getBytes())));
         b.setValidatorId(proposer.getAddress());
-        b.setSignature(Crypto.sign(Crypto.hash(b.serializeCanonical()), proposer.getPrivateKey()));
+        b.setSignature(Crypto.sign(b.signingDigest(), proposer.getPrivateKey()));
         return b;
     }
 

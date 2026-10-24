@@ -59,6 +59,12 @@ public final class Config {
     public static final long STATE_ROOT_V2_ACTIVATION_HEIGHT = 0L;
 
     /**
+     * [HC-091] From this height the proposer signs Block.signingDigest() (domain-separated, covers
+     * the proposer id) instead of the bare block hash. 0 = every new network.
+     */
+    public static final long BLOCK_SIG_V2_ACTIVATION_HEIGHT = 0L;
+
+    /**
      * [O-6] Protocol constant (not an environment flag: a per-node setting would change validity).
      * PRIVATE_TRANSFER moves no value, so it is rejected. Consensus rule: a chain that already
      * contains PRIVATE_TRANSFER transactions cannot be replayed by nodes with this rule.

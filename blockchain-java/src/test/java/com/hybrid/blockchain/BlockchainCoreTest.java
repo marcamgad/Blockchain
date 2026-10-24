@@ -198,8 +198,7 @@ public class BlockchainCoreTest {
             String stateRootFromCreate = newBlock.getStateRoot();
             
             // 2. Sign and commit block so it passes PBFT validation
-            byte[] msg = newBlock.serializeCanonical();
-            newBlock.setSignature(Crypto.sign(Crypto.hash(msg), miner.getPrivateKey()));
+            newBlock.setSignature(Crypto.sign(newBlock.signingDigest(), miner.getPrivateKey()));
             tb.getConsensus().markCommitted(newBlock.getHash(), newBlock.getIndex(), miner.getAddress());
             
             // 3. Apply block
