@@ -84,8 +84,15 @@ public class CheckpointRecoveryTest {
         
         // New blockchain should fall back to genesis (height 0) or error out
         Blockchain newChain = new Blockchain(storage, new Mempool(), tb.getConsensus());
-        newChain.init();
-        
+        try {
+            newChain.init();
+        } catch (IllegalStateException refused) {
+            // [HC-089] erroring out: the stored state (credited above without a block) does not match
+            // the tip block, and a node now refuses such a store instead of running on it
+            assertThat(refused).hasMessageContaining("HC-089");
+            return;
+        }
+
         // If it falls back to genesis, height should be 0
         assertThat(newChain.getAccountState().getBlockHeight()).isEqualTo(0);
     }
