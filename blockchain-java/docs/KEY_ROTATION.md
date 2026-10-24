@@ -12,6 +12,19 @@
 | `KeygenTool <n>` (no seed) | Single keys, random. |
 | `--test-seed` / `KeygenTool <n> <seed>` | **Test only.** Reproducible keys that anyone who knows the seed can recompute. |
 
+## The consensus signing record (HC-095)
+
+Each validator keeps `consensus-signing-record.json` in its `STORAGE_PATH`: the votes it has signed
+(phase, view, height → block hash) and its current view. The node writes it to disk **before**
+signing a vote and loads it at start-up, so a restarted validator can't sign a vote that conflicts
+with one it signed earlier. Such a vote would be valid equivocation evidence and get it jailed.
+
+- **Never delete it** on a live validator, and never restore an older copy. Either can let the node sign a conflicting vote.
+- **Never run two instances** with the same key, or with copies of the same record.
+- When **moving** a validator to a new machine: stop it, copy the data directory including the record, then start it on the new machine. Never run both at once.
+- A **corrupt** record stops the node at start-up on purpose. Restore the record from the stopped node. Delete it only if you're sure this validator hasn't signed anything in the network's current view (for example, the network has moved on by several views since it stopped).
+- On **key rotation** (below), the new key starts with no record. That's safe, because the old key's votes can't conflict with the new key's.
+
 ## Rotation procedure (a permissioned network without a key-change transaction)
 
 HybridChain has no on-chain validator key rotation yet, so a validator key change means a coordinated change of the validator set.

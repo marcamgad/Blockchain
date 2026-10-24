@@ -627,7 +627,9 @@ public class PBFTConsensus implements Consensus {
         lastCommittedSeq = Math.max(lastCommittedSeq, seq);
         justifiedHashes.remove(seq);
         consecutiveTimeouts = 0;   // [HC-083]
-        ownVotes.keySet().removeIf(key -> Long.parseLong(key.substring(key.lastIndexOf(':') + 1)) < seq - 100);   // [HC-087] bounded
+        if (ownVotes.keySet().removeIf(key -> Long.parseLong(key.substring(key.lastIndexOf(':') + 1)) < seq - 100)) {   // [HC-087] bounded
+            persistSigningRecord();   // [HC-095] best effort: dropping old entries is safe either way
+        }
         updateReputation(proposerId, REP_BLOCK_PROPOSED);
         log.info("[PBFT] Block {} committed at seq {} (proposer={})", blockHash, seq, proposerId);
         resetTimer();
@@ -646,10 +648,85 @@ public class PBFTConsensus implements Consensus {
      * different hash. Call it BEFORE signing: two signed votes for different hashes at one
      * (phase, view, seq) are equivocation evidence, and honest nodes must never produce them.
      */
-    public boolean reserveOwnVote(Phase phase, long view, long seq, String blockHash) {
+    public synchronized boolean reserveOwnVote(Phase phase, long view, long seq, String blockHash) {
         if (blockHash == null) return false;
-        String prev = ownVotes.putIfAbsent(voteKey(phase, view, seq), blockHash);
-        return prev == null || prev.equals(blockHash);
+        String key = voteKey(phase, view, seq);
+        String prev = ownVotes.get(key);
+        if (prev != null) return prev.equals(blockHash);
+        ownVotes.put(key, blockHash);
+        // [HC-095] durable before the vote is signed; no record, no signature
+        if (!persistSigningRecord()) {
+            ownVotes.remove(key);
+            return false;
+        }
+        return true;
+    }
+
+    // ── [HC-095] durable signing record ──────────────────────────────────────
+    //
+    // This validator's own votes and its view used to live only in memory: after a restart it
+    // signed a vote conflicting with one signed before (valid equivocation evidence against an
+    // honest node), and it restarted in view 0. Like CometBFT's priv_validator_state.json, the
+    // record is written (temp file, fsync, atomic rename) BEFORE a vote is signed, and loaded at
+    // start-up. If it cannot be written, the node does not sign. Operational rule: never run two
+    // instances with one record, and never delete it or restore an older copy on a live validator.
+
+    private volatile java.nio.file.Path signingRecord;
+    private static final int SIGNING_RECORD_VERSION = 1;
+
+    /**
+     * Makes this validator's signing record durable at {@code file}: loads it if it exists
+     * (restoring votes and view), otherwise creates it. A record that cannot be read refuses to
+     * start the node rather than letting it sign without one.
+     */
+    public synchronized void useSigningRecord(java.nio.file.Path file) throws java.io.IOException {
+        if (file.getParent() != null) java.nio.file.Files.createDirectories(file.getParent());
+        if (java.nio.file.Files.exists(file)) {
+            try {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> raw = new com.fasterxml.jackson.databind.ObjectMapper().readValue(file.toFile(), Map.class);
+                if (!Integer.valueOf(SIGNING_RECORD_VERSION).equals(raw.get("version"))) throw new java.io.IOException("unknown version " + raw.get("version"));
+                long view = ((Number) raw.get("view")).longValue();
+                @SuppressWarnings("unchecked")
+                Map<String, String> votes = (Map<String, String>) raw.get("votes");
+                ownVotes.putAll(votes);
+                if (view > viewNumber) viewNumber = view;
+                log.info("[PBFT] Signing record loaded: view {}, {} votes ({})", viewNumber, votes.size(), file);
+            } catch (Exception e) {
+                throw new IllegalStateException("[HC-095] the consensus signing record " + file + " cannot be read ("
+                        + e.getMessage() + "). Refusing to start: signing without it could produce conflicting votes. "
+                        + "Restore the record; delete it only if this validator has not signed anything in the current views.", e);
+            }
+        }
+        this.signingRecord = file;
+        if (!persistSigningRecord()) throw new java.io.IOException("[HC-095] cannot write the consensus signing record " + file);
+    }
+
+    /** Writes the record durably (temp file + fsync + atomic rename). True on success or when not configured. */
+    private synchronized boolean persistSigningRecord() {
+        java.nio.file.Path file = signingRecord;
+        if (file == null) return true;
+        java.nio.file.Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
+        try {
+            Map<String, Object> raw = new LinkedHashMap<>();
+            raw.put("version", SIGNING_RECORD_VERSION);
+            raw.put("view", viewNumber);
+            raw.put("votes", new java.util.TreeMap<>(ownVotes));
+            byte[] bytes = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsBytes(raw);
+            try (java.nio.channels.FileChannel ch = java.nio.channels.FileChannel.open(tmp,
+                    java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.TRUNCATE_EXISTING,
+                    java.nio.file.StandardOpenOption.WRITE)) {
+                ch.write(java.nio.ByteBuffer.wrap(bytes));
+                ch.force(true);
+            }
+            java.nio.file.Files.move(tmp, file, java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            return true;
+        } catch (Exception e) {
+            log.error("[PBFT] Cannot write the consensus signing record {}: {}", file, e.getMessage());
+            try { java.nio.file.Files.deleteIfExists(tmp); } catch (Exception ignored) { }
+            return false;
+        }
     }
 
     /** [HC-087] True if this node has already voted in this (phase, view, seq). */
@@ -696,6 +773,7 @@ public class PBFTConsensus implements Consensus {
         String nextLeader = selectLeader(newView);
         log.info("[PBFT] View {} quorum reached. Next leader: {}", newView, nextLeader);
         this.viewNumber = newView;
+        persistSigningRecord();   // [HC-095] a restart resumes in this view, not in view 0
         resetTimer();   // [HC-083] the new leader gets a full (backed-off) period
         // [O-1] the new leader tells everyone which block (if any) must be re-proposed
         if (localValidatorId != null && localValidatorId.equals(nextLeader) && localPrivateKey != null) {

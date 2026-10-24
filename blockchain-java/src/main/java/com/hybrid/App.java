@@ -72,6 +72,8 @@ public class App {
 
         // 7. Construct PBFTConsensus
         PBFTConsensus pbft = new PBFTConsensus(validators, nodeId, privKey);
+        // [HC-095] this validator's votes and view, durable across restarts (written before signing)
+        pbft.useSigningRecord(java.nio.file.Paths.get(Config.STORAGE_PATH, "consensus-signing-record.json"));
 
         // 8. Construct Storage
         Storage storage = new Storage(Config.STORAGE_PATH, Config.STORAGE_AES_KEY);

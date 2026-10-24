@@ -377,6 +377,8 @@ Every 1,000 blocks, validators sign a checkpoint (height, block hash, state root
 | `telemetry:...` | Stored device readings. |
 | `snapshot:<height>` | State snapshots (last 16 kept). |
 | `checkpoint:<height>` | Quorum-signed checkpoints. |
+
+Next to the LevelDB files, `consensus-signing-record.json` holds this validator's signed votes and its view. It is written before every vote and loaded at start-up, so a restarted validator never signs a conflicting vote (HC-095). Don't delete it or restore an old copy: see `docs/KEY_ROTATION.md`.
 | `meta:<key>` | Metadata such as last checkpoint height, total minted and base fee. |
 
 A rejected block leaves no stored side effects (HC-024). Writes are staged and committed only after the block is accepted.

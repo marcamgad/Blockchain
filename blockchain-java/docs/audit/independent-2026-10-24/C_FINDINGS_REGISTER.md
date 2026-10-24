@@ -40,6 +40,13 @@ live multi-process harness. That is a separate, still-open validation step (H, t
 
 **Severity:** P1 · **Confidence:** Confirmed (reproduced by probe)
 
+> **Status 2026-10-24:** **Fixed and regression-tested at component level** (HC-095 commit). A durable
+> signing record (`consensus-signing-record.json` in `STORAGE_PATH`) is written with fsync and an
+> atomic rename **before** every vote, and loaded at start-up; the view is restored too. A failed
+> write means no signature; a corrupt record stops the node. Test: `SigningRecordTest` (failed on the
+> old in-memory behaviour). **Still open for acceptance:** the live harness kill-after-vote scenario
+> with a Byzantine proposer (H 1.1 / 1.5).
+
 **Affected:** `consensus/PBFTConsensus.java:639` (`ownVotes`, in memory), `:207`
 (`viewNumber = 0` in the constructor); `PeerNode.sentCommits` (in memory); no reference to `Storage`
 anywhere in `PBFTConsensus`.
