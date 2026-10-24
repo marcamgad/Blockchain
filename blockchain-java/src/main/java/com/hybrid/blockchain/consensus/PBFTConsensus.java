@@ -503,6 +503,12 @@ public class PBFTConsensus implements Consensus {
         Map<String, PBFTMessage> phaseVotes = messageLog.computeIfAbsent(seq, k -> new ConcurrentHashMap<>())
                 .computeIfAbsent(Phase.PREPARE, k -> new ConcurrentHashMap<>());
         PBFTMessage existing = phaseVotes.get(validatorId);
+        // [HC-087] this node never records (or reports) a conflicting vote of its own
+        if (validatorId.equals(localValidatorId) && existing != null
+                && existing.viewNumber == msg.viewNumber && !existing.blockHash.equals(blockHash)) {
+            throw new IllegalStateException("[HC-087] refusing a second PREPARE of this node at seq " + seq
+                    + " in view " + msg.viewNumber);
+        }
         if (existing != null) {
             com.hybrid.blockchain.ai.PredictiveThreatScorer.getInstance().recordActivity(validatorId, -0.05, viewNumber);
         }
@@ -539,6 +545,12 @@ public class PBFTConsensus implements Consensus {
         Map<String, PBFTMessage> phaseVotes = messageLog.computeIfAbsent(seq, k -> new ConcurrentHashMap<>())
                 .computeIfAbsent(Phase.COMMIT, k -> new ConcurrentHashMap<>());
         PBFTMessage existing = phaseVotes.get(validatorId);
+        // [HC-087] this node never records (or reports) a conflicting vote of its own
+        if (validatorId.equals(localValidatorId) && existing != null
+                && existing.viewNumber == msg.viewNumber && !existing.blockHash.equals(blockHash)) {
+            throw new IllegalStateException("[HC-087] refusing a second COMMIT of this node at seq " + seq
+                    + " in view " + msg.viewNumber);
+        }
         if (existing != null) {
             com.hybrid.blockchain.ai.PredictiveThreatScorer.getInstance().recordActivity(validatorId, -0.05, viewNumber);
         }
@@ -615,9 +627,40 @@ public class PBFTConsensus implements Consensus {
         lastCommittedSeq = Math.max(lastCommittedSeq, seq);
         justifiedHashes.remove(seq);
         consecutiveTimeouts = 0;   // [HC-083]
+        ownVotes.keySet().removeIf(key -> Long.parseLong(key.substring(key.lastIndexOf(':') + 1)) < seq - 100);   // [HC-087] bounded
         updateReputation(proposerId, REP_BLOCK_PROPOSED);
         log.info("[PBFT] Block {} committed at seq {} (proposer={})", blockHash, seq, proposerId);
         resetTimer();
+    }
+
+    // ── [HC-087] this node's own votes ───────────────────────────────────────
+
+    /** phase:view:seq → the one block hash this node has signed there. */
+    private final Map<String, String> ownVotes = new ConcurrentHashMap<>();
+
+    private static String voteKey(Phase phase, long view, long seq) { return phase + ":" + view + ":" + seq; }
+
+    /**
+     * [HC-087] Claims this node's single vote for (phase, view, seq). True if this node has not
+     * voted there yet, or voted for the same hash (idempotent); false if it already signed a
+     * different hash. Call it BEFORE signing: two signed votes for different hashes at one
+     * (phase, view, seq) are equivocation evidence, and honest nodes must never produce them.
+     */
+    public boolean reserveOwnVote(Phase phase, long view, long seq, String blockHash) {
+        if (blockHash == null) return false;
+        String prev = ownVotes.putIfAbsent(voteKey(phase, view, seq), blockHash);
+        return prev == null || prev.equals(blockHash);
+    }
+
+    /** [HC-087] True if this node has already voted in this (phase, view, seq). */
+    public boolean hasOwnVote(Phase phase, long view, long seq) {
+        return ownVotes.containsKey(voteKey(phase, view, seq));
+    }
+
+    /** [HC-087] A proposal is voted on only if its proposer leads the current view. */
+    public boolean isFromCurrentLeader(Block block) {
+        String leader = getCurrentLeader();
+        return block != null && leader != null && leader.equals(block.getValidatorId());
     }
 
     // ── View change ──────────────────────────────────────────────────────────

@@ -294,34 +294,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
 
         gossipEngine.registerHandler(P2PMessage.Type.BLOCK, msg -> {
             try {
-                Block block = blockchain.deserializeBlock(msg.getPayload());
-                blockchain.validateBlock(block);
-
-                if (consensus instanceof PBFTConsensus) {
-                    PBFTConsensus pbft = (PBFTConsensus) consensus;
-                    if (pbft.isValidator(localAddress)) {
-                        // ... PBFT logic ...
-                        long seq = block.getIndex();
-                        String hash = block.getHash();
-                        long view = pbft.getViewNumber();
-
-                        pbft.setPendingBlock(seq, block);
-
-                        // Generate and send PREPARE
-                        PBFTConsensus.PBFTMessage prepMsg = new PBFTConsensus.PBFTMessage(
-                                PBFTConsensus.Phase.PREPARE, view, seq, hash, localAddress);
-                        prepMsg.sign(privateKey);
-                        pbft.addPrepareVote(seq, hash, localAddress, prepMsg.signature);
-                        pbft.getMessenger().broadcastPrepare(seq, hash, localAddress, prepMsg.signature);
-
-                        String prepared = pbft.getQuorumHash(seq, PBFTConsensus.Phase.PREPARE);
-                        if (prepared != null) {
-                            sendCommit(pbft, seq, prepared, view);
-                        }
-                    }
-                } else {
-                    blockchain.applyBlock(block);
-                }
+                onProposal(blockchain.deserializeBlock(msg.getPayload()));
             } catch (BlockValidationException e) {
                 log.warn("[P2P] Block validation failed from peer {}: {}", msg.getSenderId(), e.getMessage());
                 peerManager.updatePeerScore(msg.getSenderId(), -10.0); // Harsh penalty for invalid blocks
@@ -934,6 +907,48 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
         }
     }
 
+    /** A BLOCK message: a proposal to vote on (validators), or a block to apply (others). */
+    void onProposal(Block block) throws Exception {
+        blockchain.validateBlock(block);
+
+        if (consensus instanceof PBFTConsensus) {
+            PBFTConsensus pbft = (PBFTConsensus) consensus;
+            if (pbft.isValidator(localAddress)) {
+                long seq = block.getIndex();
+                String hash = block.getHash();
+                long view = pbft.getViewNumber();
+
+                // [HC-087] vote only on the current view's leader, and at most once per (view, height).
+                // Before, any validator's block got a PREPARE, and a second proposal at the same
+                // height produced two signed PREPAREs: valid equivocation evidence against this node.
+                if (!pbft.isFromCurrentLeader(block)) {
+                    log.warn("[PBFT] Ignoring proposal {} at seq {} from {}: not the leader of view {}",
+                            hash, seq, block.getValidatorId(), view);
+                    return;
+                }
+                if (!pbft.reserveOwnVote(PBFTConsensus.Phase.PREPARE, view, seq, hash)) {
+                    log.warn("[PBFT] Ignoring proposal {} at seq {}: already PREPAREd another block in view {}",
+                            hash, seq, view);
+                    return;
+                }
+                pbft.setPendingBlock(seq, block);
+
+                PBFTConsensus.PBFTMessage prepMsg = new PBFTConsensus.PBFTMessage(
+                        PBFTConsensus.Phase.PREPARE, view, seq, hash, localAddress);
+                prepMsg.sign(privateKey);
+                pbft.addPrepareVote(seq, hash, localAddress, prepMsg.signature);
+                pbft.getMessenger().broadcastPrepare(seq, hash, localAddress, prepMsg.signature);
+
+                String prepared = pbft.getQuorumHash(seq, PBFTConsensus.Phase.PREPARE);
+                if (prepared != null) {
+                    sendCommit(pbft, seq, prepared, view);
+                }
+            }
+        } else {
+            blockchain.applyBlock(block);
+        }
+    }
+
     private void sendCommit(PBFTConsensus pbft, long seq, String hash, long view) {
         if (!pbft.isValidator(localAddress)) return;
         final String mark = hash + "@" + view;
@@ -946,7 +961,8 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
             if (prevHash.equals(hash) || hash.equals(pbft.getJustifiedHash(seq))) { send[0] = true; return mark; }
             return prev;   // never commit two different blocks at one height otherwise
         });
-        if (send[0]) {
+        // [HC-087] one COMMIT per (view, height) as well
+        if (send[0] && pbft.reserveOwnVote(PBFTConsensus.Phase.COMMIT, view, seq, hash)) {
             PBFTConsensus.PBFTMessage commitMsg = new PBFTConsensus.PBFTMessage(
                     PBFTConsensus.Phase.COMMIT, view, seq, hash, localAddress);
             commitMsg.sign(privateKey);
@@ -1067,6 +1083,10 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
         if (seq != blockchain.getHeight() + 1) return;   // already applied, or we are behind: sync handles it
         blockchain.validateBlock(block);
         long view = pbft.getViewNumber();
+        // [HC-087] the re-proposed block keeps its original proposer (acceptNewView checked the new
+        // leader's NEW_VIEW); still at most one PREPARE per (view, height)
+        if (!pbft.reserveOwnVote(PBFTConsensus.Phase.PREPARE, view, seq, block.getHash())) return;
+        pbft.setPendingBlock(seq, block);
         PBFTConsensus.PBFTMessage prep = new PBFTConsensus.PBFTMessage(
                 PBFTConsensus.Phase.PREPARE, view, seq, block.getHash(), localAddress);
         prep.sign(privateKey);

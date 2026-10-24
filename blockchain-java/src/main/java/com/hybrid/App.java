@@ -268,6 +268,12 @@ public class App {
                 if (pbft.getJustifiedHash(blockchain.getHeight() + 1) != null) {
                     return;
                 }
+                // [HC-087] one proposal per (view, height): while our block for the next height is not
+                // committed, re-proposing (a new timestamp gives a new hash) made every validator sign
+                // two PREPAREs at one height. The view change replaces a proposal that never commits.
+                if (pbft.hasOwnVote(PBFTConsensus.Phase.PREPARE, pbft.getViewNumber(), blockchain.getHeight() + 1)) {
+                    return;
+                }
                 if (nodeId.equals(pbft.getCurrentLeader())) {   // [HC-014] null-safe: no leader eligible -> skip slot
                     // Generate a new block
                     Block block = blockchain.createBlock(nodeId, Config.MAX_TRANSACTIONS_PER_BLOCK);
@@ -286,6 +292,7 @@ public class App {
                             PBFTConsensus.Phase.PREPARE, view, seq, hash, nodeId);
                     prepMsg.sign(privKey);
 
+                    if (!pbft.reserveOwnVote(PBFTConsensus.Phase.PREPARE, view, seq, hash)) return;   // [HC-087]
                     // Record and broadcast PREPARE
                     pbft.addPrepareVote(seq, hash, nodeId, prepMsg.signature);
                     pbft.getMessenger().broadcastPrepare(seq, hash, nodeId, prepMsg.signature);
