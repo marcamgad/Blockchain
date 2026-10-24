@@ -500,7 +500,11 @@ public class AccountState {
      *
      * @return the state root hash as a hex string
      */
+    /** [HC-090] turns the identity registry's POJOs into plain maps/lists; writes no JSON text. */
+    private static final ObjectMapper TREE_MAPPER = new ObjectMapper();
+
     public String calculateStateRoot() {
+        if (getBlockHeight() >= Config.STATE_ROOT_V2_ACTIVATION_HEIGHT) return calculateStateRootV2();
         try {
             ObjectMapper objectMapper = new ObjectMapper();
             objectMapper.configure(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
@@ -536,6 +540,38 @@ public class AccountState {
             return Crypto.bytesToHex(Crypto.hash(combined));
         } catch (Exception e) {
             throw new RuntimeException("State root calculation failed", e);
+        }
+    }
+
+    /**
+     * [HC-090] State root v2:
+     * <pre>
+     * hashWithDomain("HYBRIDCHAIN-STATE-ROOT-v2",
+     *     accountRoot,
+     *     H(canon(identity registry)), H(canon(device registry)),
+     *     H(canon(sorted nullifiers)), H(canon(sorted jail list)),
+     *     H("HYBRIDCHAIN-SENSOR-READINGS-v1\0" || (int64 sensorId, int64 value)*))
+     * </pre>
+     * Every part is always present (v1 added the jail list and the readings only when non-empty).
+     */
+    private String calculateStateRootV2() {
+        try {
+            Object ssiTree = TREE_MAPPER.convertValue(ssiManager.toJSON(), Object.class);
+            java.io.ByteArrayOutputStream rb = new java.io.ByteArrayOutputStream();
+            java.io.DataOutputStream rd = new java.io.DataOutputStream(rb);
+            rd.write("HYBRIDCHAIN-SENSOR-READINGS-v1\0".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            for (Map.Entry<Long, Long> e : sensorReadings.entrySet()) { rd.writeLong(e.getKey()); rd.writeLong(e.getValue()); }
+            rd.flush();
+            byte[] root = Crypto.hashWithDomain("HYBRIDCHAIN-STATE-ROOT-v2",
+                    mpt.getRootHash(),
+                    Crypto.hash(CanonicalEncoding.encode(ssiTree)),
+                    Crypto.hash(CanonicalEncoding.encode(lifecycleManager.toJSON())),
+                    Crypto.hash(CanonicalEncoding.encode(new ArrayList<>(new TreeSet<>(spentNullifiers)))),
+                    Crypto.hash(CanonicalEncoding.encode(new ArrayList<>(new TreeSet<>(jailedValidators)))),
+                    Crypto.hash(rb.toByteArray()));
+            return Crypto.bytesToHex(root);
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("State root calculation failed", e);
         }
     }
 

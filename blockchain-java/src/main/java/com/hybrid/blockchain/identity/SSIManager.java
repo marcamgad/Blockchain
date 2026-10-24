@@ -319,7 +319,7 @@ public class SSIManager {
         json.put("deviceToDID", deviceToDID);
 
         // Revoked DIDs
-        json.put("revokedDIDs", new ArrayList<>(revokedDIDs));
+        json.put("revokedDIDs", new ArrayList<>(new java.util.TreeSet<>(revokedDIDs)));   // [HC-090] sorted, not hash order
 
         return json;
     }

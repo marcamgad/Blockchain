@@ -51,6 +51,14 @@ public final class Config {
     public static final long HYBRID_ADDRESS_ACTIVATION_HEIGHT = 0L;
 
     /**
+     * [HC-090] From this height the state root is v2: the identity registry, device registry,
+     * nullifiers and jail list are hashed as {@link CanonicalEncoding} bytes instead of Jackson
+     * JSON text, so a JSON library upgrade cannot change roots. 0 = every new network uses v2.
+     * An existing network sets the height of a coordinated upgrade (docs/design/PROTOCOL_UPGRADES.md).
+     */
+    public static final long STATE_ROOT_V2_ACTIVATION_HEIGHT = 0L;
+
+    /**
      * [O-6] Protocol constant (not an environment flag: a per-node setting would change validity).
      * PRIVATE_TRANSFER moves no value, so it is rejected. Consensus rule: a chain that already
      * contains PRIVATE_TRANSFER transactions cannot be replayed by nodes with this rule.
