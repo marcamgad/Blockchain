@@ -353,6 +353,7 @@ public class PBFTConsensus implements Consensus {
     public boolean verifyCommitCertificate(Block block) {
         List<Block.CommitSignature> cert = block.getCommitCertificate();
         if (cert == null || cert.isEmpty() || cert.size() > 4 * validators.size()) return false;
+        if (block.getIndex() >= com.hybrid.blockchain.Config.QUORUM_SAME_VIEW_ACTIVATION_HEIGHT && !singleView(cert)) return false;   // [HC-102]
         Set<String> valid = new HashSet<>();
         for (Block.CommitSignature cs : cert) {
             if (cs == null || cs.validatorId == null || cs.signature == null || valid.contains(cs.validatorId)) continue;
@@ -372,13 +373,42 @@ public class PBFTConsensus implements Consensus {
         return valid.size() >= quorumSize();
     }
 
+    /** [HC-102] True if every signature in the list is from the same view. */
+    private static boolean singleView(List<Block.CommitSignature> sigs) {
+        Long view = null;
+        for (Block.CommitSignature cs : sigs) {
+            if (cs == null) continue;
+            if (view == null) view = cs.view;
+            else if (view != cs.view) return false;
+        }
+        return true;
+    }
+
+    /** [HC-102] The view holding the most votes for {@code blockHash} (ties: the highest view). */
+    private static long quorumView(Collection<PBFTMessage> votes, String blockHash) {
+        Map<Long, Integer> count = new HashMap<>();
+        for (PBFTMessage m : votes) {
+            if (m != null && blockHash.equals(m.blockHash)) count.merge(m.viewNumber, 1, Integer::sum);
+        }
+        long best = -1;
+        int bestCount = -1;
+        for (Map.Entry<Long, Integer> e : count.entrySet()) {
+            if (e.getValue() > bestCount || (e.getValue() == bestCount && e.getKey() > best)) {
+                best = e.getKey();
+                bestCount = e.getValue();
+            }
+        }
+        return best;
+    }
+
     /** [HC-046] The COMMIT votes this node holds for (seq, blockHash), as a certificate. */
     public List<Block.CommitSignature> buildCommitCertificate(long seq, String blockHash) {
         List<Block.CommitSignature> cert = new ArrayList<>();
         Map<Phase, Map<String, PBFTMessage>> seqLog = messageLog.get(seq);
         if (seqLog == null || seqLog.get(Phase.COMMIT) == null) return cert;
+        long view = quorumView(seqLog.get(Phase.COMMIT).values(), blockHash);   // [HC-102] one view only
         for (PBFTMessage m : seqLog.get(Phase.COMMIT).values()) {
-            if (m != null && blockHash.equals(m.blockHash) && m.signature != null) {
+            if (m != null && blockHash.equals(m.blockHash) && m.signature != null && m.viewNumber == view) {
                 cert.add(new Block.CommitSignature(m.validatorId, m.viewNumber, com.hybrid.blockchain.HexUtils.encode(m.signature)));
             }
         }
@@ -596,15 +626,17 @@ public class PBFTConsensus implements Consensus {
         Map<String, PBFTMessage> votes = seqLog.get(phase);
         if (votes == null) return null;
 
+        // [HC-102] a quorum is q votes for one hash IN ONE VIEW (votes used to be counted across views)
+        boolean perView = sequenceNumber >= com.hybrid.blockchain.Config.QUORUM_SAME_VIEW_ACTIVATION_HEIGHT;
         Map<String, Integer> byHash = new HashMap<>();
         for (PBFTMessage m : votes.values()) {
             if (m != null && m.blockHash != null) {
-                byHash.merge(m.blockHash, 1, Integer::sum);
+                byHash.merge(perView ? m.viewNumber + "|" + m.blockHash : m.blockHash, 1, Integer::sum);
             }
         }
         int needed = quorumSize();   // [HC-002]
         for (Map.Entry<String, Integer> e : byHash.entrySet()) {
-            if (e.getValue() >= needed) return e.getKey();
+            if (e.getValue() >= needed) return perView ? e.getKey().substring(e.getKey().indexOf('|') + 1) : e.getKey();
         }
         return null;
     }
@@ -891,8 +923,9 @@ public class PBFTConsensus implements Consensus {
         List<Block.CommitSignature> cert = new ArrayList<>();
         Map<Phase, Map<String, PBFTMessage>> seqLog = messageLog.get(seq);
         if (seqLog == null || seqLog.get(Phase.PREPARE) == null) return cert;
+        long view = quorumView(seqLog.get(Phase.PREPARE).values(), blockHash);   // [HC-102] one view only
         for (PBFTMessage m : seqLog.get(Phase.PREPARE).values()) {
-            if (m != null && blockHash.equals(m.blockHash) && m.signature != null) {
+            if (m != null && blockHash.equals(m.blockHash) && m.signature != null && m.viewNumber == view) {
                 cert.add(new Block.CommitSignature(m.validatorId, m.viewNumber,
                         com.hybrid.blockchain.HexUtils.encode(m.signature)));
             }
@@ -915,6 +948,9 @@ public class PBFTConsensus implements Consensus {
         if (p.block.getIndex() != p.seq || !p.blockHash.equals(p.block.getHash())
                 || !p.blockHash.equals(p.block.calculateHash())) return false;
         if (!verifyProposerSignature(p.block, null)) return false;
+        // [HC-102] all PREPAREs from one view: view() used to be the HIGHEST view among them, so one
+        // Byzantine PREPARE for a later view made a proof win the NEW_VIEW choice
+        if (p.seq >= com.hybrid.blockchain.Config.QUORUM_SAME_VIEW_ACTIVATION_HEIGHT && !singleView(p.prepares)) return false;
         Set<String> valid = new HashSet<>();
         for (Block.CommitSignature cs : p.prepares) {
             if (cs == null || cs.validatorId == null || cs.signature == null || valid.contains(cs.validatorId)) continue;

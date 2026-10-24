@@ -77,6 +77,12 @@ public final class Config {
     public static final long WASM_FLOAT_BAN_ACTIVATION_HEIGHT = 0L;
 
     /**
+     * [HC-102] From this height a quorum is q votes for one hash in ONE view, live and in commit
+     * certificates and prepared proofs (signatures from different views no longer combine). 0 = every new network.
+     */
+    public static final long QUORUM_SAME_VIEW_ACTIVATION_HEIGHT = 0L;
+
+    /**
      * [O-6] Protocol constant (not an environment flag: a per-node setting would change validity).
      * PRIVATE_TRANSFER moves no value, so it is rejected. Consensus rule: a chain that already
      * contains PRIVATE_TRANSFER transactions cannot be replayed by nodes with this rule.
