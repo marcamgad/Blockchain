@@ -343,6 +343,53 @@ making modified versions publicly available and any commercial, for-profit or bu
 - For adoption and contributions: an OSI licence such as Apache-2.0, the licence of Fabric, Besu and CometBFT.
 - To keep commercial control: keep this licence, but state a commercial-licence contact, and accept that it rules out an open community.
 
+## Found by the live harness run (2026-10-24, `results/20261024T154136Z-N4`)
+
+These three were found by running the fault-injection harness against a real 4-validator Docker
+network after the Phase 1 fixes. The `equivocation/jail` phase failed: the evidence was never
+included and v4 stopped following. Unit tests had not caught them, because each is about how two
+components work together.
+
+### C-23 · HC-104 · Client transactions never left the node they were sent to
+
+> **Status 2026-10-24: Fixed and regression-tested** (`96de6dd`, `TransactionPropagationTest`, `ChallengeLoginTest`).
+
+**Severity:** P1 · **Confidence:** Confirmed (live run and code).
+
+REST `submit-signed` and the CoAP/MQTT adapters called only `addTransaction`. The transaction sat in
+the receiving node's mempool, and was included only when that node led a view. Now
+`Blockchain.submitTransaction` admits the transaction and then gossips it.
+
+### C-24 · HC-105 · A node in an older view never caught up with the network's view
+
+> **Status 2026-10-24: Fixed and regression-tested** (`84ef896`, `ViewCatchUpTest`).
+
+**Severity:** P1 · **Confidence:** Confirmed (live run: v4 restarted in view 2 while the others
+were in view 3).
+
+The node refused the current leader's proposals and signed votes for the wrong view. Now a valid
+single-view commit certificate from a later view moves the node to that view (persisted). A quorum
+of signatures means f + 1 honest validators already reached it.
+
+### C-25 · HC-106 · Repeated sync requests were dropped as gossip duplicates
+
+> **Status 2026-10-24: Fixed and regression-tested** (`08a51bf`, `PointToPointDeliveryTest`).
+
+**Severity:** P2 · **Confidence:** Confirmed (code; consistent with v4 staying at height 20).
+
+`REQUEST_BLOCKS` and `BLOCKS_RESPONSE` went through the gossip engine, where the message id is
+hash(sender, type, payload):
+- a repeated request for the same range got no answer;
+- identical responses were dropped;
+- responses over 1 MB were dropped;
+- both were relayed to random peers.
+
+They are now delivered point-to-point after the origin check.
+
+**Harness bug found in the same run:** the clock-skew phases never applied a skew. Git Bash had
+rewritten `LD_PRELOAD` to a Windows path; fixed in `be5931e`. The skew check itself worked: it
+reported the missing skew instead of passing.
+
 ## Root causes shared across findings
 
 1. **Consensus state treated as volatile** (C-1, C-9): nothing in consensus survives a restart.
