@@ -61,15 +61,11 @@ public final class EquivocationEvidenceTool {
         return ev;
     }
 
-    /** The signed EQUIVOCATION_EVIDENCE transaction (hybrid-signed, so it passes REQUIRE_QUANTUM_SIG). */
+    /** The signed EQUIVOCATION_EVIDENCE transaction: the same builder the node uses (HC-088). */
     public static Transaction transaction(PBFTConsensus.EquivocationEvidence ev, BigInteger reporter, long nonce, long fee)
             throws Exception {
-        byte[] pub = Crypto.derivePublicKey(reporter);
-        KeyPair pq = QuantumResistantCrypto.generateDilithiumKeyPair(3);
-        return new Transaction.Builder().type(Transaction.Type.EQUIVOCATION_EVIDENCE)
-                .from(Crypto.deriveAddress(pub))
-                .data(new ObjectMapper().writeValueAsBytes(ev)).fee(fee).nonce(nonce)
-                .signHybrid(reporter, pub, pq.getPrivate(), pq.getPublic());
+        return com.hybrid.blockchain.consensus.EvidenceTransactions.build(ev, reporter,
+                QuantumResistantCrypto.generateDilithiumKeyPair(3), nonce, fee);
     }
 
     /** [HC-085] challenge-response login: sign the node's one-time challenge with the account key. */

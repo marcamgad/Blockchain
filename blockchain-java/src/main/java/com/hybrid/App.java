@@ -106,15 +106,13 @@ public class App {
         // [O-5] consensus follows the on-chain jail set; a double vote this node observes is
         // reported on-chain so that every node jails the validator, not only this one
         blockchain.syncJailedValidators();
+        // [HC-088] an in-memory ML-DSA key for the node's own transactions (evidence): required by
+        // REQUIRE_QUANTUM_SIG, not bound to the hb account (HC-079)
+        final java.security.KeyPair nodeMldsa = com.hybrid.blockchain.security.QuantumResistantCrypto.generateDilithiumKeyPair(3);
         pbft.setEvidenceListener(ev -> {
             try {
-                Transaction tx = new Transaction.Builder()
-                        .type(Transaction.Type.EQUIVOCATION_EVIDENCE)
-                        .from(nodeId)
-                        .data(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsBytes(ev))
-                        .fee(Math.max(1, blockchain.getCurrentBaseFee()))
-                        .nonce(blockchain.getNonce(nodeId) + 1)
-                        .sign(privKey, Crypto.derivePublicKey(privKey));
+                Transaction tx = com.hybrid.blockchain.consensus.EvidenceTransactions.build(ev, privKey, nodeMldsa,
+                        blockchain.getNonce(nodeId) + 1, Math.max(1, blockchain.getCurrentBaseFee()));
                 blockchain.addTransaction(tx);
                 peerNode.broadcastTransaction(tx);
                 log.warn("[SLASH] Submitted equivocation evidence against {} as tx {}", ev.validatorId, tx.getTxid());

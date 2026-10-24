@@ -348,18 +348,21 @@ public final class Transaction {
 
         // FIX 2: Enforce Dilithium hybrid signature check if required
         if (Config.REQUIRE_QUANTUM_SIG) {
-            if (dilithiumSignature == null || dilithiumPublicKey == null) return false;
-            try {
-                // To avoid storing raw byte-arrays where Keys are needed, we assume
-                // QuantumResistantCrypto provides a way, or we reconstruct the key:
-                java.security.KeyFactory kf = java.security.KeyFactory.getInstance(com.hybrid.blockchain.security.QuantumResistantCrypto.ALGORITHM, com.hybrid.blockchain.security.QuantumResistantCrypto.PROVIDER);
-                java.security.PublicKey dPubKey = kf.generatePublic(new java.security.spec.X509EncodedKeySpec(dilithiumPublicKey));
-                return com.hybrid.blockchain.security.QuantumResistantCrypto.verifyDilithium(payload, dilithiumSignature, dPubKey);
-            } catch (Exception e) {
-                return false;
-            }
+            return verifyQuantumSignature();
         }
         return true;
+    }
+
+    /** True if the ML-DSA signature is present and verifies over the signed payload. */
+    public boolean verifyQuantumSignature() {
+        if (dilithiumSignature == null || dilithiumPublicKey == null) return false;
+        try {
+            java.security.KeyFactory kf = java.security.KeyFactory.getInstance(com.hybrid.blockchain.security.QuantumResistantCrypto.ALGORITHM, com.hybrid.blockchain.security.QuantumResistantCrypto.PROVIDER);
+            java.security.PublicKey dPubKey = kf.generatePublic(new java.security.spec.X509EncodedKeySpec(dilithiumPublicKey));
+            return com.hybrid.blockchain.security.QuantumResistantCrypto.verifyDilithium(signingPayload(), dilithiumSignature, dPubKey);
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     /**
