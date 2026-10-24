@@ -37,11 +37,32 @@ public class GossipEngine {
      * Entry point for incoming messages from peers.
      */
     public boolean onMessageReceived(P2PMessage message, String fromPeerId) {
+        if (message != null && isPointToPoint(message.getType())) return deliverDirect(message);   // [HC-106]
         boolean accepted = validateAndProcess(message);
         if (accepted) {
             relay(message, fromPeerId);
         }
         return accepted;
+    }
+
+    /**
+     * [HC-106] Sync requests and responses are between two peers. Through the gossip path they were
+     * de-duplicated by hash(sender, type, payload), so a node asking again for the same range got
+     * no answer (and an identical response was dropped), and both were relayed to random peers.
+     */
+    public static boolean isPointToPoint(P2PMessage.Type type) {
+        return type == P2PMessage.Type.REQUEST_BLOCKS || type == P2PMessage.Type.BLOCKS_RESPONSE;
+    }
+
+    /** [HC-106] Origin-checked delivery to the handler: no de-duplication, no relay. */
+    private boolean deliverDirect(P2PMessage message) {
+        // the socket reader already bounds a frame at 10 MB; a 50-block response can exceed the
+        // 1 MB gossip limit
+        if (message.getPayload() == null || message.getPayload().length > 10 * 1024 * 1024) return false;
+        if (!message.verifyOrigin()) return false;   // [HC-044]
+        Consumer<P2PMessage> handler = handlers.get(message.getType());
+        if (handler != null) handler.accept(message);
+        return true;
     }
 
     public boolean validateAndProcess(byte[] payload) {
