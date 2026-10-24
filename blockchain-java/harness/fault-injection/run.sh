@@ -22,6 +22,11 @@ DC=(docker compose --env-file "$ENV" -f "$COMPOSE")
 # caught it). Paths in these variables are container paths: leave them alone.
 export MSYS2_ENV_CONV_EXCL="V${N}_PRELOAD${MSYS2_ENV_CONV_EXCL:+;$MSYS2_ENV_CONV_EXCL}"
 PUMBA=(docker run --rm -v //var/run/docker.sock:/var/run/docker.sock gaiaadm/pumba)
+# pumba re-pulls its tc helper image (default --pull-image) when it adds AND when it removes a rule.
+# In the 2026-10-24 run that pull failed (DNS) at the end of the loss phase, the 10 % loss stayed on
+# v1-v3 and every later phase silently ran under it. Pull once up front, never from pumba.
+TC_IMAGE="ghcr.io/alexei-led/pumba-alpine-nettools:latest"
+NETEM=("${PUMBA[@]}" netem --tc-image "$TC_IMAGE" --pull-image=false)
 url() { echo "http://localhost:$((18080 + $1))"; }
 all_urls() { local s=""; for i in $(seq 1 "$N"); do s+="$(url "$i"),"; done; echo "${s%,}"; }
 ip() { echo "172.28.0.$((10 + $1))"; }
@@ -36,12 +41,30 @@ check() {
 container_of() { awk -v a="$1" '$2==a {print $1}' "$ADDR"; }
 leader() { curl -s "$(url 1)/api/v1/consensus" | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["currentLeader"])'; }
 key_of() { grep "^V$1_KEY=" "$ENV" | cut -d= -f2; }
+# after a netem phase: no node may keep a netem qdisc. One that does is removed and the phase is
+# recorded as a harness failure, so later phases are not reported as run on a clean network.
+netem_cleared() {
+  local i q left=""
+  for i in $(seq 1 "$N"); do
+    q="$(timeout 60 docker run --rm --pull never --network "container:hc-v$i" --entrypoint tc "$TC_IMAGE" qdisc show dev eth0 2>&1 || true)"
+    if [[ "$q" == *netem* ]]; then
+      left+=" hc-v$i"
+      timeout 60 docker run --rm --pull never --network "container:hc-v$i" --cap-add NET_ADMIN --entrypoint tc "$TC_IMAGE" qdisc del dev eth0 root >/dev/null 2>&1 || true
+    fi
+  done
+  if [[ -n "$left" ]]; then
+    echo "FAIL $1/netem-cleared: netem still active on$left (removed now)"
+    echo "{\"phase\": \"$1/netem-cleared\", \"ok\": false, \"reason\": \"netem still active on$left after the phase\"}" >> "$OUT"
+    FAILS=$((FAILS + 1))
+  fi
+}
 wait_up() { for i in $(seq 1 "$N"); do for _ in $(seq 1 60); do curl -sf "$(url "$i")/api/v1/health" >/dev/null && break; sleep 5; done; done; }
 
 "$HERE/gen.sh" "$N"   # keys only the first time; the compose file every time
 echo "[1/4] building the node jar";        ( cd "$ROOT" && mvn -q -o -DskipTests package )
 echo "[2/4] building hybridchain-node";    ( cd "$ROOT" && docker build -t hybridchain-node:local -f Dockerfile . )
 echo "[3/4] building hybridchain-harness"; docker build -t hybridchain-harness:local -f "$HERE/Dockerfile.harness" "$HERE"
+for img in gaiaadm/pumba "$TC_IMAGE"; do docker image inspect "$img" >/dev/null 2>&1 || docker pull "$img"; done
 # networks of other sizes share the subnet, container names and host ports: stop them first
 for other in "$HERE"/docker-compose.*.yml; do
   M="${other##*/docker-compose.}"; M="${M%.yml}"
@@ -72,19 +95,19 @@ for sc in "${SCENARIOS[@]}"; do
       tB=(); for i in "${A[@]}"; do tB+=(--target "$(ip "$i")"); done
       D=$((BLOCK_S * 4))
       # --target is a flag of "netem" itself (not of the "loss" sub-command)
-      "${PUMBA[@]}" netem --duration "${D}s" "${tA[@]}" loss --percent 100 $(for i in "${A[@]}"; do echo "hc-v$i"; done) &
-      "${PUMBA[@]}" netem --duration "${D}s" "${tB[@]}" loss --percent 100 $(for i in "${B[@]}"; do echo "hc-v$i"; done) &
+      "${NETEM[@]}" --duration "${D}s" "${tA[@]}" loss --percent 100 $(for i in "${A[@]}"; do echo "hc-v$i"; done) &
+      "${NETEM[@]}" --duration "${D}s" "${tB[@]}" loss --percent 100 $(for i in "${B[@]}"; do echo "hc-v$i"; done) &
       sleep $((D / 2)); check --phase partition/during || true   # safety must hold; progress is not expected
-      wait; check --phase partition/healed --expect-progress 2 --timeout $((BLOCK_S * 8)) ;;
+      wait; netem_cleared partition; check --phase partition/healed --expect-progress 2 --timeout $((BLOCK_S * 8)) ;;
     delay-loss)
       # one netem qdisc per interface at a time: delay first, then loss (running both at once fails)
       D=$((BLOCK_S * 4)); NODES=$(for i in $(seq 1 "$N"); do echo "hc-v$i"; done)
-      "${PUMBA[@]}" netem --duration "${D}s" delay --time 300 --jitter 100 $NODES &
+      "${NETEM[@]}" --duration "${D}s" delay --time 300 --jitter 100 $NODES &
       check --phase delay/during --expect-progress 1 --timeout "$D"
-      wait
-      "${PUMBA[@]}" netem --duration "${D}s" loss --percent 10 $NODES &
+      wait; netem_cleared delay
+      "${NETEM[@]}" --duration "${D}s" loss --percent 10 $NODES &
       check --phase loss/during --expect-progress 1 --timeout "$D"
-      wait; check --phase delay-loss/after --expect-progress 1 --timeout $((BLOCK_S * 5)) ;;
+      wait; netem_cleared loss; check --phase delay-loss/after --expect-progress 1 --timeout $((BLOCK_S * 5)) ;;
     restart-resync)
       docker stop "hc-v$N" >/dev/null; sleep $((BLOCK_S * 3)); docker start "hc-v$N" >/dev/null; wait_up
       check --phase restart-resync --expect-progress 1 --timeout $((BLOCK_S * 8)) ;;
