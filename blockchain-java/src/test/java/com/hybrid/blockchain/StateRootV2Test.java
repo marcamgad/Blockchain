@@ -54,6 +54,10 @@ class StateRootV2Test {
         assertThat(sample(false).calculateStateRoot()).isEqualTo(GOLDEN);
     }
 
-    /** Pinned when state root v2 was introduced (HC-090). Change only together with a protocol upgrade. */
-    static final String GOLDEN = "dc9628cc255d4f4848ba8722021f32c12cc22f41080a8d4b99503390a839c71d";
+    /**
+     * Pinned when state root v2 was introduced (HC-090). Change only together with a protocol upgrade.
+     * History: dc9628cc… (HC-090) → a2061ce2… (HC-097: reading times join the root, activation
+     * READING_ORDER_ACTIVATION_HEIGHT).
+     */
+    static final String GOLDEN = "a2061ce21f7f8839df4fde7d64a20de6f9848d4347173bd66cf94d2a6ddd36a2";
 }

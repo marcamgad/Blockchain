@@ -32,6 +32,8 @@ public class AccountState {
     private final Set<String> jailedValidators = java.util.concurrent.ConcurrentHashMap.newKeySet();
     /** [HC-058] sensorId -> latest device-authenticated reading (milli-units); sorted for hashing. */
     private final java.util.concurrent.ConcurrentSkipListMap<Long, Long> sensorReadings = new java.util.concurrent.ConcurrentSkipListMap<>();
+    /** [HC-097] sensor id → time of the reading held in {@link #sensorReadings} */
+    private final java.util.concurrent.ConcurrentSkipListMap<Long, Long> sensorReadingTimes = new java.util.concurrent.ConcurrentSkipListMap<>();
 
     public String calculateRoot() {
         return HexUtils.encode(mpt.getRootHash());
@@ -159,6 +161,11 @@ public class AccountState {
                 accountState.sensorReadings.put(Long.parseLong(e.getKey()), ((Number) e.getValue()).longValue());
             }
         }
+        if (raw.containsKey("sensorReadingTimes")) {   // [HC-097]
+            for (Map.Entry<String, Object> e : ((Map<String, Object>) raw.get("sensorReadingTimes")).entrySet()) {
+                accountState.sensorReadingTimes.put(Long.parseLong(e.getKey()), ((Number) e.getValue()).longValue());
+            }
+        }
         if (raw.containsKey("jailedValidators")) {
             accountState.jailedValidators.addAll((List<String>) raw.get("jailedValidators"));
         }
@@ -217,6 +224,9 @@ public class AccountState {
         Map<String, Long> readings = new java.util.LinkedHashMap<>();
         for (Map.Entry<Long, Long> e : sensorReadings.entrySet()) readings.put(Long.toString(e.getKey()), e.getValue());
         json.put("sensorReadings", readings);
+        Map<String, Long> times = new java.util.LinkedHashMap<>();   // [HC-097]
+        for (Map.Entry<Long, Long> e : sensorReadingTimes.entrySet()) times.put(Long.toString(e.getKey()), e.getValue());
+        json.put("sensorReadingTimes", times);
 
         return json;
     }
@@ -476,6 +486,23 @@ public class AccountState {
         sensorReadings.put(sensorId, milliValue);
     }
 
+    /**
+     * [HC-097] Records a device-authenticated reading only if it is newer than the one held. A
+     * signed reading is valid for ±10 minutes and is public in transaction data; without this
+     * check anyone could relay an older one and roll back the value contracts see.
+     *
+     * @return false if the reading is not newer and was ignored
+     */
+    public boolean recordReading(long sensorId, long milliValue, long readingTime) {
+        if (getBlockHeight() >= Config.READING_ORDER_ACTIVATION_HEIGHT) {
+            Long last = sensorReadingTimes.get(sensorId);
+            if (last != null && readingTime <= last) return false;
+            sensorReadingTimes.put(sensorId, readingTime);
+        }
+        sensorReadings.put(sensorId, milliValue);
+        return true;
+    }
+
     /** [O-5] */
     public boolean isJailed(String validatorId) {
         return jailedValidators.contains(validatorId);
@@ -559,8 +586,18 @@ public class AccountState {
             Object ssiTree = TREE_MAPPER.convertValue(ssiManager.toJSON(), Object.class);
             java.io.ByteArrayOutputStream rb = new java.io.ByteArrayOutputStream();
             java.io.DataOutputStream rd = new java.io.DataOutputStream(rb);
-            rd.write("HYBRIDCHAIN-SENSOR-READINGS-v1\0".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            for (Map.Entry<Long, Long> e : sensorReadings.entrySet()) { rd.writeLong(e.getKey()); rd.writeLong(e.getValue()); }
+            if (getBlockHeight() >= Config.READING_ORDER_ACTIVATION_HEIGHT) {
+                // [HC-097] the reading time is consensus state too: it decides which reading is newer
+                rd.write("HYBRIDCHAIN-SENSOR-READINGS-v2\0".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                for (Map.Entry<Long, Long> e : sensorReadings.entrySet()) {
+                    rd.writeLong(e.getKey());
+                    rd.writeLong(e.getValue());
+                    rd.writeLong(sensorReadingTimes.getOrDefault(e.getKey(), Long.MIN_VALUE));
+                }
+            } else {
+                rd.write("HYBRIDCHAIN-SENSOR-READINGS-v1\0".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                for (Map.Entry<Long, Long> e : sensorReadings.entrySet()) { rd.writeLong(e.getKey()); rd.writeLong(e.getValue()); }
+            }
             rd.flush();
             byte[] root = Crypto.hashWithDomain("HYBRIDCHAIN-STATE-ROOT-v2",
                     mpt.getRootHash(),

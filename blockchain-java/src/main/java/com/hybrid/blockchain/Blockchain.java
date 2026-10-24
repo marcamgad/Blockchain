@@ -1495,7 +1495,12 @@ public class Blockchain {
                         if (isDeviceAuthenticated(targetState, targetDeviceId, tx, rawData, timestamp)) {
                             Long milli = com.hybrid.blockchain.lifecycle.SensorReadings.parseMilli(telemetryPayload);
                             if (milli != null) {
-                                targetState.recordReading(com.hybrid.blockchain.lifecycle.SensorReadings.sensorId(targetDeviceId), milli);
+                                // [HC-097] a relayed DeviceReading carries its own signed time; a reading sent
+                                // by the device itself or with a bound PUF proof is tied to this transaction,
+                                // so the block time stands in for it
+                                com.hybrid.blockchain.lifecycle.DeviceReading signed = com.hybrid.blockchain.lifecycle.DeviceReading.parse(rawData);
+                                long readingTime = signed != null ? signed.timestamp : timestamp;
+                                targetState.recordReading(com.hybrid.blockchain.lifecycle.SensorReadings.sensorId(targetDeviceId), milli, readingTime);
                             }
                         }
                         if (targetState == this.state) {

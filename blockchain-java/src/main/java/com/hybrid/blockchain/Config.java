@@ -65,6 +65,12 @@ public final class Config {
     public static final long BLOCK_SIG_V2_ACTIVATION_HEIGHT = 0L;
 
     /**
+     * [HC-097] From this height a device reading replaces the contract-visible sensor value only if
+     * it is newer than the one held, and the reading time is part of state root v2. 0 = every new network.
+     */
+    public static final long READING_ORDER_ACTIVATION_HEIGHT = 0L;
+
+    /**
      * [O-6] Protocol constant (not an environment flag: a per-node setting would change validity).
      * PRIVATE_TRANSFER moves no value, so it is rejected. Consensus rule: a chain that already
      * contains PRIVATE_TRANSFER transactions cannot be replayed by nodes with this rule.
