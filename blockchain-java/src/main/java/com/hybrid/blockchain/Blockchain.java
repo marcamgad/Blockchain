@@ -117,6 +117,7 @@ public class Blockchain {
                     if (snapMinted instanceof Number) totalMinted = ((Number) snapMinted).longValue();
                     Block tip = storage.loadBlockByHeight(snapHeight);
                     if (tip != null) {
+                        requireStateMatches(tip, "snapshot");   // [HC-089]
                         chain.add(tip);
                         Object diffObj = storage.getMeta("difficulty");
                         if (diffObj instanceof Number)
@@ -136,6 +137,7 @@ public class Blockchain {
                 utxo = UTXOSet.fromMap(rawUTXO != null ? rawUTXO : new HashMap<>());
                 state = storage.loadState();
                 if (state == null) state = new AccountState();
+                requireStateMatches(tip, "tip");   // [HC-089]
                 Object diffObj = storage.getMeta("difficulty");
                 if (diffObj instanceof Number) difficulty = ((Number) diffObj).intValue();
 
@@ -240,6 +242,20 @@ public class Blockchain {
             storage.putMeta("difficulty", difficulty);
         } finally {
             lock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * [HC-089] The state loaded at start-up must be the state the tip block committed to. A store
+     * left inconsistent (by a crash under the old non-atomic writes, a damaged disk or a manual
+     * edit) is refused instead of running on silently wrong state: resync from empty storage.
+     */
+    private void requireStateMatches(Block tip, String source) {
+        String root = state.calculateStateRoot();
+        if (tip.getStateRoot() != null && !tip.getStateRoot().equals(root)) {
+            throw new IllegalStateException("[HC-089] stored state (" + source + ") does not match block "
+                    + tip.getIndex() + ": state root " + root + " != " + tip.getStateRoot()
+                    + ". The store is inconsistent; start this node from empty storage to resync.");
         }
     }
 
@@ -1005,6 +1021,11 @@ public class Blockchain {
 
         chain.add(block);
 
+        // [HC-089] everything this block persists goes into ONE atomic batch, committed at the end
+        // of this try block. Before, the block, the tip (synchronously), the UTXO set, the state and
+        // the snapshot were separate writes: a crash in between left a tip at block N with the
+        // state, snapshot and fee metadata of N - 1.
+        storage.beginBatch();
         // [HC-024] the block is accepted: now persist its receipts/indexes/telemetry/FL effects
         if (tokenRegistry != null) tokenRegistry.commitBlock();
         List<Runnable> writes = new ArrayList<>(pendingWrites);
@@ -1099,11 +1120,14 @@ public class Blockchain {
             difficulty = newDiff;
             storage.putMeta("difficulty", difficulty);
         }
+        storage.commitBatch();   // [HC-089] the block and everything it changed, atomically
         } catch (Exception e) {
+            storage.abortBatch();   // [HC-089] nothing of this block reaches the disk
             // [S1-01] Atomic-swap rollback: restore the pre-block snapshot so a rejected
             // block leaves no partial mutations behind, then propagate the rejection.
             this.state = stateBackup;
             this.utxo = utxoBackup;
+            if (!chain.isEmpty() && chain.get(chain.size() - 1) == block) chain.remove(chain.size() - 1);   // [HC-089]
             pendingWrites.clear();   // [HC-024] a rejected block leaves nothing in storage
             if (tokenRegistry != null) tokenRegistry.rollbackBlock();
             this.totalMinted = totalMintedBackup;

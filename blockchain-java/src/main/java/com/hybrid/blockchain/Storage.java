@@ -42,6 +42,71 @@ public class Storage implements AutoCloseable {
 
 
     private final DB db;
+
+    // [HC-089] One atomic write batch per block. While a batch is open on a thread, that thread's
+    // writes go into it and reach the disk together (sync) at commitBatch(), or not at all.
+    // Thread-local, so REST or adapter threads writing at the same time are not swept into it.
+    private final ThreadLocal<WriteBatch> batch = new ThreadLocal<>();
+    private final ThreadLocal<java.util.Set<String>> batchCacheKeys = new ThreadLocal<>();
+    /** Read-your-writes for the batch's own thread (the LRU cache may evict a batched value). */
+    private final ThreadLocal<Map<String, Object>> batchValues = new ThreadLocal<>();
+    private static final Object DELETED = new Object();
+
+    public void beginBatch() {
+        ensureOpen();
+        if (batch.get() != null) throw new IllegalStateException("a write batch is already open on this thread");
+        batch.set(db.createWriteBatch());
+        batchCacheKeys.set(new java.util.HashSet<>());
+        batchValues.set(new HashMap<>());
+    }
+
+    /** Writes everything since {@link #beginBatch} atomically, with a synchronous disk write. */
+    public void commitBatch() throws IOException {
+        WriteBatch b = batch.get();
+        if (b == null) return;
+        try {
+            db.write(b, new WriteOptions().sync(true));
+        } finally {
+            batch.remove();
+            batchCacheKeys.remove();
+            batchValues.remove();
+            b.close();
+        }
+    }
+
+    /** Drops everything since {@link #beginBatch}, including the cache entries it touched. */
+    public void abortBatch() {
+        WriteBatch b = batch.get();
+        if (b == null) return;
+        java.util.Set<String> touched = batchCacheKeys.get();
+        batch.remove();
+        batchCacheKeys.remove();
+        batchValues.remove();
+        if (touched != null) touched.forEach(cache::remove);
+        try { b.close(); } catch (IOException ignored) { }
+    }
+
+    private void dbPut(String cacheKey, byte[] key, byte[] value, WriteOptions options) {
+        WriteBatch b = batch.get();
+        if (b != null) {
+            b.put(key, value);
+            batchCacheKeys.get().add(cacheKey);
+        } else if (options != null) {
+            db.put(key, value, options);
+        } else {
+            db.put(key, value);
+        }
+    }
+
+    private void dbDelete(String cacheKey, byte[] key) {
+        WriteBatch b = batch.get();
+        if (b != null) {
+            b.delete(key);
+            batchCacheKeys.get().add(cacheKey);
+        } else {
+            db.delete(key);
+        }
+    }
     private final ObjectMapper mapper;
     private final Map<String, Object> cache;
     private final SecretKeySpec aesKey;
@@ -131,9 +196,11 @@ public class Storage implements AutoCloseable {
         if (key == null) return;
         try {
             cache.put(key, value);
+            Map<String, Object> pending = batchValues.get();
+            if (pending != null) pending.put(key, value);
             byte[] json = mapper.writeValueAsBytes(value);
             byte[] encrypted = encrypt(json, secureKey(key));
-            db.put(bytes(secureKey(key)), encrypted);
+            dbPut(key, bytes(secureKey(key)), encrypted, null);
         } catch (Exception e) {
             throw new RuntimeException("Failed to store encrypted value", e);
         }
@@ -142,6 +209,11 @@ public class Storage implements AutoCloseable {
     public <T> T get(String key, Class<T> clazz) {
         ensureOpen();
         if (key == null) return null;
+        Map<String, Object> pending = batchValues.get();
+        if (pending != null && pending.containsKey(key)) {
+            Object v = pending.get(key);
+            return v == DELETED ? null : clazz.cast(v);
+        }
         if (cache.containsKey(key)) {
             return clazz.cast(cache.get(key));
         }
@@ -163,9 +235,11 @@ public class Storage implements AutoCloseable {
         ensureOpen();
         if (key == null) return;
         cache.remove(key);
+        Map<String, Object> pending = batchValues.get();
+        if (pending != null) pending.put(key, DELETED);
         String sk = secureKey(key);
         if (sk != null) {
-            db.delete(bytes(sk));
+            dbDelete(key, bytes(sk));
         }
     }
 
@@ -178,7 +252,7 @@ public class Storage implements AutoCloseable {
             byte[] json = mapper.writeValueAsBytes(hash);
             byte[] encrypted = encrypt(json, secureKey("chain:tip"));
             WriteOptions syncOptions = new WriteOptions().sync(true);
-            db.put(bytes(secureKey("chain:tip")), encrypted, syncOptions);
+            dbPut("chain:tip", bytes(secureKey("chain:tip")), encrypted, syncOptions);
             cache.put("chain:tip", hash);
         } catch (Exception e) {
             throw new RuntimeException("Failed to save chain tip with sync", e);
@@ -289,7 +363,7 @@ public class Storage implements AutoCloseable {
             byte[] json = mapper.writeValueAsBytes(height);
             byte[] encrypted = encrypt(json, secureKey("meta:lastSnapshotHeight"));
             WriteOptions syncOptions = new WriteOptions().sync(true);
-            db.put(bytes(secureKey("meta:lastSnapshotHeight")), encrypted, syncOptions);
+            dbPut("meta:lastSnapshotHeight", bytes(secureKey("meta:lastSnapshotHeight")), encrypted, syncOptions);
             cache.put("meta:lastSnapshotHeight", height);
         } catch (Exception e) {
             throw new IOException("Failed to save lastSnapshotHeight with sync", e);
