@@ -94,11 +94,18 @@ class ProposalVotingTest {
             PeerNode node = new PeerNode(9071, fx.getBlockchain(), pbft, local.getPrivateKey(), g.generateKeyPair(),
                     new com.hybrid.blockchain.security.CertificateAuthority(Crypto.hash("test-network-ca".getBytes())));
             try {
-                long t0 = fx.getBlockchain().getLatestBlock().getTimestamp() + 1_000;
+                // proposals are made "now" (HC-103: a proposal far behind the validator's clock is ignored)
+                long t0 = System.currentTimeMillis();
 
                 // (a) a validly signed block from a validator that is not this view's leader: no vote
                 node.onProposal(proposal(fx.getBlockchain(), other, t0));
                 assertThat(out.prepares).as("no PREPARE for a non-leader's proposal").isEmpty();
+
+                // (e) [HC-103] a leader's proposal timestamped far behind this validator's clock: no vote
+                Block stale = proposal(fx.getBlockchain(), leader, t0 - 10 * Config.MAX_TIMESTAMP_DRIFT);
+                java.util.List<String> before = new java.util.ArrayList<>(out.prepares);
+                node.onProposal(stale);
+                assertThat(out.prepares).as("no PREPARE for a stale proposal").isEqualTo(before);
 
                 // (b) the leader's proposal: exactly one PREPARE
                 Block a = proposal(fx.getBlockchain(), leader, t0 + 1);

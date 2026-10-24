@@ -924,6 +924,15 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                             hash, seq, block.getValidatorId(), view);
                     return;
                 }
+                // [HC-103] block time had no lower bound: a Byzantine leader could let it drift behind
+                // real time (it anchors the ±10 min reading window and expiry checks). A fresh proposal
+                // must be timely, mirroring the MAX_TIMESTAMP_DRIFT future bound. Sync and NEW_VIEW
+                // re-proposals are exempt: they are legitimately old and carry their own proof.
+                if (block.getTimestamp() < System.currentTimeMillis() - Config.MAX_TIMESTAMP_DRIFT) {
+                    log.warn("[PBFT] Ignoring proposal {} at seq {}: timestamp {} is more than {} ms behind this node's clock",
+                            hash, seq, block.getTimestamp(), Config.MAX_TIMESTAMP_DRIFT);
+                    return;
+                }
                 if (!pbft.reserveOwnVote(PBFTConsensus.Phase.PREPARE, view, seq, hash)) {
                     log.warn("[PBFT] Ignoring proposal {} at seq {}: already PREPAREd another block in view {}",
                             hash, seq, view);
