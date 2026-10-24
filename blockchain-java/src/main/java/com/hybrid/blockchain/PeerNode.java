@@ -76,6 +76,10 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
         synchronized (discoveredPeers) { return new java.util.HashMap<>(discoveredPeers); }
     }
 
+    /** [HC-096] which peer to catch up from */
+    private final com.hybrid.blockchain.p2p.SyncPeerSelector syncSelector =
+            new com.hybrid.blockchain.p2p.SyncPeerSelector(new java.util.Random());
+
     /** [HC-012] unauthenticated-phase bounds */
     static final int HANDSHAKE_TIMEOUT_MS = 10_000;
     static final int MAX_PENDING_HANDSHAKES = 16;
@@ -393,6 +397,7 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                         } catch (Exception ve) {
                             log.warn("[P2P] Sync block {} rejected: {}", b.getIndex(), ve.getMessage());
                             peerManager.updatePeerScore(msg.getSenderId(), -5.0);
+                            syncSelector.onRejected(msg.getSenderId(), System.currentTimeMillis());   // [HC-096]
                             break; // Stop processing this response
                         }
                     }
@@ -539,22 +544,15 @@ public class PeerNode implements PBFTConsensus.PBFTMessenger {
                 return false; // No peers to sync with
             }
 
-            // Find peer with highest block height
-            long maxHeight = localHeight;
-            PeerManager.PeerInfo bestPeer = null;
-            for (PeerManager.PeerInfo peer : peers) {
-                if (peer.getBlockHeight() > maxHeight) {
-                    maxHeight = peer.getBlockHeight();
-                    bestPeer = peer;
-                }
-            }
-
-            // If behind, request blocks
-            if (bestPeer != null && localHeight < maxHeight) {
-                return requestBlocksFromPeer(bestPeer, localHeight + 1, maxHeight);
-            }
-
-            return false;
+            // [HC-096] a random peer among those claiming to be ahead, skipping peers that did not
+            // deliver last round or sent rejected blocks (it used to be always the highest claim,
+            // so one peer advertising a huge height and delivering nothing stalled catch-up)
+            long now = System.currentTimeMillis();
+            syncSelector.beforeRound(localHeight, now);
+            PeerManager.PeerInfo peer = syncSelector.choose(peers, localHeight, now);
+            if (peer == null) return false;
+            syncSelector.onRequested(peer.getId(), localHeight + 1);
+            return requestBlocksFromPeer(peer, localHeight + 1, peer.getBlockHeight());
         } catch (Exception e) {
             log.warn("[SYNC] Error syncing blocks: {}", e.getMessage());
             return false;
