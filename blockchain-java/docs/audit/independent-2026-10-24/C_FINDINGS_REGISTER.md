@@ -92,6 +92,9 @@ from backup must not sign in the views covered by the lost record (operational r
 
 ### C-2 · HC-096 · Catch-up trusts a single peer's self-reported height
 
+> **Status 2026-10-24: Fixed and regression-tested** (`50d6c89`, `p2p/SyncPeerSelector`, `SyncPeerSelectorTest`).
+
+
 **Severity:** P2 · **Confidence:** Strong evidence (code inspection)
 
 **Affected:** `PeerNode.java:110` `recordPeerHeight` (a peer's height only ever increases, from
@@ -112,6 +115,9 @@ local tip plus elapsed time / block time).
 reach the honest peers' height. **Residual:** none significant.
 
 ### C-3 · HC-097 · Replayed device readings roll back the contract-visible sensor value
+
+> **Status 2026-10-24: Fixed and regression-tested** (`585b70b`, reading times in state root v2, `ReadingReplayTest`). A per-device counter in `DeviceReading` is not added (not needed for the rollback).
+
 
 **Severity:** P2 · **Confidence:** Strong evidence (code inspection)
 
@@ -161,6 +167,9 @@ jails the proposer. **Dependencies:** C-1 (so evidence can't be manufactured aga
 honest nodes).
 
 ### C-5 · HC-098 · Floating-point WebAssembly is allowed in consensus execution
+
+> **Status 2026-10-24: Fixed and regression-tested** (`744974f`, `WasmDeterminism`, `WasmDeterminismTest`). An ARM64 CI comparison of golden roots is still to do.
+
 
 **Severity:** P2 · **Confidence:** Suspected (not reproduced; needs a non-x86 validator)
 
@@ -222,6 +231,9 @@ rounds; document the guarantee or remove the claim.
 
 ### C-9 · HC-102 · Votes from different views combine in one quorum count; jailing is permanent
 
+> **Status 2026-10-24: same-view quorums fixed and regression-tested** (`b5e984c`, `SameViewQuorumTest`). The fix also closed a sharper variant: a prepared proof could claim a later view with one Byzantine signature. **Still open:** on-chain unjail.
+
+
 **Severity:** Info / P3 · **Confidence:** Suspected (no counterexample found)
 
 **Affected:** `consensus/PBFTConsensus.java:158`: the vote log is `seq → phase → validator`, with no
@@ -238,6 +250,9 @@ covered by the formal model (D §6). Permanent jailing turns any false-positive 
 unjail transaction that needs a quorum of the other validators.
 
 ### C-10 · HC-103 · Block timestamps have no lower bound relative to real time
+
+> **Status 2026-10-24: Fixed and regression-tested** (`e13fd14`, `ProposalVotingTest` case e). A validator more than 15 s off in either direction now stops voting until its clock is fixed.
+
 
 **Severity:** P3 · **Confidence:** Strong evidence
 
