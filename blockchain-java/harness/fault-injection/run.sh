@@ -17,6 +17,10 @@ done
 [[ -n "$PY" ]] || { echo "Python 3.8+ is required (py, python3 or python)" >&2; exit 1; }
 mkdir -p "$HERE/results"; OUT="$HERE/results/$(date -u +%Y%m%dT%H%M%SZ)-N$N.jsonl"
 DC=(docker compose --env-file "$ENV" -f "$COMPOSE")
+# Git Bash rewrites env values that look like POSIX paths before running docker.exe, which turned
+# the container's LD_PRELOAD into D:/Git/usr/lib/... (no skew ever reached the JVM; the skew check
+# caught it). Paths in these variables are container paths: leave them alone.
+export MSYS2_ENV_CONV_EXCL="V${N}_PRELOAD${MSYS2_ENV_CONV_EXCL:+;$MSYS2_ENV_CONV_EXCL}"
 PUMBA=(docker run --rm -v //var/run/docker.sock:/var/run/docker.sock gaiaadm/pumba)
 url() { echo "http://localhost:$((18080 + $1))"; }
 all_urls() { local s=""; for i in $(seq 1 "$N"); do s+="$(url "$i"),"; done; echo "${s%,}"; }
