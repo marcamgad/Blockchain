@@ -299,7 +299,7 @@
         <dependency>
             <groupId>com.dylibso.chicory</groupId>
             <artifactId>wasm</artifactId>
-            <version>1.0.0</version>
+            <version>1.7.5</version>
         </dependency>
 
         <!-- MessagePack for P1-B -->
