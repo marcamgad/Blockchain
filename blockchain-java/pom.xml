@@ -294,7 +294,7 @@
         <dependency>
             <groupId>com.dylibso.chicory</groupId>
             <artifactId>runtime</artifactId>
-            <version>1.0.0</version>
+            <version>1.7.5</version>
         </dependency>
         <dependency>
             <groupId>com.dylibso.chicory</groupId>
