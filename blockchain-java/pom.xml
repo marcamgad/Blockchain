@@ -16,7 +16,7 @@
         <!-- Audit PoC tests (docs/audit) FAIL by design until each finding is fixed. Excluded from
              the default build; run with: mvn -o test -Dtest=HybridChainAuditPoCTest -Daudit.excluded=none -->
         <audit.excluded>audit-poc</audit.excluded>
-        <spring-boot.version>3.5.16</spring-boot.version>
+        <spring-boot.version>4.1.2</spring-boot.version>
         <tomcat.override.version>10.1.61</tomcat.override.version>
         <pit.target>com.hybrid.blockchain.Crypto</pit.target>
         <pit.name>default</pit.name>
